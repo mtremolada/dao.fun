@@ -6,8 +6,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests",
-    "test:unit": "vitest run --passWithNoTests"
+    "test": "vitest run",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "@daofun/sdk": "workspace:*",
