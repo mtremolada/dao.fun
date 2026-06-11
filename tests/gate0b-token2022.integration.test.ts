@@ -47,6 +47,7 @@ import { deriveTreasuryPdas } from "../packages/sdk/src/treasury";
 import {
   TEST_TIMEOUT,
   balance,
+  prefundMissingWritables,
   send,
   sendExpectFail,
   startPumpCtx,
@@ -123,36 +124,6 @@ describe("GATE 0b — Token-2022 on the curve (real binaries, bankrun)", () => {
         return { info, curve: pumpSdk.decodeBondingCurve(info) };
       };
 
-      // D-009 (and GATE 0a's rent-prefund-vaults step): fee recipients and
-      // the creator vault receive small fee transfers that would leave them
-      // below the rent floor. Prefund every missing writable account the
-      // trade instructions touch (program-init'd accounts tolerate
-      // pre-funded addresses).
-      const RENT_FLOOR = 890_880;
-      const prefundMissingWritables = async (
-        ixs: { keys: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] }[],
-      ) => {
-        const targets = new Map<string, PublicKey>();
-        for (const ix of ixs) {
-          for (const k of ix.keys) {
-            if (k.isWritable && !k.isSigner) targets.set(k.pubkey.toBase58(), k.pubkey);
-          }
-        }
-        const transfers = [];
-        for (const target of targets.values()) {
-          if (!(await ctx.banksClient.getAccount(target))) {
-            transfers.push(
-              SystemProgram.transfer({
-                fromPubkey: ctx.payer.publicKey,
-                toPubkey: target,
-                lamports: RENT_FLOOR,
-              }),
-            );
-          }
-        }
-        if (transfers.length > 0) await send(ctx, transfers, []);
-      };
-
       const buySol = new BN(100_000_000); // 0.1 SOL
       const { info: curveInfo, curve } = await readCurve();
       const buyIxs = await pumpSdk.buyInstructions({
@@ -174,7 +145,7 @@ describe("GATE 0b — Token-2022 on the curve (real binaries, bankrun)", () => {
         slippage: 5,
         tokenProgram: TOKEN_2022_PROGRAM_ID,
       });
-      await prefundMissingWritables(buyIxs);
+      await prefundMissingWritables(ctx, buyIxs);
       await send(ctx, buyIxs, [buyer], buyer);
 
       const buyerAta = getAssociatedTokenAddressSync(
@@ -196,7 +167,7 @@ describe("GATE 0b — Token-2022 on the curve (real binaries, bankrun)", () => {
       // rent prefund (INV-8 surface)...
       const creatorVault = derivePumpCreatorVault(creator);
       const accruedAfterBuy = await balance(ctx, creatorVault);
-      expect(accruedAfterBuy).toBeGreaterThan(RENT_FLOOR);
+      expect(accruedAfterBuy).toBeGreaterThan(890_880);
 
       // ...and a full sell-back.
       const after = await readCurve();
@@ -218,7 +189,7 @@ describe("GATE 0b — Token-2022 on the curve (real binaries, bankrun)", () => {
         tokenProgram: TOKEN_2022_PROGRAM_ID,
         mayhemMode: false,
       });
-      await prefundMissingWritables(sellIxs);
+      await prefundMissingWritables(ctx, sellIxs);
       const lamportsBeforeSell = await balance(ctx, buyer.publicKey);
       await send(ctx, sellIxs, [buyer], buyer);
       expect(await readAtaAmount()).toBe(0n);

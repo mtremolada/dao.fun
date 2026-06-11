@@ -347,7 +347,9 @@ prefunded to the rent floor or the runtime rejects the trade.
   wrapped ixs from chain post-execution and their hash matched the
   artifact published at proposal time
 - Merkle distributor deployed program ID (Stage 1, `distribute` action)
-- PumpSwap pool ixs for buyback/provideLiquidity (Stage 1, action menu)
+- PumpSwap pool ixs for POST-GRADUATION buyback / provideLiquidity
+  (Stage 1, action menu) — curve-venue buyback shipped and proven on the
+  real binaries (tests/action-buyback.integration.test.ts)
 - `transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)
 - ~~Creator Fee Sharing at-launch config (GATE 0c; risk D-007)~~
   RESOLVED: D-019 — at-launch impossible (hard on-chain constraint);

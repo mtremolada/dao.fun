@@ -233,6 +233,39 @@ export async function sendWithAlt(
   await ctx.banksClient.processTransaction(vtx);
 }
 
+
+/**
+ * D-009: prefund every missing writable account an instruction set touches
+ * to the rent floor — trades pay sub-floor fee crumbs to fee recipients,
+ * and the runtime rejects transactions that leave accounts below the
+ * floor. Program-init'd accounts tolerate pre-funded addresses.
+ */
+export async function prefundMissingWritables(
+  ctx: ProgramTestContext,
+  ixs: TransactionInstruction[],
+): Promise<void> {
+  const RENT_FLOOR = 890_880;
+  const targets = new Map<string, PublicKey>();
+  for (const ix of ixs) {
+    for (const k of ix.keys) {
+      if (k.isWritable && !k.isSigner) targets.set(k.pubkey.toBase58(), k.pubkey);
+    }
+  }
+  const transfers: TransactionInstruction[] = [];
+  for (const target of targets.values()) {
+    if (!(await ctx.banksClient.getAccount(target))) {
+      transfers.push(
+        SystemProgram.transfer({
+          fromPubkey: ctx.payer.publicKey,
+          toPubkey: target,
+          lamports: RENT_FLOOR,
+        }),
+      );
+    }
+  }
+  if (transfers.length > 0) await send(ctx, transfers, []);
+}
+
 /** Sends expecting failure; returns error + program logs for assertions. */
 export async function sendExpectFail(
   ctx: ProgramTestContext,

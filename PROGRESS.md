@@ -59,9 +59,16 @@
       per-vault failure isolation); service wiring rent-floor-aware (D-009).
       AMM venue accrual open until a graduated token exists to test against.
 - [~] 13.6b action menu (6.8): grant + burn shipped tests-first (5 tests,
-      bounds + declared-account-set). buyback / provideLiquidity /
-      distribute / setParam blocked on open verify items (PumpSwap pool
-      ixs, merkle distributor ID, param registry).
+      bounds + declared-account-set). buyback (curve venue) shipped
+      tests-first (3 unit tests: vault-as-only-inner-signer, no ATA-create
+      inside the proposal per the D-019 size ceiling, D-009 bounds) and
+      PROVEN end-to-end on the real binaries
+      (tests/action-buyback.integration.test.ts): the DAO votes to buy its
+      own token with vault SOL through the buffered custody chain; the
+      vault receives the tokens and — being the coin creator — the buy's
+      creator fee flows back to its own creator vault. Still blocked:
+      post-graduation buyback + provideLiquidity (PumpSwap pool ixs),
+      distribute (merkle distributor ID), setParam (param registry).
 - [x] 13.6c backend orchestrator (6.6): step machine (5 tests) + concrete
       launch steps (6 tests: exact fee, INV-1 creator plumbing, resume
       after token creation, INV-5/INV-7 halt-on-violation) + 12.3 artifact
