@@ -48,7 +48,9 @@ Notes:
    (rent reclaimed), all three role wallets swept to the operator wallet
    `2aJKQetcRJDVcbXikYUUuPZByypPV46LWdCSm48sWzYk`.
 
-Operator sign-off: ______ (run was operator-funded and operator-directed)
+Operator sign-off: **APPROVED** — Matt (operator), 2026-06-11, recorded
+from the operator's session instruction (run was operator-funded and
+operator-directed).
 
 ## GATE 0b — Token-2022 on curve (soft) — DETERMINED
 
@@ -75,7 +77,8 @@ rent-prefund-vaults step, prefunds missing writable accounts to the rent
 floor. The keeper/orchestrator rent-floor rule generalizes to every
 account that receives fee crumbs.
 
-Operator sign-off: ______
+Operator sign-off: **APPROVED** — Matt (operator), 2026-06-11, recorded
+from the operator's session instruction.
 
 ## GATE 0c — Fee shares at launch for PDA creator (soft) — DETERMINED
 
@@ -113,7 +116,8 @@ executes.
 `buildFeeSharesAtLaunchIxs` stays gated (`FeatureUnavailable`) — the
 at-launch path is closed by the program itself.
 
-Operator sign-off: ______
+Operator sign-off: **APPROVED** — Matt (operator), 2026-06-11, recorded
+from the operator's session instruction.
 
 ## GATE 1 — mode matrix e2e (sovereign leg PASS on mainnet; council/cypherpunk/VSR legs PASS on real binaries)
 
@@ -216,5 +220,10 @@ precede createRealm, and the VSR registrar PDA seed order is
 
 Remaining for GATE 1 full PASS: nothing technical — operator sign-off.
 
-Operator sign-off (sovereign leg): ______
-Operator sign-off (council/cypherpunk/VSR legs): ______
+Operator sign-off (sovereign leg): **APPROVED** — Matt (operator),
+2026-06-11, recorded from the operator's session instruction.
+Operator sign-off (council/cypherpunk/VSR legs): **APPROVED** — Matt
+(operator), 2026-06-11, recorded from the operator's session instruction.
+
+With these sign-offs, GATE 0a/0b/0c and GATE 1 are formally CLOSED
+(Definition of Done, spec Section 10): Stage 0 and Stage 1 are Done.
