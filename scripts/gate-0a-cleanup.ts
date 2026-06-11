@@ -72,7 +72,6 @@ async function sellAllAndClose(
       mintSupply: new BN(supply.value.amount),
       bondingCurve: sellState.bondingCurve,
       amount,
-      quoteMint: NATIVE_MINT,
     });
     const ixs = await offline.sellInstructions({
       global,
