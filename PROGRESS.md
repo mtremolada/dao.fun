@@ -46,13 +46,15 @@
       bounds + declared-account-set). buyback / provideLiquidity /
       distribute / setParam blocked on open verify items (PumpSwap pool
       ixs, merkle distributor ID, param registry).
-- [~] 13.6c backend orchestrator (6.6): step machine shipped tests-first
-      (5 tests: per-step idempotency keys, resumable partial failure,
-      resume-only-missing, no-op re-resume, persist-every-step) + 12.3
-      artifact store (5 tests: deterministic / order- / flag-sensitive
-      instruction-set hash, keyed retrieval). Remaining: the concrete chain
-      steps (treasury/fee/token/dao txs via the sdk builders) + sqlite
-      store + HTTP API — these are wiring over already-tested builders.
-- [ ] 13.7 app
+- [x] 13.6c backend orchestrator (6.6): step machine (5 tests) + concrete
+      launch steps (6 tests: exact fee, INV-1 creator plumbing, resume
+      after token creation, INV-5/INV-7 halt-on-violation) + 12.3 artifact
+      store: hash (5 tests) + sqlite persistence via node:sqlite (4 tests).
+      Remaining for 6.6: thin HTTP API over these (wiring only).
+- [~] 13.7 app: UI logic layer shipped tests-first (9 tests: floor
+      enforcement incl. stricter-only overrides, cypherpunk single +
+      sovereign double confirmations, guarded unselectable, hash badge
+      verified/mismatch/missing, hold-up-gated execute button). Remaining:
+      Next.js shell rendering these results + Playwright e2e.
 - [ ] 13.8 GATE 1 mode matrix on devnet (needs faucet or operator funding;
       integration suites also want solana-test-validator with clones)
