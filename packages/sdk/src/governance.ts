@@ -74,7 +74,18 @@ export interface CreateDaoParams {
 }
 
 export interface CreateDaoResult {
+  /** All instructions in execution order (== groups flattened). */
   ixs: TransactionInstruction[];
+  /**
+   * The same instructions grouped at tx-size-safe boundaries, in order:
+   * realmSetup (realm + VSR), council (empty outside council mode),
+   * governanceSetup (governance + native treasury + authority transfer).
+   */
+  groups: {
+    realmSetup: TransactionInstruction[];
+    council: TransactionInstruction[];
+    governanceSetup: TransactionInstruction[];
+  };
   realm: PublicKey;
   governance: PublicKey;
   nativeTreasury: PublicKey;
@@ -95,12 +106,14 @@ export async function buildCreateDaoIxs(
     throw new Error("council config is only valid in council mode");
   }
 
-  const ixs: TransactionInstruction[] = [];
+  const realmSetup: TransactionInstruction[] = [];
+  const council: TransactionInstruction[] = [];
+  const governanceSetup: TransactionInstruction[] = [];
   const name = realmNameForMint(p.mint);
 
   // 1. Realm — name derives the PDA chain; council mint registered up front.
   const realm = await withCreateRealm(
-    ixs,
+    realmSetup,
     SPL_GOVERNANCE_PROGRAM_ID,
     PROGRAM_VERSION,
     name,
@@ -131,8 +144,8 @@ export async function buildCreateDaoIxs(
     realmAuthority: p.payer,
     payer: p.payer,
   });
-  ixs.push(createRegistrarIx);
-  ixs.push(
+  realmSetup.push(createRegistrarIx);
+  realmSetup.push(
     buildConfigureVotingMintIx({
       registrar,
       realmAuthority: p.payer,
@@ -150,7 +163,7 @@ export async function buildCreateDaoIxs(
   // 3. Council mint (council mode only): 1 token per member, then no mint
   //    authority exists — membership is fixed at launch (structural veto set).
   if (p.mode === "council" && p.council) {
-    ixs.push(
+    council.push(
       SystemProgram.createAccount({
         fromPubkey: p.payer,
         newAccountPubkey: p.council.mint,
@@ -162,7 +175,7 @@ export async function buildCreateDaoIxs(
     );
     for (const member of p.council.members) {
       const ata = getAssociatedTokenAddressSync(p.council.mint, member, true);
-      ixs.push(
+      council.push(
         createAssociatedTokenAccountIdempotentInstruction(
           p.payer,
           ata,
@@ -172,7 +185,7 @@ export async function buildCreateDaoIxs(
         createMintToInstruction(p.council.mint, ata, p.payer, 1),
       );
     }
-    ixs.push(
+    council.push(
       createSetAuthorityInstruction(
         p.council.mint,
         p.payer,
@@ -217,7 +230,7 @@ export async function buildCreateDaoIxs(
     p.payer,
   );
   const governance = await withCreateGovernance(
-    ixs,
+    governanceSetup,
     SPL_GOVERNANCE_PROGRAM_ID,
     PROGRAM_VERSION,
     realm,
@@ -229,7 +242,7 @@ export async function buildCreateDaoIxs(
   );
 
   const nativeTreasury = await withCreateNativeTreasury(
-    ixs,
+    governanceSetup,
     SPL_GOVERNANCE_PROGRAM_ID,
     PROGRAM_VERSION,
     governance,
@@ -238,7 +251,7 @@ export async function buildCreateDaoIxs(
 
   // 5. Hand the realm to its own governance — no platform key remains.
   withSetRealmAuthority(
-    ixs,
+    governanceSetup,
     SPL_GOVERNANCE_PROGRAM_ID,
     PROGRAM_VERSION,
     realm,
@@ -247,5 +260,13 @@ export async function buildCreateDaoIxs(
     SetRealmAuthorityAction.SetChecked,
   );
 
-  return { ixs, realm, governance, nativeTreasury, registrar, config };
+  return {
+    ixs: [...realmSetup, ...council, ...governanceSetup],
+    groups: { realmSetup, council, governanceSetup },
+    realm,
+    governance,
+    nativeTreasury,
+    registrar,
+    config,
+  };
 }
