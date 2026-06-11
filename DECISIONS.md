@@ -203,10 +203,38 @@ threshold, so the default is now 10 (Realms' common default), pinned by
 test. The deposit is recoverable via `RefundProposalDeposit` once the
 proposal completes (wired into the gate script's cleanup).
 
+## D-016 — Native treasury pays Squads rent at execution time (2026-06-11, found live)
+
+When governance executes the ExecutionAdapter's wrapped Squads chain, the
+**native treasury is the rent payer** for the accounts Squads creates:
+`VaultTransactionCreate` (2,429,040 lamports for our 1-inner-ix sweep) and
+`ProposalCreate` (2,046,240 lamports). The treasury's 890,880 prefund is
+only its own rent floor, so execution fails with `insufficient lamports`
+unless the treasury holds execution rent on top. Consequences:
+
+- the launch flow (and any proposal UX) must ensure the native treasury
+  holds ~0.005 SOL of execution headroom per Squads-wrapped proposal —
+  prefund at launch and/or top up at proposal time;
+- that rent stays locked in the Squads Transaction/Proposal accounts
+  unless the multisig sets a `rentCollector` and the accounts are closed
+  after execution (`vault_transaction_accounts_close`) — wire
+  `rentCollector = nativeTreasury` into the vault-creation builder as
+  Stage 1 polish;
+- the gate script now funds the exact shortfall reported by simulation
+  before each execute (verified live: two top-ups, then clean execution).
+
+Also hardened in the same run (operational): a mid-stage abort must not
+re-send completed legs — execute skips ProposalTransactions whose on-chain
+`executionStatus` is already Success, and cleanup sub-steps guard on
+on-chain state (`isRelinquished`, deposit amount, ATA existence).
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
-- SPL Governance proposal state-machine immutability after sign-off (INV-9)
+- ~~SPL Governance proposal state-machine immutability after sign-off
+  (INV-9)~~ RESOLVED at the evidence level: GATE 1 phase 2 re-read the
+  wrapped ixs from chain post-execution and their hash matched the
+  artifact published at proposal time
 - Merkle distributor deployed program ID (Stage 1, `distribute` action)
 - PumpSwap pool ixs for buyback/provideLiquidity (Stage 1, action menu)
 - `transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)

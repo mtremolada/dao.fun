@@ -87,7 +87,36 @@
       "sig": "3jRRgeBjpW4zoCSmrsbtxTGmM8D8mKa6GUXB54PnsHagX9ypTaZrTU8XoUfCMGeGf9dvAZPWgr4Gvsti8Pr6Q8CA",
       "state": "Succeeded",
       "at": "2026-06-11T03:00:18.417Z"
+    },
+    "execute": {
+      "executeSigs": [
+        "NZ7n1FVCFE8EhYUm25XHAGdt3M4zZUUKTfSK2MAzVtDtictFasCRj1h5kJQNAnMD9k93yggm4CMMN1eRoAZ5pp9",
+        "5xPUjdvCCb41yn7VUSzQ3d3EyUjpmfBmtoRdZy1wjRbxKinctLNabpH618jX7ReCUtzd5ytSQEC5GV3A6DaSMCMc",
+        "4EGiEqLBHpkDwqoBWFRoxSnDFseY6JdyXmr2pvVkA7ir493wmLukPuuEPmiKGGQY2osgHsLNGseMjMzvGaXoRDQ4",
+        "3LiXcnBbM3PfkXvNpJsyNcWnmhS6mQUJXnGpwdYSJNkwAyAHMFC7PCMfeTjYswmPCbfVnCXoyPiwZX4CJSdyjbTH"
+      ],
+      "treasuryTopUps": {
+        "execute-0": "2429040:5QXefmqtxUEwrD8HC9xBUk97h39EJze4xNKy4WUsrbC51feMA8LfUMt2GdzQe6PSFQJnodFPnRRDkaQDcf7FJLA9",
+        "execute-1": "2046240:3kyuNF8wW91QHf5QAkHTTXW8K1dehwB1ERnen14ep8rDmgaH5ug2X8Q4zk5FwRDb43PvBf2tJJ6zi528LXTf5VkR"
+      },
+      "inv9OnChainHash": "76962352e6c2b1cc756da0410fb325965d4bb69707f5fbe5886e325f74dd0649",
+      "vaultBefore": 890880,
+      "vaultAfter": 0,
+      "deployerBefore": 4381276,
+      "deployerAfter": 5272156,
+      "at": "2026-06-11T03:11:26.213Z",
+      "note": "execute-0/1 sigs and top-ups restored from run logs: rate-limit abort lost the in-flight stage record (sends are sequential and individually confirmed)"
+    },
+    "cleanup": {
+      "sigs": {
+        "consolidate": "3w2AgGCR32fr81tAV8rGK4nw8XMYxvCuvx9Cjwhtvog33FFzLNkCNWRXH1FgTVzAdsLW6k7SJVFHLqoSUPV1XFg4",
+        "relinquish": "4dyEz4pjJR53SUGKP39jq69Ah8KysUJvhFPxesgdw7k5RRkcerxj4tPyutmXm8fBSTtsgMrAh7W3iPiPpG3tT12F",
+        "withdraw": "3E6V6jotgufLfBoWRMCjnvfCgLhksmsp8HFZErpiVG2rmrbonzfcZMHqGipjCXCHLVtM9V2wyQfhpWwRuiTQUhFP",
+        "burn-and-close": "56fLkEQymMwCN1RXqkmsrWDcMbEYCoarsMEuw67MTiDnRE8RnMNELtDsHDNypGX6iXtzgWH5kfjURbH6X2B1Xj5F"
+      },
+      "at": "2026-06-11T03:15:09.326Z"
     }
   },
-  "findings": []
+  "findings": [],
+  "result": "PASS"
 }

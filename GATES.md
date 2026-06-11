@@ -61,11 +61,13 @@ transfer-fee extensions.
 Not run. Risk flag D-007: `createFeeSharingConfig` requires the creator as
 payer/signer, which a PDA creator cannot satisfy in a plain launch tx.
 
-## GATE 1 — mode matrix e2e (IN PROGRESS: mainnet partial, sovereign)
+## GATE 1 — mode matrix e2e (sovereign leg PASS on mainnet; council/cypherpunk legs pending)
 
-Operator-funded mainnet run (D-008 regime), 2026-06-11. Devnet remains
-faucet-blocked; operator directed a mainnet run instead. Smoke deviations
-recorded in D-014; architecture findings in D-013/D-015.
+Operator-funded mainnet runs (D-008 regime), 2026-06-11. Devnet remains
+faucet-blocked; operator directed mainnet runs instead. Smoke deviations
+recorded in D-014; architecture findings in D-013/D-015/D-016.
+
+### Phase 1 — DAO over the real pump mint (partial)
 
 DAO stood up for the GATE 0a mint `E8T9KAM4tkytKe2qbMYt9ygEfz3GbjrZgMzTZt7sP1KC`:
 
@@ -77,10 +79,45 @@ DAO stood up for the GATE 0a mint `E8T9KAM4tkytKe2qbMYt9ygEfz3GbjrZgMzTZt7sP1KC`
 - realm authority transferred to the governance PDA (no platform key)
 - Token-2022 community deposits live (D-013 caveat: mint appended)
 
-Remaining for this run: proposal -> vote -> finalize -> execute (sweeps the
-test vault through governance -> Squads; INV-3/INV-9 live), blocked at the
-proposal security deposit (D-015) pending an operator top-up (~6 USDC).
+The proposal leg of THIS realm stays blocked at the 0.102 SOL refundable
+security deposit (its config predates the D-015 fix); resumable later.
 
 Machine evidence: `.gate-evidence/gate1-sovereign-mainnet.json`.
 
-Operator sign-off: ______
+### Phase 2 — full sovereign proposal lifecycle, executed (PASS)
+
+Fresh DAO under the fixed config (production sovereign/micro params from
+the matrix; synthetic Token-2022 mint `3pEjEhJoKWEXb5aqKYN7pqG5GKFQL997Ndu1pUMn6Aq2`,
+supply sized so FULL_SUPPLY_FRACTION max vote weight is production-true;
+only deviation: 1h baseVotingTime, the program minimum — D-014):
+
+- INV-5: mint + freeze authorities verified null after mint
+- INV-7: Squads multisig `2hEbJ9x64sY9jTdpyr9M3aUwcSvNJ3ULsc1X241fYa8L` /
+  vault `8Z4PfwCARrz3DbJQpwy9vhmYz3xvokn9tZN1vsHq1kj9` created with the
+  advance-derived native treasury `B6XaWx7GJe2wGQameC5T914DcwV9Y6DL4P9SgK6c87r8`
+  as sole member, before the realm existed
+- realm `GRdkevbhSoJrnEtqadhvyuev81jSL99HYyhMCa3Tt8wR` == advance-derived;
+  realm authority == governance PDA (asserted on-chain)
+- D-015 verified live: proposal creation required NO security deposit
+- full lifecycle on-chain: create proposal `A99hKkvG...` -> insert 4 wrapped
+  Squads ixs -> sign-off -> cast vote -> finalize after the 1h window
+  (state Succeeded) -> execute all 4 ProposalTransactions
+- INV-9 verified the strong way: wrapped ixs were re-read FROM CHAIN,
+  unwrapped, and hashed — `76962352e6c2b1cc...` == published artifact hash
+- INV-3 (holdUp 0) — execution allowed immediately after Succeeded
+- custody chain moved real lamports: Squads vault 890,880 -> 0, swept to
+  the deployer via governance-executed VaultTransactionCreate ->
+  ProposalCreate -> Approve -> Execute (native treasury as sole approver)
+- D-016 found live: the native treasury pays Squads' account rent during
+  execution (2,429,040 + 2,046,240 lamports here) — launch flow must
+  prefund execution rent (see DECISIONS.md)
+- cleanup: vote relinquished, deposit withdrawn (mint appended), synthetic
+  tokens burned + ATA closed, buyer swept to exactly 0
+
+Machine evidence: `.gate-evidence/gate1-sovereign-p2-mainnet.json`.
+
+Remaining for GATE 1 full PASS: council and cypherpunk legs (veto blocks
+execution; VSR lockup weight) — these need a local validator with cloned
+programs or devnet (clock control / addin constraints, D-013/D-014).
+
+Operator sign-off (sovereign leg): ______

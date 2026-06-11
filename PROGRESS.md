@@ -59,9 +59,16 @@
       sovereign double confirmations, guarded unselectable, hash badge
       verified/mismatch/missing, hold-up-gated execute button). Remaining:
       Next.js shell rendering these results + Playwright e2e.
-- [~] 13.8 GATE 1: mainnet partial (sovereign) IN PROGRESS, operator-funded
-      (D-008). DAO + Token-2022 deposits live; INV-7 verified on-chain;
-      critical findings D-013 (VSR can't do Token-2022 -> no-addin realms
-      at MVP), D-015 (proposal deposit default). Proposal/vote/execute legs
-      pending top-up. Council/cypherpunk matrix + clock-warp behavior still
-      need the integration suite (validator with clones) or devnet.
+- [~] 13.8 GATE 1: sovereign leg PASS live on mainnet, operator-funded
+      (D-008): full lifecycle proposal -> vote -> finalize -> execute on a
+      fresh DAO under production sovereign/micro params (only deviation:
+      1h baseVotingTime, the program minimum). INV-3/INV-5/INV-7 verified
+      on-chain; INV-9 verified by re-reading the wrapped ixs FROM CHAIN
+      and matching the artifact hash; custody chain moved real lamports
+      (Squads vault 890,880 -> 0 via governance-executed 4-step chain).
+      Critical findings D-013 (VSR can't do Token-2022 -> no-addin realms
+      at MVP), D-015 (proposal deposit default), D-016 (treasury pays
+      Squads execution rent). Phase-1 realm's proposal leg remains blocked
+      at its pre-fix 0.102 deposit (resumable). Council/cypherpunk legs +
+      clock-warp behavior still need the integration suite (validator with
+      clones) or devnet.

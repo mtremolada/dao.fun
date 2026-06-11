@@ -59,6 +59,8 @@ import {
   ProposalState,
   ProposalTransaction,
   InstructionExecutionStatus,
+  TokenOwnerRecord,
+  VoteRecord,
   withCastVote,
   withCreateProposal,
   withCreateTokenOwnerRecord,
@@ -789,73 +791,98 @@ async function main() {
       proposal,
       buyerTor,
     );
-    const relinquishIxs: TransactionInstruction[] = [];
-    await withRelinquishVote(
-      relinquishIxs,
-      SPL_GOVERNANCE_PROGRAM_ID,
-      PROGRAM_VERSION,
-      dao.realm,
-      dao.governance,
-      proposal,
-      buyerTor,
-      MINT,
-      voteRecord,
-      buyer.publicKey,
-      buyer.publicKey,
-    );
-    sigs["relinquish"] = await sendTx(connection, relinquishIxs, [buyer], "relinquish");
+    // Each sub-step guards on on-chain state so a mid-stage abort resumes
+    // cleanly (the stage checkpoint is only written at the end).
+    // After voting ends the VoteRecord persists with isRelinquished set —
+    // existence alone doesn't mean there is anything left to relinquish.
+    const vrInfo = await connection.getAccountInfo(voteRecord);
+    const needRelinquish = vrInfo
+      ? !(await getGovernanceAccount(connection, voteRecord, VoteRecord)).account
+          .isRelinquished
+      : false;
+    if (needRelinquish) {
+      const relinquishIxs: TransactionInstruction[] = [];
+      await withRelinquishVote(
+        relinquishIxs,
+        SPL_GOVERNANCE_PROGRAM_ID,
+        PROGRAM_VERSION,
+        dao.realm,
+        dao.governance,
+        proposal,
+        buyerTor,
+        MINT,
+        voteRecord,
+        buyer.publicKey,
+        buyer.publicKey,
+      );
+      sigs["relinquish"] = await sendTx(connection, relinquishIxs, [buyer], "relinquish");
+    } else {
+      console.log("  relinquish: already relinquished, skipping");
+    }
 
-    const withdrawIxs: TransactionInstruction[] = [];
-    await withWithdrawGoverningTokens(
-      withdrawIxs,
-      SPL_GOVERNANCE_PROGRAM_ID,
-      PROGRAM_VERSION,
-      dao.realm,
-      buyerAta,
-      MINT,
-      buyer.publicKey,
-    );
-    const patched = retargetTokenProgram(withdrawIxs);
-    appendMint(patched[patched.length - 1]!, MINT);
-    sigs["withdraw"] = await sendTx(connection, patched, [buyer], "withdraw-deposit");
-
-    // synthetic tokens have no market; close the ATA for rent (tokens burn)
-    const burnAndClose: TransactionInstruction[] = [];
-    const { createBurnInstruction } = await import("@solana/spl-token");
-    burnAndClose.push(
-      createBurnInstruction(
+    const tor = await getGovernanceAccount(connection, buyerTor, TokenOwnerRecord);
+    if (tor.account.governingTokenDepositAmount.gtn(0)) {
+      const withdrawIxs: TransactionInstruction[] = [];
+      await withWithdrawGoverningTokens(
+        withdrawIxs,
+        SPL_GOVERNANCE_PROGRAM_ID,
+        PROGRAM_VERSION,
+        dao.realm,
         buyerAta,
         MINT,
         buyer.publicKey,
-        SUPPLY_TOKENS,
-        [],
-        TOKEN_2022_PROGRAM_ID,
-      ),
-      createCloseAccountInstruction(
-        buyerAta,
-        buyer.publicKey,
-        buyer.publicKey,
-        [],
-        TOKEN_2022_PROGRAM_ID,
-      ),
-    );
-    sigs["burn-and-close"] = await sendTx(connection, burnAndClose, [buyer], "burn-and-close");
-
-    // consolidate buyer -> deployer (gas wallet)
-    const buyerBal = await connection.getBalance(buyer.publicKey);
-    if (buyerBal > 10_000) {
-      sigs["consolidate"] = await sendTx(
-        connection,
-        [
-          SystemProgram.transfer({
-            fromPubkey: buyer.publicKey,
-            toPubkey: deployer.publicKey,
-            lamports: buyerBal - 10_000,
-          }),
-        ],
-        [buyer],
-        "consolidate-buyer",
       );
+      const patched = retargetTokenProgram(withdrawIxs);
+      appendMint(patched[patched.length - 1]!, MINT);
+      sigs["withdraw"] = await sendTx(connection, patched, [buyer], "withdraw-deposit");
+    } else {
+      console.log("  withdraw-deposit: nothing deposited, skipping");
+    }
+
+    // synthetic tokens have no market; close the ATA for rent (tokens burn)
+    if (await connection.getAccountInfo(buyerAta)) {
+      const burnAndClose: TransactionInstruction[] = [];
+      const { createBurnInstruction } = await import("@solana/spl-token");
+      burnAndClose.push(
+        createBurnInstruction(
+          buyerAta,
+          MINT,
+          buyer.publicKey,
+          SUPPLY_TOKENS,
+          [],
+          TOKEN_2022_PROGRAM_ID,
+        ),
+        createCloseAccountInstruction(
+          buyerAta,
+          buyer.publicKey,
+          buyer.publicKey,
+          [],
+          TOKEN_2022_PROGRAM_ID,
+        ),
+      );
+      sigs["burn-and-close"] = await sendTx(connection, burnAndClose, [buyer], "burn-and-close");
+    } else {
+      console.log("  burn-and-close: ATA gone, skipping");
+    }
+
+    // consolidate buyer -> deployer (gas wallet). The buyer must end at
+    // EXACTLY 0 (a nonzero balance below the rent floor is rejected), so
+    // send a bare tx — no compute-budget ixs — whose fee is exactly 5,000.
+    const BASE_FEE = 5_000;
+    const buyerBal = await connection.getBalance(buyer.publicKey);
+    if (buyerBal > BASE_FEE) {
+      const bare = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: buyer.publicKey,
+          toPubkey: deployer.publicKey,
+          lamports: buyerBal - BASE_FEE,
+        }),
+      );
+      bare.feePayer = buyer.publicKey;
+      sigs["consolidate"] = await sendAndConfirmTransaction(connection, bare, [buyer], {
+        commitment: "confirmed",
+      });
+      console.log(`  consolidate-buyer: ${sigs["consolidate"]}`);
     }
     record("cleanup", { sigs });
   }
