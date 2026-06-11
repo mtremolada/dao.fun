@@ -228,6 +228,31 @@ re-send completed legs — execute skips ProposalTransactions whose on-chain
 `executionStatus` is already Success, and cleanup sub-steps guard on
 on-chain state (`isRelinquished`, deposit amount, ATA existence).
 
+## D-017 — Chain reader conventions (2026-06-11)
+
+Spec 6.7's server side is a `ChainReader` seam in the backend (`/chain/*`
+routes): RPC-backed in prod (`RpcChainReader`), fake in tests and the
+Playwright stub server. Conventions it pins:
+
+- **INV-9 chain side**: the proposal view's hash is recomputed by
+  re-reading every ProposalTransaction from chain and UNWRAPPING the
+  Squads plumbing before hashing — verified live against the GATE 1
+  phase-2 proposal (`FJjnLM2...`): the production read path recomputed
+  `76962352...` == the artifact hash.
+- **Artifact discovery**: a proposal's `descriptionLink` carries the
+  64-hex artifact hash (`publishedArtifactHash`), so the UI finds the
+  artifact with no off-chain coordination. The gate-1 proposal predates
+  this convention (empty descriptionLink) — the UI accepts a query-param
+  override. The propose/launch builders must set
+  `descriptionLink = artifact hash` (Stage 1 polish, with D-016's
+  rentCollector).
+- **Vote power**: for no-addin realms (D-013) the dashboard reports
+  `governingTokenDepositAmount` — deposit IS the vote weight until VSR
+  lands.
+- **Wallet adapter deliberately deferred**: the launch ceremony is
+  backend-orchestrated (server signs), so the MVP UI needs no wallet;
+  user-signed vote/execute from the browser is Stage 2 scope.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

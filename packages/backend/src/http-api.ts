@@ -13,12 +13,15 @@ import {
   type LaunchStore,
 } from "./launch-machine";
 import type { ArtifactStore } from "./artifacts";
+import type { ChainReader } from "./chain-reader";
 
 export interface ApiDeps {
   launchStore: LaunchStore;
   artifactStore: ArtifactStore;
   /** Builds the concrete steps for a validated launch (see launch-steps). */
   buildSteps: (launchId: string, form: LaunchFormInput) => LaunchStep[];
+  /** RPC-backed in prod, fake in tests; /chain/* is 501 when absent. */
+  chain?: ChainReader;
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -95,6 +98,43 @@ async function handle(
     return artifact
       ? json(res, 200, artifact)
       : json(res, 404, { error: "not found" });
+  }
+
+  if (req.method === "GET" && segments[0] === "chain") {
+    if (!deps.chain) {
+      return json(res, 501, { error: "chain reader not configured" });
+    }
+
+    if (segments[1] === "proposals" && segments.length === 3) {
+      let proposal: PublicKey;
+      try {
+        proposal = new PublicKey(segments[2]!);
+      } catch {
+        return json(res, 400, { error: "invalid proposal pubkey" });
+      }
+      const state = await deps.chain.getProposalState(proposal);
+      return state ? json(res, 200, state) : json(res, 404, { error: "not found" });
+    }
+
+    if (segments[1] === "dao" && segments.length === 3) {
+      let realm: PublicKey;
+      let vault: PublicKey;
+      let wallet: PublicKey | undefined;
+      try {
+        realm = new PublicKey(segments[2]!);
+        vault = new PublicKey(url.searchParams.get("vault") ?? "");
+        const w = url.searchParams.get("wallet");
+        wallet = w ? new PublicKey(w) : undefined;
+      } catch {
+        return json(res, 400, {
+          error: "realm and ?vault= must be pubkeys (?wallet= optional)",
+        });
+      }
+      const dashboard = await deps.chain.getDashboard(realm, { vault, wallet });
+      return dashboard
+        ? json(res, 200, dashboard)
+        : json(res, 404, { error: "not found" });
+    }
   }
 
   return json(res, 404, { error: "not found" });

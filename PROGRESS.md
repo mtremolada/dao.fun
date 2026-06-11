@@ -67,9 +67,15 @@
       verified/red-mismatch/missing, execute disabled until hold-up
       elapses. Client bundle stays ~105 kB: the form imports
       "@daofun/sdk/launch-form" (TS-source subpath export) so chain deps
-      never reach the browser. Remaining for later: wallet adapter,
-      chain reader feeding the proposal view (query params today),
-      dashboard (vault balance / sweep history / vote power).
+      never reach the browser. Chain reader + dashboard shipped
+      tests-first (backend: ChainReader seam, /chain/* routes, 12 unit
+      tests; app: chain-fed proposal view w/ veto status + /dao/[realm]
+      dashboard, 3 more e2e = 10 total) and verified LIVE read-only
+      against the GATE 1 mainnet DAO: badge verified against the
+      chain-recomputed hash, dashboard shows the real sweep history
+      (conventions in D-017). Wallet adapter deliberately deferred
+      (D-017: launch is backend-orchestrated; browser signing is
+      Stage 2).
 - [~] 13.8 GATE 1: sovereign leg PASS live on mainnet, operator-funded
       (D-008): full lifecycle proposal -> vote -> finalize -> execute on a
       fresh DAO under production sovereign/micro params (only deviation:

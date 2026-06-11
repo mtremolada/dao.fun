@@ -27,6 +27,9 @@ export function ProposalView(props: {
   chainHash: string;
   votingCompletedAt: number;
   holdUpSeconds: number;
+  /** Chain-fed extras (null when the reader is unavailable). */
+  proposalState?: string | null;
+  veto?: { vetoed: boolean; vetoVoteWeight: string } | null;
 }) {
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -73,6 +76,25 @@ export function ProposalView(props: {
           {BADGE_COPY[badge]}
         </span>
       </p>
+
+      {props.proposalState && (
+        <p data-testid="proposal-state">
+          State: <strong>{props.proposalState}</strong>
+        </p>
+      )}
+      {props.veto && (
+        <p data-testid="veto-status">
+          {props.veto.vetoed ? (
+            <span className="badge" data-state="mismatch">
+              VETOED by the council
+            </span>
+          ) : (
+            <span className="muted">
+              No veto (council veto weight cast: {props.veto.vetoVoteWeight})
+            </span>
+          )}
+        </p>
+      )}
 
       {artifact && (
         <>
