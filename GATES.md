@@ -60,3 +60,27 @@ transfer-fee extensions.
 
 Not run. Risk flag D-007: `createFeeSharingConfig` requires the creator as
 payer/signer, which a PDA creator cannot satisfy in a plain launch tx.
+
+## GATE 1 — mode matrix e2e (IN PROGRESS: mainnet partial, sovereign)
+
+Operator-funded mainnet run (D-008 regime), 2026-06-11. Devnet remains
+faucet-blocked; operator directed a mainnet run instead. Smoke deviations
+recorded in D-014; architecture findings in D-013/D-015.
+
+DAO stood up for the GATE 0a mint `E8T9KAM4tkytKe2qbMYt9ygEfz3GbjrZgMzTZt7sP1KC`:
+
+- realm `3Cay6Bb9PWJBtaphqY4cgxwYMybG58Bf2mfcu9bDVgBJ` == advance-derived
+- governance `6JiBFCrw2Q79Yu2wViNJCDMvAXHQuvvmHU7dy85uhLz5` == advance-derived
+- native treasury `FmGNFAZmRdNYnf9eGwcXysZCPM7PJDMUiT2W94kHLsuo` == the
+  GATE 0a Squads vault's sole member, created BEFORE the realm existed —
+  the advance-derivation custody rule (INV-7) verified end-to-end on-chain
+- realm authority transferred to the governance PDA (no platform key)
+- Token-2022 community deposits live (D-013 caveat: mint appended)
+
+Remaining for this run: proposal -> vote -> finalize -> execute (sweeps the
+test vault through governance -> Squads; INV-3/INV-9 live), blocked at the
+proposal security deposit (D-015) pending an operator top-up (~6 USDC).
+
+Machine evidence: `.gate-evidence/gate1-sovereign-mainnet.json`.
+
+Operator sign-off: ______

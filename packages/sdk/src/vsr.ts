@@ -10,10 +10,16 @@
 import { createHash } from "node:crypto";
 import {
   PublicKey,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   SYSVAR_RENT_PUBKEY,
   SystemProgram,
   TransactionInstruction,
 } from "@solana/web3.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import { SPL_GOVERNANCE_PROGRAM_ID, VSR_PROGRAM_ID } from "./constants";
 import { deriveVsrRegistrar } from "./pda";
 
@@ -91,4 +97,263 @@ export function buildConfigureVotingMintIx(args: {
     ],
     data: Buffer.concat([head, option]),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Voter-side instructions (createVoter / deposit / weight / withdraw / close).
+// Seeds verified against program source 2026-06-11 (see vsr-voter tests).
+// NOTE: the deployed VSR uses anchor_spl::token (classic SPL Token only) for
+// its deposit vault; Token-2022 community mints are expected to be rejected
+// on-chain. The builders still take a tokenProgram so the incompatibility can
+// be demonstrated (and revisited if the program is ever upgraded).
+// ---------------------------------------------------------------------------
+
+/** LockupKind in program declaration order. */
+export enum LockupKind {
+  None = 0,
+  Daily = 1,
+  Monthly = 2,
+  Cliff = 3,
+  Constant = 4,
+}
+
+export function deriveVsrVoter(
+  registrar: PublicKey,
+  voterAuthority: PublicKey,
+): { address: PublicKey; bump: number } {
+  const [address, bump] = PublicKey.findProgramAddressSync(
+    [registrar.toBuffer(), Buffer.from("voter"), voterAuthority.toBuffer()],
+    VSR_PROGRAM_ID,
+  );
+  return { address, bump };
+}
+
+export function deriveVsrVoterWeightRecord(
+  registrar: PublicKey,
+  voterAuthority: PublicKey,
+): { address: PublicKey; bump: number } {
+  const [address, bump] = PublicKey.findProgramAddressSync(
+    [
+      registrar.toBuffer(),
+      Buffer.from("voter-weight-record"),
+      voterAuthority.toBuffer(),
+    ],
+    VSR_PROGRAM_ID,
+  );
+  return { address, bump };
+}
+
+export function buildCreateVoterIx(args: {
+  registrar: PublicKey;
+  voterAuthority: PublicKey;
+  payer: PublicKey;
+}): { ix: TransactionInstruction; voter: PublicKey; voterWeightRecord: PublicKey } {
+  const voter = deriveVsrVoter(args.registrar, args.voterAuthority);
+  const vwr = deriveVsrVoterWeightRecord(args.registrar, args.voterAuthority);
+  const data = Buffer.concat([
+    anchorDiscriminator("create_voter"),
+    Buffer.from([voter.bump, vwr.bump]),
+  ]);
+  const ix = new TransactionInstruction({
+    programId: VSR_PROGRAM_ID,
+    keys: [
+      { pubkey: args.registrar, isSigner: false, isWritable: false },
+      { pubkey: voter.address, isSigner: false, isWritable: true },
+      { pubkey: args.voterAuthority, isSigner: true, isWritable: false },
+      { pubkey: vwr.address, isSigner: false, isWritable: true },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+  return { ix, voter: voter.address, voterWeightRecord: vwr.address };
+}
+
+export function buildCreateDepositEntryIx(args: {
+  registrar: PublicKey;
+  voterAuthority: PublicKey;
+  payer: PublicKey;
+  depositMint: PublicKey;
+  depositEntryIndex: number;
+  kind: LockupKind;
+  startTs?: bigint;
+  periods: number;
+  allowClawback: boolean;
+  tokenProgram?: PublicKey;
+}): { ix: TransactionInstruction; vault: PublicKey } {
+  const tokenProgram = args.tokenProgram ?? TOKEN_PROGRAM_ID;
+  const voter = deriveVsrVoter(args.registrar, args.voterAuthority).address;
+  const vault = getAssociatedTokenAddressSync(
+    args.depositMint,
+    voter,
+    true,
+    tokenProgram,
+  );
+  const startTs =
+    args.startTs !== undefined
+      ? Buffer.concat([Buffer.from([1]), u64le(args.startTs)])
+      : Buffer.from([0]);
+  const tail = Buffer.alloc(5);
+  tail.writeUInt32LE(args.periods, 0);
+  tail.writeUInt8(args.allowClawback ? 1 : 0, 4);
+  const data = Buffer.concat([
+    anchorDiscriminator("create_deposit_entry"),
+    Buffer.from([args.depositEntryIndex, args.kind]),
+    startTs,
+    tail,
+  ]);
+  const ix = new TransactionInstruction({
+    programId: VSR_PROGRAM_ID,
+    keys: [
+      { pubkey: args.registrar, isSigner: false, isWritable: false },
+      { pubkey: voter, isSigner: false, isWritable: true },
+      { pubkey: vault, isSigner: false, isWritable: true },
+      { pubkey: args.voterAuthority, isSigner: true, isWritable: false },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: args.depositMint, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: tokenProgram, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+  return { ix, vault };
+}
+
+export function buildDepositIx(args: {
+  registrar: PublicKey;
+  voterAuthority: PublicKey;
+  vault: PublicKey;
+  depositToken: PublicKey;
+  depositEntryIndex: number;
+  amount: bigint;
+  tokenProgram?: PublicKey;
+}): TransactionInstruction {
+  const voter = deriveVsrVoter(args.registrar, args.voterAuthority).address;
+  return new TransactionInstruction({
+    programId: VSR_PROGRAM_ID,
+    keys: [
+      { pubkey: args.registrar, isSigner: false, isWritable: false },
+      { pubkey: voter, isSigner: false, isWritable: true },
+      { pubkey: args.vault, isSigner: false, isWritable: true },
+      { pubkey: args.depositToken, isSigner: false, isWritable: true },
+      { pubkey: args.voterAuthority, isSigner: true, isWritable: false },
+      {
+        pubkey: args.tokenProgram ?? TOKEN_PROGRAM_ID,
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("deposit"),
+      Buffer.from([args.depositEntryIndex]),
+      u64le(args.amount),
+    ]),
+  });
+}
+
+export function buildWithdrawIx(args: {
+  registrar: PublicKey;
+  voterAuthority: PublicKey;
+  tokenOwnerRecord: PublicKey;
+  vault: PublicKey;
+  destination: PublicKey;
+  depositEntryIndex: number;
+  amount: bigint;
+  tokenProgram?: PublicKey;
+}): TransactionInstruction {
+  const voter = deriveVsrVoter(args.registrar, args.voterAuthority).address;
+  const vwr = deriveVsrVoterWeightRecord(args.registrar, args.voterAuthority).address;
+  return new TransactionInstruction({
+    programId: VSR_PROGRAM_ID,
+    keys: [
+      { pubkey: args.registrar, isSigner: false, isWritable: false },
+      { pubkey: voter, isSigner: false, isWritable: true },
+      { pubkey: args.voterAuthority, isSigner: true, isWritable: false },
+      { pubkey: args.tokenOwnerRecord, isSigner: false, isWritable: false },
+      { pubkey: vwr, isSigner: false, isWritable: true },
+      { pubkey: args.vault, isSigner: false, isWritable: true },
+      { pubkey: args.destination, isSigner: false, isWritable: true },
+      {
+        pubkey: args.tokenProgram ?? TOKEN_PROGRAM_ID,
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("withdraw"),
+      Buffer.from([args.depositEntryIndex]),
+      u64le(args.amount),
+    ]),
+  });
+}
+
+export function buildUpdateVoterWeightRecordIx(args: {
+  registrar: PublicKey;
+  voterAuthority: PublicKey;
+}): TransactionInstruction {
+  const voter = deriveVsrVoter(args.registrar, args.voterAuthority).address;
+  const vwr = deriveVsrVoterWeightRecord(args.registrar, args.voterAuthority).address;
+  return new TransactionInstruction({
+    programId: VSR_PROGRAM_ID,
+    keys: [
+      { pubkey: args.registrar, isSigner: false, isWritable: false },
+      { pubkey: voter, isSigner: false, isWritable: false },
+      { pubkey: vwr, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: anchorDiscriminator("update_voter_weight_record"),
+  });
+}
+
+export function buildCloseDepositEntryIx(args: {
+  registrar: PublicKey;
+  voterAuthority: PublicKey;
+  depositEntryIndex: number;
+}): TransactionInstruction {
+  const voter = deriveVsrVoter(args.registrar, args.voterAuthority).address;
+  return new TransactionInstruction({
+    programId: VSR_PROGRAM_ID,
+    keys: [
+      { pubkey: voter, isSigner: false, isWritable: true },
+      { pubkey: args.voterAuthority, isSigner: true, isWritable: false },
+    ],
+    data: Buffer.concat([
+      anchorDiscriminator("close_deposit_entry"),
+      Buffer.from([args.depositEntryIndex]),
+    ]),
+  });
+}
+
+export function buildCloseVoterIx(args: {
+  registrar: PublicKey;
+  voterAuthority: PublicKey;
+  solDestination: PublicKey;
+  tokenProgram?: PublicKey;
+}): TransactionInstruction {
+  const voter = deriveVsrVoter(args.registrar, args.voterAuthority).address;
+  return new TransactionInstruction({
+    programId: VSR_PROGRAM_ID,
+    keys: [
+      { pubkey: args.registrar, isSigner: false, isWritable: false },
+      { pubkey: voter, isSigner: false, isWritable: true },
+      { pubkey: args.voterAuthority, isSigner: true, isWritable: false },
+      { pubkey: args.solDestination, isSigner: false, isWritable: true },
+      {
+        pubkey: args.tokenProgram ?? TOKEN_PROGRAM_ID,
+        isSigner: false,
+        isWritable: false,
+      },
+    ],
+    data: anchorDiscriminator("close_voter"),
+  });
+}
+
+function u64le(v: bigint): Buffer {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(v);
+  return b;
 }

@@ -152,6 +152,56 @@ proposals anyway: councilVoteThreshold = Disabled, veto-only council).
   cypherpunk "exit window" must never be shortened by early tipping);
   council Strict.
 - `votingCoolOffTime` 0 and `depositExemptProposalCount` 0 for MVP.
+  (`depositExemptProposalCount` superseded by D-015: now 10.)
+
+## D-013 — Deployed VSR rejects Token-2022 mints; SPL Gov v3.1.4 accepts them with a caveat (2026-06-11, on-chain evidence)
+
+Verified live on mainnet (free simulation + executed txs, evidence in
+`.gate-evidence/gate1-sovereign-mainnet.json`):
+
+- **VSR (`vsr2nf...`) is classic-SPL-Token-only.** `create_registrar` for a
+  Token-2022 community mint fails with anchor error 3007
+  (AccountOwnedByWrongProgram) — the program's `Account<Mint>` constraints
+  predate Token-2022. Since ALL pump `createV2` mints are Token-2022, the
+  spec's VSR-based lockup voting CANNOT work against the deployed VSR.
+- **SPL Governance v3.1.4 (deployed `GovER5...`) supports Token-2022**
+  community mints: realm creation initializes the holding account via the
+  Token-2022 program, and `DepositGoverningTokens` works — but the deployed
+  program requires the governing token MINT appended to the deposit /
+  withdraw account list ("Expected mint account is required for Token-2022
+  deposits and withdrawals"); JS sdk 0.3.28 omits it, so the ix is patched
+  (see `retargetTokenProgram` + mint append in the gate script).
+
+Consequences:
+- `buildCreateDaoIxs` gained `communityVoterWeightAddin: null` — realms are
+  built WITHOUT the VSR addin for Token-2022 mints; voting weight = plain
+  deposited tokens (no lockup scaling). INV-4 (lockup-weighted voting) is
+  therefore NOT enforceable at MVP with deployed programs; restoring it
+  requires a custom voter-weight plugin (Stage 2/3 work) or a VSR upgrade.
+- Production launch path must use the no-addin realm until then.
+
+## D-014 — Mainnet smoke-run config deviations (2026-06-11, operator-funded GATE 1 partial)
+
+Mainnet has no clock control, so the sovereign-mode e2e uses a smoke DAO on
+the GATE 0a mint with: `baseVotingTime` 3600s (program minimum),
+`MintMaxVoteWeightSource` Absolute(200k tokens) so a small holder can meet
+the production quorum percent (25), proposal threshold 50k tokens, hold-up
+0 (production-legal sovereign choice). Production values are pinned by unit
+tests and unaffected; the Absolute max-vote-weight knob and the VSR
+baseline knob added for this run are documented as smoke/test-scoped in
+`CreateDaoParams`. Tier-floor hold-up/voting behavior over days remains
+integration-suite work (clock-warp), per the plan.
+
+## D-015 — Proposal security deposit: depositExemptProposalCount 0 -> 10 (2026-06-11, found live)
+
+SPL Gov v3.1.4 charges a **refundable ~0.102 SOL security deposit per
+proposal** when the config's `depositExemptProposalCount` is exhausted; our
+MVP config of 0 made EVERY proposal cost ~0.102 SOL up front (discovered
+when the smoke proposal failed: "insufficient lamports 33585574, need
+101788720"). Anti-spam is already provided by the token proposal
+threshold, so the default is now 10 (Realms' common default), pinned by
+test. The deposit is recoverable via `RefundProposalDeposit` once the
+proposal completes (wired into the gate script's cleanup).
 
 ## Open (verify) items — to resolve before/at their first use
 
@@ -161,5 +211,6 @@ proposals anyway: councilVoteThreshold = Disabled, veto-only council).
 - PumpSwap pool ixs for buyback/provideLiquidity (Stage 1, action menu)
 - `transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)
 - Creator Fee Sharing at-launch config + admin revoke (GATE 0c; risk D-007)
-- VSR registrar seed + manual ix layout on-chain validation (Stage 1
-  integration; vendored-IDL verification done, D-010)
+- ~~VSR registrar seed + manual ix layout on-chain validation~~ RESOLVED:
+  D-013 — layouts correct (program reached its own constraint checks);
+  registrar creation itself blocked for Token-2022 mints

@@ -85,6 +85,11 @@ describe("VSR min-lockup approximation (spec 6.3 note)", () => {
 });
 
 describe("governance config mirrors resolved params", () => {
+  it("proposal security deposits are exempted (D-015: v3.1.4 charges ~0.1 SOL per proposal otherwise)", async () => {
+    const dao = await cypherpunkDao();
+    expect(dao.config.depositExemptProposalCount).toBe(10);
+  });
+
   it("hold-up, quorum, threshold land in the on-chain config object", async () => {
     const params = resolveGovernanceParams({
       mode: "cypherpunk",
@@ -166,6 +171,83 @@ describe("mode is structural (spec 6.3 / 12.2)", () => {
     ).rejects.toThrow(/council/);
   });
 });
+
+describe("smoke/fallback knobs (mainnet GATE-1 partial run, D-013/D-014)", () => {
+  it("default realm encodes FULL_SUPPLY_FRACTION max vote weight; Absolute override is encoded", async () => {
+    const { MintMaxVoteWeightSource } = await import("@solana/spl-governance");
+    const findRealmIx = (dao: Awaited<ReturnType<typeof cypherpunkDao>>) =>
+      dao.ixs.find(
+        (ix) =>
+          ix.programId.equals(SPL_GOVERNANCE_PROGRAM_ID) &&
+          ix.keys[0]!.pubkey.equals(dao.realm),
+      )!;
+
+    // default: SupplyFraction(10^10) => bytes [0, 10^10 LE u64] in config args
+    const def = await cypherpunkDao();
+    const defaultBytes = Buffer.concat([Buffer.from([0]), u64le(10_000_000_000n)]);
+    expect(findRealmIx(def).data.includes(defaultBytes)).toBe(true);
+
+    // override: Absolute(2e11) => bytes [1, 2e11 LE u64]
+    const abs = await buildCreateDaoIxs({
+      mint,
+      payer,
+      mode: "cypherpunk",
+      params: resolveGovernanceParams({
+        mode: "cypherpunk",
+        tier: "micro",
+        communitySupply: supply,
+      }),
+      communityMaxVoteWeightSource: new MintMaxVoteWeightSource({
+        type: 1, // Absolute
+        value: new (await import("bn.js")).default("200000000000"),
+      }),
+    });
+    const absBytes = Buffer.concat([Buffer.from([1]), u64le(200_000_000_000n)]);
+    expect(findRealmIx(abs).data.includes(absBytes)).toBe(true);
+    expect(findRealmIx(abs).data.includes(defaultBytes)).toBe(false);
+  });
+
+  it("baselineVoteWeightScaledFactor override flows into configureVotingMint (default stays 0)", async () => {
+    const dao = await buildCreateDaoIxs({
+      mint,
+      payer,
+      mode: "cypherpunk",
+      params: resolveGovernanceParams({
+        mode: "cypherpunk",
+        tier: "micro",
+        communitySupply: supply,
+      }),
+      baselineVoteWeightScaledFactor: 1_000_000_000n,
+    });
+    const cfg = dao.ixs.filter((ix) => ix.programId.equals(VSR_PROGRAM_ID))[1]!;
+    expect(cfg.data.readBigUInt64LE(11)).toBe(1_000_000_000n);
+  });
+
+  it("communityVoterWeightAddin: null builds a realm with no VSR instructions (Token-2022 fallback)", async () => {
+    const dao = await buildCreateDaoIxs({
+      mint,
+      payer,
+      mode: "cypherpunk",
+      params: resolveGovernanceParams({
+        mode: "cypherpunk",
+        tier: "micro",
+        communitySupply: supply,
+      }),
+      communityVoterWeightAddin: null,
+    });
+    expect(dao.ixs.some((ix) => ix.programId.equals(VSR_PROGRAM_ID))).toBe(false);
+    expect(dao.groups.realmSetup.length).toBeGreaterThan(0);
+    // chain predictions are unaffected — derivation only depends on the mint
+    const predicted = deriveGovernanceChainFromMint(mint);
+    expect(dao.nativeTreasury.equals(predicted.nativeTreasury)).toBe(true);
+  });
+});
+
+function u64le(v: bigint): Buffer {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(v);
+  return b;
+}
 
 describe("no platform backdoor (spec 6.3)", () => {
   it("the final governance ix sets realm authority to the governance PDA", async () => {

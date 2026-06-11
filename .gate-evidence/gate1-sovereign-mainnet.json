@@ -1,0 +1,78 @@
+{
+  "gate": "1-partial-sovereign",
+  "cluster": "https://api.mainnet-beta.solana.com",
+  "note": "operator-funded mainnet run (D-008). Sovereign mode, hold-up 0. Smoke deviations per D-014: baseVotingTime 3600s (program min), Absolute max vote weight 200k tokens, proposal threshold 50k tokens.",
+  "config": {
+    "mint": "E8T9KAM4tkytKe2qbMYt9ygEfz3GbjrZgMzTZt7sP1KC",
+    "multisigPda": "5572XY2dwdq2srxLBRgDeVzUkNxuGcBafn9xqStko8q8",
+    "squadsVault": "3qnu5xeFW2vwHPK116PccxwuBTqvQqfikp73tvVR4uJA",
+    "baseVotingTimeSeconds": 3600,
+    "maxVoteWeightAbsolute": "200000000000",
+    "proposalThresholdRaw": "50000000000"
+  },
+  "stages": {
+    "probe-vsr": {
+      "useVsr": false,
+      "vsrSimError": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 3007
+          }
+        ]
+      },
+      "vsrSimLogs": [
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw consumed 37464 of 600000 compute units",
+        "Program GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw success",
+        "Program vsr2nfGVNHmSY8uxoBGqq8AQbwz3JwaEaHqGbsTPXqQ invoke [1]",
+        "Program log: Instruction: CreateRegistrar",
+        "Program log: AnchorError caused by account: realm_governing_token_mint. Error Code: AccountOwnedByWrongProgram. Error Number: 3007. Error Message: The given account is owned by a different program than expected.",
+        "Program log: Left:",
+        "Program log: TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "Program log: Right:",
+        "Program log: TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "Program vsr2nfGVNHmSY8uxoBGqq8AQbwz3JwaEaHqGbsTPXqQ consumed 9358 of 562536 compute units",
+        "Program vsr2nfGVNHmSY8uxoBGqq8AQbwz3JwaEaHqGbsTPXqQ failed: custom program error: 0xbbf"
+      ],
+      "verdict": "fallback: realm without addin, plain governance deposits",
+      "at": "2026-06-11T01:46:19.484Z"
+    },
+    "realm-setup": {
+      "sig": "3qk17N84QK9qVjwqppeeywz3E693V6uMvidXUrGkzZDiF6ukU4XrtH7ehtBsXoDezUKDr2q6btB6oLMHQBTmQ7ok",
+      "realm": "3Cay6Bb9PWJBtaphqY4cgxwYMybG58Bf2mfcu9bDVgBJ",
+      "at": "2026-06-11T01:46:20.068Z"
+    },
+    "governance-setup": {
+      "sig": "2JAxDXmPqKpT5jj1G516ipeupxndf91bK8Ye9rWUq71EJ12Rw5MP9VLRnAnkzFX3cyptXmSxrb9qxL5dVannvFjT",
+      "governance": "6JiBFCrw2Q79Yu2wViNJCDMvAXHQuvvmHU7dy85uhLz5",
+      "nativeTreasury": "FmGNFAZmRdNYnf9eGwcXysZCPM7PJDMUiT2W94kHLsuo",
+      "realmAuthorityIsGovernance": true,
+      "inv7SoleMemberIsNativeTreasury": true,
+      "at": "2026-06-11T01:46:20.879Z"
+    },
+    "fund-buyer": {
+      "sig": "fySFcEWikjfJ5V3TfKFZGzwbWkA68Kdmzf4k9JbCi19zoFACSSMPRxukZEgRc5Q8Xq1S7WD4GWtFtQJkHdm24fN",
+      "lamports": 45000000,
+      "at": "2026-06-11T01:46:21.711Z"
+    },
+    "buy": {
+      "sig": "3AospwBxhDFTdpoTLezqRZvxmrNnoGXCuUkSWeSG2Ga94GBqGN1syCea4XBU6D6F9ZLiPCZscnYiowDjbgY1wDu2",
+      "tokens": "106227069405",
+      "at": "2026-06-11T01:46:22.510Z"
+    },
+    "voting-power": {
+      "sig": "53WUELyvhAoxuWKQBqV6psG7Cia2bKEPeq7YUHn1dAsjNXG5NPKskPV9e8gQgdnEb4oMzAP3iSMfMffPChcCq3Yn",
+      "deposited": "106227069405",
+      "tor": "91DwqLQwX69PdnSg6VcL3vPWgc2qNuf3mtiS4GUCEkbG",
+      "at": "2026-06-11T01:48:44.200Z"
+    }
+  },
+  "findings": [
+    "D-013 (on-chain evidence): VSR leg of realm setup fails for a Token-2022 community mint. Logs captured in stage record.",
+    "D-013 nuance: deployed SPL Governance v3.1.4 DOES support Token-2022 deposits, but requires the governing token mint appended to the DepositGoverningTokens/WithdrawGoverningTokens account list; JS sdk 0.3.28 omits it. VSR remains classic-token-only (anchor error 3007)."
+  ]
+}

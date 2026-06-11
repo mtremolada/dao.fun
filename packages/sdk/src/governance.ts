@@ -44,12 +44,17 @@ import {
 } from "@solana/spl-governance";
 import type { GovernanceMode, GovernanceParams } from "./types";
 import { SPL_GOVERNANCE_PROGRAM_ID, VSR_PROGRAM_ID } from "./constants";
-import { realmNameForMint } from "./pda";
+import { deriveVsrRegistrar, realmNameForMint } from "./pda";
 import {
   VSR_SCALED_FACTOR_BASE,
   buildConfigureVotingMintIx,
   buildCreateRegistrarIx,
 } from "./vsr";
+
+// Re-exported so callers construct config values with THIS package's class
+// identity — borsh schemas are keyed by class, so a structurally identical
+// object from another spl-governance copy fails to serialize.
+export { MintMaxVoteWeightSource };
 
 const PROGRAM_VERSION = 3;
 /** Voting duration. Not in the spec's tier table; see DECISIONS.md D-012. */
@@ -71,6 +76,24 @@ export interface CreateDaoParams {
   params: GovernanceParams;
   council?: CouncilSetup;
   baseVotingTimeSeconds?: number;
+  /**
+   * Realm max community vote weight source. Default FULL_SUPPLY_FRACTION
+   * (production). Smoke/e2e runs may use Absolute so a small holder can
+   * meet quorum without buying a supply fraction (see DECISIONS.md D-014).
+   */
+  communityMaxVoteWeightSource?: MintMaxVoteWeightSource;
+  /**
+   * VSR baseline weight for unlocked deposits. Default 0n — spec 6.3:
+   * weight comes only from lockups. Non-zero is a TEST-ONLY deviation for
+   * environments without clock control (see DECISIONS.md D-014).
+   */
+  baselineVoteWeightScaledFactor?: bigint;
+  /**
+   * Community voter-weight addin. Default: the VSR program. Pass null to
+   * build a realm with NO addin and no VSR instructions — the fallback for
+   * Token-2022 community mints, which the deployed VSR rejects (D-013).
+   */
+  communityVoterWeightAddin?: PublicKey | null;
 }
 
 export interface CreateDaoResult {
@@ -110,6 +133,10 @@ export async function buildCreateDaoIxs(
   const council: TransactionInstruction[] = [];
   const governanceSetup: TransactionInstruction[] = [];
   const name = realmNameForMint(p.mint);
+  const voterWeightAddin =
+    p.communityVoterWeightAddin === undefined
+      ? VSR_PROGRAM_ID
+      : p.communityVoterWeightAddin;
 
   // 1. Realm — name derives the PDA chain; council mint registered up front.
   const realm = await withCreateRealm(
@@ -121,10 +148,10 @@ export async function buildCreateDaoIxs(
     p.mint,
     p.payer,
     p.council?.mint,
-    MintMaxVoteWeightSource.FULL_SUPPLY_FRACTION,
+    p.communityMaxVoteWeightSource ?? MintMaxVoteWeightSource.FULL_SUPPLY_FRACTION,
     new BN(p.params.proposalThresholdTokens.toString()),
     new GoverningTokenConfigAccountArgs({
-      voterWeightAddin: VSR_PROGRAM_ID,
+      voterWeightAddin: voterWeightAddin ?? undefined,
       maxVoterWeightAddin: undefined,
       tokenType: GoverningTokenType.Liquid,
     }),
@@ -137,28 +164,32 @@ export async function buildCreateDaoIxs(
       : undefined,
   );
 
-  // 2. VSR while payer still holds realm authority (createRegistrar needs it).
-  const { ix: createRegistrarIx, registrar } = buildCreateRegistrarIx({
-    realm,
-    communityMint: p.mint,
-    realmAuthority: p.payer,
-    payer: p.payer,
-  });
-  realmSetup.push(createRegistrarIx);
-  realmSetup.push(
-    buildConfigureVotingMintIx({
-      registrar,
+  // 2. VSR while payer still holds realm authority (createRegistrar needs
+  //    it). Skipped entirely when the realm is built without the addin.
+  const registrar = deriveVsrRegistrar(realm, p.mint);
+  if (voterWeightAddin !== null) {
+    const created = buildCreateRegistrarIx({
+      realm,
+      communityMint: p.mint,
       realmAuthority: p.payer,
-      mint: p.mint,
-      idx: 0,
-      digitShift: 0,
-      // Spec 6.3: unlocked deposits vote with ZERO weight; weight comes
-      // entirely from lockup, saturating at the tier's horizon.
-      baselineVoteWeightScaledFactor: 0n,
-      maxExtraLockupVoteWeightScaledFactor: VSR_SCALED_FACTOR_BASE,
-      lockupSaturationSecs: BigInt(p.params.lockupSaturationSeconds),
-    }),
-  );
+      payer: p.payer,
+    });
+    realmSetup.push(created.ix);
+    realmSetup.push(
+      buildConfigureVotingMintIx({
+        registrar,
+        realmAuthority: p.payer,
+        mint: p.mint,
+        idx: 0,
+        digitShift: 0,
+        // Spec 6.3: unlocked deposits vote with ZERO weight; weight comes
+        // entirely from lockup, saturating at the tier's horizon.
+        baselineVoteWeightScaledFactor: p.baselineVoteWeightScaledFactor ?? 0n,
+        maxExtraLockupVoteWeightScaledFactor: VSR_SCALED_FACTOR_BASE,
+        lockupSaturationSecs: BigInt(p.params.lockupSaturationSeconds),
+      }),
+    );
+  }
 
   // 3. Council mint (council mode only): 1 token per member, then no mint
   //    authority exists — membership is fixed at launch (structural veto set).
@@ -220,7 +251,10 @@ export async function buildCreateDaoIxs(
     communityVetoVoteThreshold: disabled,
     councilVoteTipping: VoteTipping.Strict,
     votingCoolOffTime: 0,
-    depositExemptProposalCount: 0,
+    // D-015 (found live on mainnet): with 0, v3.1.4 demands a ~0.102 SOL
+    // refundable security deposit per proposal. Anti-spam is already
+    // provided by the token proposal threshold; exempt a sane window.
+    depositExemptProposalCount: 10,
   });
 
   const payerTor = await getTokenOwnerRecordAddress(

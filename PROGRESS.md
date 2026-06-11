@@ -56,5 +56,9 @@
       sovereign double confirmations, guarded unselectable, hash badge
       verified/mismatch/missing, hold-up-gated execute button). Remaining:
       Next.js shell rendering these results + Playwright e2e.
-- [ ] 13.8 GATE 1 mode matrix on devnet (needs faucet or operator funding;
-      integration suites also want solana-test-validator with clones)
+- [~] 13.8 GATE 1: mainnet partial (sovereign) IN PROGRESS, operator-funded
+      (D-008). DAO + Token-2022 deposits live; INV-7 verified on-chain;
+      critical findings D-013 (VSR can't do Token-2022 -> no-addin realms
+      at MVP), D-015 (proposal deposit default). Proposal/vote/execute legs
+      pending top-up. Council/cypherpunk matrix + clock-warp behavior still
+      need the integration suite (validator with clones) or devnet.
