@@ -449,6 +449,51 @@ and post-graduation AMM fees both live, ONE keeper-signed tx through the
 real `sweepVault` core (INV-2 checked against the real ix set), vault
 credited native SOL, second sweep a no-op.
 
+## D-024 — Merkle distributor ID resolved: the IMMUTABLE Jito deployment; distribute ships on it (2026-06-11)
+
+Resolution of the spec's "(verify deployed ID)" for `distribute` (6.8):
+
+- The deployed program is `mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv` —
+  the JTO airdrop distributor (jito-foundation/distributor, Saber
+  merkle-distributor lineage). Verified directly on mainnet: executable,
+  and its **upgrade authority is removed** (ProgramData authority = None),
+  so the binary our tests pin can never change underneath the fund path.
+- The repo's `declare_id` (`m1uq...`) does NOT exist on mainnet — never
+  trust a repo's Anchor.toml for a deployed address.
+- The program publishes its anchor IDL on chain (merkle_distributor
+  0.0.1); vendored at `packages/sdk/src/idl/merkle-distributor.json` and
+  instructions are built manually against it (the D-010 VSR pattern).
+  The binary itself is a gzipped fixture (`merkle_distributor.so.gz`).
+
+Mechanics verified on the real binary (tests/action-distribute.integration.test.ts):
+
+- Tree hashing (TS port, sdk/src/merkle-distributor.ts): leaf =
+  sha256([0] || sha256(claimant || u64le(unlocked) || u64le(locked))),
+  branches sha256([1] || sorted pair) — OpenZeppelin-style commutative
+  fold. The REAL verifier accepting our proofs is the compatibility proof.
+  Leaves are sorted so a share set has ONE canonical root (order-
+  independent, INV-9-friendly).
+- One proposal (vault legs only, ~12 metas — no D-022 staging needed):
+  newDistributor (vault = admin + rent payer, root pinned at proposal
+  time), fund tokenVault with exactly Σ(shares), syncNative. The program
+  requires all timestamps to be in the FUTURE at EXECUTION — builders/
+  callers must budget the voting window + hold-up into
+  startVesting/endVesting/clawbackStart.
+- Distribution token is WSOL (spec: totalLamports). The DAO's own token
+  is Token-2022, which this 2023 program predates — NOT distributable
+  here. Claimants receive WSOL into their ATAs.
+- clawbackReceiver = the VAULT's WSOL ATA (pre-created outside the
+  proposal): after clawbackStartTs (>= endVesting + 86400, program-
+  enforced) ANYONE returns the unclaimed remainder to DAO custody, once.
+  Claims after the clawback are refused. Books close exactly:
+  Σ(claimed) + clawed-back == funded.
+- The (mint, version) PDA namespace is GLOBAL and permissionless. A
+  squatter front-running our (WSOL, version) pair only makes
+  newDistributor fail at execute — the chained execute aborts and the
+  funding never leaves the vault; re-propose with a fresh random version.
+- Double-claim impossible (ClaimStatus PDA init), tampered amounts fail
+  the proof — both asserted against the real binary.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
@@ -456,7 +501,9 @@ credited native SOL, second sweep a no-op.
   (INV-9)~~ RESOLVED at the evidence level: GATE 1 phase 2 re-read the
   wrapped ixs from chain post-execution and their hash matched the
   artifact published at proposal time
-- Merkle distributor deployed program ID (Stage 1, `distribute` action)
+- ~~Merkle distributor deployed program ID (Stage 1, `distribute` action)~~
+  RESOLVED: D-024 — the immutable Jito deployment (mERKc...); distribute
+  shipped and proven end-to-end on the real binary
 - ~~PumpSwap pool ixs for POST-GRADUATION buyback / provideLiquidity~~
   RESOLVED: D-021/D-022 — offline PumpAmmSdk + permissionless migration;
   both actions shipped (staged two-leg design) and proven end-to-end on

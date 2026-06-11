@@ -31,4 +31,4 @@ Program IDs (verified against installed pump-sdk source — see DECISIONS.md):
 | SPL Governance | `GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw` |
 | Voter Stake Registry | `vsr2nfGVNHmSY8uxoBGqq8AQbwz3JwaEaHqGbsTPXqQ` |
 | Squads v4 | `SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf` |
-| Merkle distributor | UNRESOLVED — Stage 0 (verify) item still open |
+| Merkle distributor (Jito, IMMUTABLE on mainnet) | `mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv` (D-024) |

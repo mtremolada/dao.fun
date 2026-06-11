@@ -6,10 +6,11 @@
  * the Stage 3 proposal-gate.
  *
  * MVP ships `grant`, `burn`, `buyback` (curve venue AND, post-graduation,
- * the token's own PumpSwap pool) and `provideLiquidity` (PumpSwap pool) —
+ * the token's own PumpSwap pool), `provideLiquidity` (PumpSwap pool) —
  * the pool-ix verify item resolved against @pump-fun/pump-swap-sdk's
- * offline builder (D-021). Still blocked: distribute on the merkle
- * distributor program ID, setParam on the whitelisted-param registry.
+ * offline builder (D-021) — and `distribute` (Jito merkle distributor,
+ * immutable mainnet deployment, D-024). Still blocked: setParam on the
+ * whitelisted-param registry (Stage 3).
  */
 import {
   PublicKey,
@@ -21,6 +22,7 @@ import {
   NATIVE_MINT,
   TOKEN_2022_PROGRAM_ID,
   createBurnInstruction,
+  createSyncNativeInstruction,
   createTransferInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
@@ -38,6 +40,12 @@ import {
 } from "@pump-fun/pump-swap-sdk";
 import BN from "bn.js";
 import { PUMP_AMM_PROGRAM_ID } from "./constants";
+import {
+  buildClaimTree,
+  buildNewDistributorIx,
+  type ClaimShare,
+  type MerkleClaimTree,
+} from "./merkle-distributor";
 
 /** Default rent-exempt floor for a 0-data account; callers may refresh it. */
 export const DEFAULT_RENT_FLOOR_LAMPORTS = 890_880n;
@@ -466,4 +474,115 @@ export function buildBurnIxs(p: BurnParams): TransactionInstruction[] {
   return [
     createBurnInstruction(vaultAta, p.mint, p.vault, p.amount, [], p.tokenProgram),
   ];
+}
+
+/** Program-enforced minimum gap between endVestingTs and clawbackStartTs. */
+export const CLAWBACK_MIN_DELAY_S = 86_400n;
+
+export interface DistributeParams {
+  /** The DAO's Squads vault — distributor admin + funder (inner signer). */
+  vault: PublicKey;
+  /** Holder shares from the backend snapshot (spec: snapshotSlot via RPC/DAS). */
+  shares: ClaimShare[];
+  /**
+   * Distributor PDA discriminant: the (WSOL, version) namespace is GLOBAL
+   * and permissionless, so use a random u64. A squatter who front-runs the
+   * pair can only make our newDistributor fail — the whole chained execute
+   * then aborts and the funding never leaves the vault; re-propose with a
+   * fresh version (D-024).
+   */
+  version: bigint;
+  /** Unix seconds; the program requires start < end, all in the future. */
+  startVestingTs: bigint;
+  endVestingTs: bigint;
+  /** Unix seconds; >= endVestingTs + 86400 (program constraint). */
+  clawbackStartTs: bigint;
+  /** Vault balance at proposal build time (re-checked by simulation, 12.3). */
+  vaultBalanceLamports: bigint;
+  rentFloorLamports?: bigint;
+  /**
+   * Headroom for the rent the program charges the vault inside
+   * newDistributor (distributor account + its WSOL vault ATA).
+   */
+  rentBudgetLamports?: bigint;
+}
+
+export interface DistributeResult {
+  /** Vault legs for the proposal (custody chain; vault is only inner signer). */
+  ixs: TransactionInstruction[];
+  distributor: PublicKey;
+  tokenVault: PublicKey;
+  /** Vault's WSOL ATA — clawback receiver; pre-create OUTSIDE the proposal. */
+  clawbackReceiver: PublicKey;
+  tree: MerkleClaimTree;
+  totalLamports: bigint;
+}
+
+/** distributor account (8 disc + state) + its ATA, with margin. */
+const DEFAULT_DISTRIBUTOR_RENT_BUDGET = 5_000_000n;
+
+/**
+ * `distribute` (spec 6.8): one proposal creates the merkle distributor
+ * (vault = admin + rent payer), funds its WSOL vault with totalLamports and
+ * syncs it. Holders claim permissionlessly with proofs from `tree`
+ * (double-claims blocked by ClaimStatus PDAs; the program caps claims at
+ * maxTotalClaim == Σ shares == funded amount). After clawbackStartTs anyone
+ * can claw the remainder back to the vault's WSOL ATA.
+ */
+export function buildDistributeIxs(p: DistributeParams): DistributeResult {
+  const tree = buildClaimTree(p.shares); // validates non-empty/positive/unique
+  if (p.startVestingTs >= p.endVestingTs) {
+    throw new Error("distribute: startVestingTs must precede endVestingTs");
+  }
+  if (p.clawbackStartTs < p.endVestingTs + CLAWBACK_MIN_DELAY_S) {
+    throw new Error(
+      "distribute: clawbackStartTs must be at least one day after endVestingTs",
+    );
+  }
+  const total = tree.totalLamports;
+  if (total > p.vaultBalanceLamports) {
+    throw new Error(
+      `distribute: ${total} exceeds vault balance ${p.vaultBalanceLamports}`,
+    );
+  }
+  const floor = p.rentFloorLamports ?? DEFAULT_RENT_FLOOR_LAMPORTS;
+  const rentBudget = p.rentBudgetLamports ?? DEFAULT_DISTRIBUTOR_RENT_BUDGET;
+  if (p.vaultBalanceLamports - total < floor + rentBudget) {
+    throw new Error(
+      `distribute: would leave the vault below the rent floor (${floor}) plus the distributor rent budget (${rentBudget}) — D-009`,
+    );
+  }
+
+  const clawbackReceiver = getAssociatedTokenAddressSync(
+    NATIVE_MINT,
+    p.vault,
+    true,
+  );
+  const { ix: createIx, distributor, tokenVault } = buildNewDistributorIx({
+    version: p.version,
+    root: tree.root,
+    maxTotalClaim: total,
+    maxNumNodes: tree.maxNumNodes,
+    startVestingTs: p.startVestingTs,
+    endVestingTs: p.endVestingTs,
+    clawbackStartTs: p.clawbackStartTs,
+    admin: p.vault,
+    clawbackReceiver,
+  });
+  return {
+    ixs: [
+      createIx,
+      SystemProgram.transfer({
+        fromPubkey: p.vault,
+        toPubkey: tokenVault,
+        lamports: total,
+      }),
+      createSyncNativeInstruction(tokenVault),
+    ],
+    distributor,
+    tokenVault,
+    clawbackReceiver,
+    tree,
+    totalLamports: total,
+  };
 }

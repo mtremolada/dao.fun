@@ -20,3 +20,11 @@ export const VSR_PROGRAM_ID = new PublicKey(
 export const SQUADS_V4_PROGRAM_ID = new PublicKey(
   "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
 );
+// Jito merkle distributor (JTO airdrop deployment, Dec 2023). Resolved and
+// verified on mainnet (D-024): executable, upgrade authority REMOVED
+// (immutable), publishes its anchor IDL on chain (merkle_distributor 0.0.1,
+// vendored at src/idl/merkle-distributor.json). The repo's declare_id
+// (m1uq...) was never deployed to mainnet — this is the live one.
+export const MERKLE_DISTRIBUTOR_PROGRAM_ID = new PublicKey(
+  "mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv",
+);

@@ -1,11 +1,11 @@
 /**
  * Spec 6.8 — fixed action menu builders (written before implementation).
  * Shipped: grant, burn, buyback (curve venue), buyback (AMM venue,
- * post-graduation) and provideLiquidity on the PumpSwap pool — the pool-ix
- * verify item resolved against @pump-fun/pump-swap-sdk's offline builder.
- * Still blocked: distribute (merkle distributor ID), setParam (param
- * registry). Each builder asserts its bounds and touches no accounts
- * outside the declared set.
+ * post-graduation), provideLiquidity on the PumpSwap pool — the pool-ix
+ * verify item resolved against @pump-fun/pump-swap-sdk's offline builder —
+ * and distribute on the Jito merkle distributor (D-024). Still blocked:
+ * setParam (param registry, Stage 3). Each builder asserts its bounds and
+ * touches no accounts outside the declared set.
  */
 import { describe, expect, it } from "vitest";
 import BN from "bn.js";
@@ -22,9 +22,12 @@ import {
   buildAmmBuybackIxs,
   buildBurnIxs,
   buildBuybackIxs,
+  buildDistributeIxs,
   buildGrantIxs,
   buildProvideLiquidityIxs,
 } from "../src/actions";
+import { MERKLE_DISTRIBUTOR_PROGRAM_ID } from "../src/constants";
+import { verifyClaimProof } from "../src/merkle-distributor";
 
 const vault = Keypair.generate().publicKey;
 const recipient = Keypair.generate().publicKey;
@@ -503,5 +506,115 @@ describe("provideLiquidity (staged two-leg — the token's own PumpSwap pool, sp
     await expect(makeProvide({}, { user: vault })).rejects.toThrow(
       /native treasury/,
     );
+  });
+});
+
+describe("distribute (merkle claim distributor, spec 6.8 / D-024)", () => {
+  const shares = [
+    { claimant: Keypair.generate().publicKey, lamports: 300_000_000n },
+    { claimant: Keypair.generate().publicKey, lamports: 200_000_000n },
+    { claimant: Keypair.generate().publicKey, lamports: 100_000_000n },
+  ];
+  const NOW = 1_800_000_000n;
+  const base = {
+    vault,
+    shares,
+    version: 42n,
+    startVestingTs: NOW + 60n,
+    endVestingTs: NOW + 120n,
+    clawbackStartTs: NOW + 120n + 86_400n,
+    vaultBalanceLamports: 2_000_000_000n,
+  };
+
+  it("one proposal: newDistributor (vault = admin/only inner signer) + fund + sync", () => {
+    const built = buildDistributeIxs(base);
+    expect(built.ixs).toHaveLength(3);
+    const [create, fund, sync] = built.ixs;
+    expect(create!.programId.equals(MERKLE_DISTRIBUTOR_PROGRAM_ID)).toBe(true);
+    // the vault is the ONLY signer across all legs (custody chain provides it)
+    for (const ix of built.ixs) {
+      for (const meta of ix.keys) {
+        if (meta.isSigner) expect(meta.pubkey.equals(vault)).toBe(true);
+      }
+    }
+    // funding: exactly the share total, vault -> distributor token vault
+    expect(fund!.programId.equals(SystemProgram.programId)).toBe(true);
+    expect(fund!.keys[0]!.pubkey.equals(vault)).toBe(true);
+    expect(fund!.keys[1]!.pubkey.equals(built.tokenVault)).toBe(true);
+    expect(fund!.data.readBigUInt64LE(4)).toBe(600_000_000n);
+    expect(built.totalLamports).toBe(600_000_000n);
+    // the sync makes the wrapped funding visible to the token program
+    expect(sync!.keys[0]!.pubkey.equals(built.tokenVault)).toBe(true);
+    // clawback returns to VAULT custody (its WSOL ATA)
+    expect(
+      built.clawbackReceiver.equals(
+        getAssociatedTokenAddressSync(NATIVE_MINT, vault, true),
+      ),
+    ).toBe(true);
+  });
+
+  it("no accounts outside the declared set; every share proof verifies against the pinned root", () => {
+    const built = buildDistributeIxs(base);
+    const declared = new Set(
+      [
+        built.distributor,
+        built.tokenVault,
+        built.clawbackReceiver,
+        vault,
+        NATIVE_MINT,
+        SystemProgram.programId,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
+      ].map((k) => k.toBase58()),
+    );
+    for (const ix of built.ixs) {
+      for (const meta of ix.keys) {
+        expect(declared.has(meta.pubkey.toBase58())).toBe(true);
+      }
+    }
+    for (const s of shares) {
+      expect(
+        verifyClaimProof(
+          built.tree.root,
+          s.claimant,
+          s.lamports,
+          built.tree.proofFor(s.claimant),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects totals exceeding the balance and rent-floor/rent-budget breaches (D-009)", () => {
+    expect(() =>
+      buildDistributeIxs({ ...base, vaultBalanceLamports: 500_000_000n }),
+    ).toThrow(/exceeds vault balance/);
+    // total fits, but floor + distributor rent budget would be invaded
+    expect(() =>
+      buildDistributeIxs({ ...base, vaultBalanceLamports: 601_000_000n }),
+    ).toThrow(/rent floor/);
+  });
+
+  it("mirrors the program's timing constraints at build time", () => {
+    expect(() =>
+      buildDistributeIxs({ ...base, startVestingTs: base.endVestingTs }),
+    ).toThrow(/precede/);
+    expect(() =>
+      buildDistributeIxs({
+        ...base,
+        clawbackStartTs: base.endVestingTs + 86_399n,
+      }),
+    ).toThrow(/one day/);
+  });
+
+  it("rejects empty and duplicate share sets", () => {
+    expect(() => buildDistributeIxs({ ...base, shares: [] })).toThrow(
+      /non-empty/,
+    );
+    expect(() =>
+      buildDistributeIxs({
+        ...base,
+        shares: [shares[0]!, shares[0]!],
+      }),
+    ).toThrow(/duplicate/);
   });
 });

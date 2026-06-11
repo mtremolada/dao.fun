@@ -83,8 +83,17 @@
       (tests/action-amm.integration.test.ts): a whale completes the curve,
       ANYONE migrates (permissionless migrate_v2), pool.coinCreator ==
       vault survives graduation, then both actions execute by vote + 72h
-      hold-up with final custody back in the vault. Still blocked:
-      distribute (merkle distributor ID), setParam (param registry).
+      hold-up with final custody back in the vault. distribute shipped
+      tests-first (14 unit tests: jito-compatible tree + proofs,
+      builders, bounds, declared-account-set) on the IMMUTABLE mainnet
+      merkle distributor (D-024) and PROVEN end-to-end on the real binary
+      (tests/action-distribute.integration.test.ts): one proposal creates
+      + funds the distributor with the root hash-pinned, holders claim
+      with OUR proofs against the REAL verifier, double-claims and
+      tampered amounts refused, permissionless clawback returns the
+      remainder to the vault, books close exactly. Still blocked:
+      setParam (param registry, Stage 3) — the action menu is otherwise
+      COMPLETE.
 - [x] 13.6c backend orchestrator (6.6): step machine (5 tests) + concrete
       launch steps (6 tests: exact fee, INV-1 creator plumbing, resume
       after token creation, INV-5/INV-7 halt-on-violation) + 12.3 artifact

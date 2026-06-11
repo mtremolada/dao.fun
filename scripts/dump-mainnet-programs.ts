@@ -26,6 +26,7 @@ import {
 } from "@pump-fun/pump-swap-sdk";
 import * as multisig from "@sqds/multisig";
 import {
+  MERKLE_DISTRIBUTOR_PROGRAM_ID,
   PUMP_AMM_PROGRAM_ID,
   PUMP_FEES_PROGRAM_ID,
   PUMP_PROGRAM_ID,
@@ -52,6 +53,8 @@ const PROGRAMS: { name: string; id: PublicKey }[] = [
   { name: "pump", id: PUMP_PROGRAM_ID },
   { name: "pump_fees", id: PUMP_FEES_PROGRAM_ID },
   { name: "pump_amm", id: PUMP_AMM_PROGRAM_ID },
+  // Jito merkle distributor (immutable on mainnet — D-024): distribute action.
+  { name: "merkle_distributor", id: MERKLE_DISTRIBUTOR_PROGRAM_ID },
 ];
 
 // Live state accounts the pump stack reads (config/global PDAs).
