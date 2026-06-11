@@ -38,6 +38,16 @@
       chain, member signs every step, vault never tx-level signer,
       unwrap(wrap(x)) == x, plumbing hidden from decoder). Full-path /
       CU-split tests are integration-bound.
-- [ ] 13.6 keeper, backend orchestrator, action menu builders
+- [x] 13.6a keeper — tests first (10 tests: gross accounting INV-8,
+      idempotency, INV-2 refusal, retry/backoff, u64-bound math INV-6,
+      per-vault failure isolation); service wiring rent-floor-aware (D-009).
+      AMM venue accrual open until a graduated token exists to test against.
+- [~] 13.6b action menu (6.8): grant + burn shipped tests-first (5 tests,
+      bounds + declared-account-set). buyback / provideLiquidity /
+      distribute / setParam blocked on open verify items (PumpSwap pool
+      ixs, merkle distributor ID, param registry).
+- [ ] 13.6c backend orchestrator (6.6): launch sequence with idempotency
+      keys, resumable state, launch-fee collection, artifact store — next up
 - [ ] 13.7 app
-- [ ] 13.8 GATE 1 mode matrix on devnet
+- [ ] 13.8 GATE 1 mode matrix on devnet (needs faucet or operator funding;
+      integration suites also want solana-test-validator with clones)

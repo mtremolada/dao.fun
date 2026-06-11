@@ -7,3 +7,4 @@ export * from "./matrix";
 export * from "./vsr";
 export * from "./governance";
 export * from "./execution-adapter";
+export * from "./actions";
