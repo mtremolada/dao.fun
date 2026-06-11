@@ -6,12 +6,13 @@
  *
  *   npx tsx scripts/dump-mainnet-programs.ts
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import {
+  AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA,
   FEE_PROGRAM_GLOBAL_PDA,
   GLOBAL_PDA,
   GLOBAL_VOLUME_ACCUMULATOR_PDA,
@@ -19,6 +20,10 @@ import {
   getGlobalParamsPda,
   getSolVaultPda,
 } from "@pump-fun/pump-sdk";
+import {
+  GLOBAL_CONFIG_PDA as AMM_GLOBAL_CONFIG_PDA,
+  PUMP_AMM_FEE_CONFIG_PDA,
+} from "@pump-fun/pump-swap-sdk";
 import * as multisig from "@sqds/multisig";
 import {
   PUMP_AMM_PROGRAM_ID,
@@ -57,13 +62,25 @@ const ACCOUNTS: { label: string; address: PublicKey }[] = [
   { label: "pump-global-volume-accumulator", address: GLOBAL_VOLUME_ACCUMULATOR_PDA },
   { label: "mayhem-global-params", address: getGlobalParamsPda() },
   { label: "mayhem-sol-vault", address: getSolVaultPda() },
+  // PumpSwap AMM (post-graduation venue: migrate CPI + pool trades).
+  { label: "amm-global-config", address: AMM_GLOBAL_CONFIG_PDA },
+  { label: "amm-fee-config", address: PUMP_AMM_FEE_CONFIG_PDA },
+  { label: "amm-global-volume-accumulator", address: AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA },
 ];
 
 async function dumpAccounts(connection: Connection) {
   const out = join(OUT, "pump-accounts.json");
   if (existsSync(out) && !FORCE) {
-    console.log(`${out} exists, skipping`);
-    return;
+    // Top-up mode: only re-dump if a wanted label is missing from the file.
+    const have = new Set(
+      (JSON.parse(readFileSync(out, "utf8")) as { label: string }[]).map(
+        (e) => e.label,
+      ),
+    );
+    if (ACCOUNTS.every((a) => have.has(a.label))) {
+      console.log(`${out} exists with all labels, skipping`);
+      return;
+    }
   }
   const entries = [];
   for (const { label, address } of ACCOUNTS) {

@@ -358,24 +358,36 @@ function hasDiscriminator(ix: TransactionInstruction, disc: number[]): boolean {
 /**
  * Recover the inner instructions from a wrapped set (decoder seam).
  * Handles both wrap() (plain VaultTransactionCreate) and wrapBuffered()
- * (the vault message reassembled from the buffer chunks).
+ * (the vault message reassembled from the buffer chunks). Instructions
+ * AFTER the vaultTransactionExecute step are direct treasury-signed legs
+ * (D-022) and are appended to the recovered inner set as-is, so the
+ * INV-9 hash covers them.
  */
 export function unwrap(
   wrappedIxs: TransactionInstruction[],
   _ctx: WrapContext,
 ): TransactionInstruction[] {
-  const create = wrappedIxs.find((ix) =>
+  const execIdx = wrappedIxs.findIndex((ix) =>
+    hasDiscriminator(
+      ix,
+      multisig.generated.vaultTransactionExecuteInstructionDiscriminator,
+    ),
+  );
+  const chainIxs = execIdx >= 0 ? wrappedIxs.slice(0, execIdx + 1) : wrappedIxs;
+  const directIxs = execIdx >= 0 ? wrappedIxs.slice(execIdx + 1) : [];
+
+  const create = chainIxs.find((ix) =>
     hasDiscriminator(
       ix,
       multisig.generated.vaultTransactionCreateInstructionDiscriminator,
     ),
   );
   if (create) {
-    return messageToInstructions(decodeVaultMessage(create));
+    return [...messageToInstructions(decodeVaultMessage(create)), ...directIxs];
   }
 
   // Buffered chain: reassemble the message from bufferCreate + extends.
-  const bufferCreate = wrappedIxs.find((ix) =>
+  const bufferCreate = chainIxs.find((ix) =>
     hasDiscriminator(
       ix,
       multisig.generated.transactionBufferCreateInstructionDiscriminator,
@@ -390,7 +402,7 @@ export function unwrap(
     bufferCreate.data,
   );
   const chunks = [Buffer.from(decoded.args.buffer as Uint8Array)];
-  for (const ix of wrappedIxs) {
+  for (const ix of chainIxs) {
     if (
       hasDiscriminator(
         ix,
@@ -417,7 +429,10 @@ export function unwrap(
   ) {
     throw new Error("unwrap: buffered message hash mismatch");
   }
-  return messageToInstructions(deserializeVaultMessage(messageBytes));
+  return [
+    ...messageToInstructions(deserializeVaultMessage(messageBytes)),
+    ...directIxs,
+  ];
 }
 
 /**

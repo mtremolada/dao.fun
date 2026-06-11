@@ -156,3 +156,58 @@ describe("buildProposeIxs", () => {
     expect((await buildProposeIxs(makeParams())).buffered).toBe(false);
   });
 });
+
+describe("buildProposeIxs — direct treasury-signed legs (D-022)", () => {
+  function directIxs(): TransactionInstruction[] {
+    return [
+      SystemProgram.transfer({
+        fromPubkey: Keypair.generate().publicKey,
+        toPubkey: Keypair.generate().publicKey,
+        lamports: 1_000_000,
+      }),
+      SystemProgram.transfer({
+        fromPubkey: Keypair.generate().publicKey,
+        toPubkey: Keypair.generate().publicKey,
+        lamports: 2_000_000,
+      }),
+    ];
+  }
+
+  it("appends direct legs AFTER the custody chain, one ProposalTransaction each", async () => {
+    const direct = directIxs();
+    const p = makeParams({ directIxs: direct });
+    const result = await buildProposeIxs(p);
+    expect(result.wrapped).toHaveLength(4 + 2); // chain + direct legs
+    expect(result.wrapped.slice(4)).toEqual(direct);
+    expect(result.groups.inserts).toHaveLength(6);
+  });
+
+  it("the INV-9 hash covers inner AND direct legs, and unwrap() recovers exactly that set", async () => {
+    const direct = directIxs();
+    const p = makeParams({ directIxs: direct });
+    const result = await buildProposeIxs(p);
+    expect(result.innerInstructionSetHash).toBe(
+      computeInstructionSetHash([...p.innerIxs, ...direct]),
+    );
+    // chain side: what an indexer recovers from the on-chain PTs matches
+    const recovered = unwrap(result.wrapped, p.wrapCtx);
+    expect(computeInstructionSetHash(recovered)).toBe(
+      result.innerInstructionSetHash,
+    );
+  });
+
+  it("a tampered direct leg changes the recovered hash (INV-9 catches it)", async () => {
+    const direct = directIxs();
+    const p = makeParams({ directIxs: direct });
+    const result = await buildProposeIxs(p);
+    const tampered = [...result.wrapped];
+    tampered[tampered.length - 1] = SystemProgram.transfer({
+      fromPubkey: Keypair.generate().publicKey,
+      toPubkey: Keypair.generate().publicKey,
+      lamports: 999_999_999,
+    });
+    expect(computeInstructionSetHash(unwrap(tampered, p.wrapCtx))).not.toBe(
+      result.innerInstructionSetHash,
+    );
+  });
+});

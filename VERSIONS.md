@@ -7,6 +7,7 @@ Pinned exactly in package.json files; lockfile (`pnpm-lock.yaml`) committed.
 | node | >=22 (built with 22.22.2) | |
 | pnpm | 10.33.0 | `packageManager` field |
 | @pump-fun/pump-sdk | 1.36.0 | ESM build broken — CJS used (D-002) |
+| @pump-fun/pump-swap-sdk | 1.17.0 | offline PumpAmmSdk — post-graduation venue (D-021) |
 | @solana/spl-governance | 0.3.28 | |
 | @sqds/multisig | 2.1.4 | |
 | @solana/web3.js | 1.98.4 | v1.x required by the above SDKs |

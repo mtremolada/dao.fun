@@ -1,20 +1,30 @@
 /**
  * Spec 6.8 — fixed action menu builders (written before implementation).
- * MVP scope here: `grant` and `burn` — the two actions whose dependencies
- * are fully verified. buyback/provideLiquidity/distribute/setParam land
- * once their (verify) items resolve (PumpSwap pool ixs, merkle distributor
- * ID, param registry). Each builder asserts its bounds and touches no
- * accounts outside the declared set.
+ * Shipped: grant, burn, buyback (curve venue), buyback (AMM venue,
+ * post-graduation) and provideLiquidity on the PumpSwap pool — the pool-ix
+ * verify item resolved against @pump-fun/pump-swap-sdk's offline builder.
+ * Still blocked: distribute (merkle distributor ID), setParam (param
+ * registry). Each builder asserts its bounds and touches no accounts
+ * outside the declared set.
  */
 import { describe, expect, it } from "vitest";
 import BN from "bn.js";
-import { Keypair, SystemProgram } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  NATIVE_MINT,
   TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { newBondingCurve } from "@pump-fun/pump-sdk";
-import { buildBurnIxs, buildBuybackIxs, buildGrantIxs } from "../src/actions";
+import {
+  buildAmmBuybackIxs,
+  buildBurnIxs,
+  buildBuybackIxs,
+  buildGrantIxs,
+  buildProvideLiquidityIxs,
+} from "../src/actions";
 
 const vault = Keypair.generate().publicKey;
 const recipient = Keypair.generate().publicKey;
@@ -189,5 +199,309 @@ describe("buyback (curve venue — the token's own bonding curve, spec 6.8)", ()
         solLamports: 999_800_000n, // leaves < rent floor after fees headroom
       }),
     ).rejects.toThrow(/rent floor/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// AMM venue (post-graduation), STAGED two-leg design (D-022): the vault
+// stages funds to the native treasury through the custody chain; the
+// treasury acts on the PumpSwap pool via direct legs and returns the
+// proceeds to the vault. Synthetic state mirrors a freshly migrated
+// canonical pool (~85 SOL quote, ~200M base tokens, 6 decimals).
+// ---------------------------------------------------------------------------
+const nativeTreasury = Keypair.generate().publicKey;
+const POOL_KEY = Keypair.generate().publicKey;
+const LP_MINT = Keypair.generate().publicKey;
+
+function makeAmmFixtures() {
+  const globalConfig = {
+    admin: Keypair.generate().publicKey,
+    lpFeeBasisPoints: new BN(20),
+    protocolFeeBasisPoints: new BN(5),
+    disableFlags: 0,
+    protocolFeeRecipients: [Keypair.generate().publicKey],
+    coinCreatorFeeBasisPoints: new BN(5),
+    adminSetCoinCreatorAuthority: Keypair.generate().publicKey,
+    whitelistPda: Keypair.generate().publicKey,
+    reservedFeeRecipient: Keypair.generate().publicKey,
+    mayhemModeEnabled: false,
+    reservedFeeRecipients: [],
+    buybackFeeRecipients: [Keypair.generate().publicKey],
+    buybackBasisPoints: new BN(0),
+  };
+  const pool = {
+    poolBump: 255,
+    index: 0,
+    creator: Keypair.generate().publicKey,
+    baseMint: mint,
+    quoteMint: NATIVE_MINT,
+    lpMint: LP_MINT,
+    poolBaseTokenAccount: Keypair.generate().publicKey,
+    poolQuoteTokenAccount: Keypair.generate().publicKey,
+    lpSupply: new BN("4000000000000"),
+    coinCreator: vault, // the DAO's token: creator fee continuity (INV-1)
+    isMayhemMode: false,
+    isCashbackCoin: false,
+  };
+  const tokenAccountInfo = (owner: PublicKey) => ({
+    executable: false,
+    owner,
+    lamports: 2_039_280,
+    data: Buffer.alloc(165),
+  });
+  return { globalConfig, pool, tokenAccountInfo };
+}
+
+const treasuryBaseAta = getAssociatedTokenAddressSync(
+  mint,
+  nativeTreasury,
+  true,
+  TOKEN_2022_PROGRAM_ID,
+);
+const treasuryWsolAta = getAssociatedTokenAddressSync(
+  NATIVE_MINT,
+  nativeTreasury,
+  true,
+  TOKEN_PROGRAM_ID,
+);
+const vaultBaseAta = getAssociatedTokenAddressSync(
+  mint,
+  vault,
+  true,
+  TOKEN_2022_PROGRAM_ID,
+);
+
+function signersOf(ixs: { keys: { isSigner: boolean; pubkey: PublicKey }[] }[]) {
+  return new Set(
+    ixs.flatMap((ix) =>
+      ix.keys.filter((k) => k.isSigner).map((k) => k.pubkey.toBase58()),
+    ),
+  );
+}
+
+describe("buyback (AMM venue, staged two-leg — the token's own PumpSwap pool, spec 6.8 / D-022)", () => {
+  function makeSwapState(overrides: Record<string, unknown> = {}) {
+    const { globalConfig, pool, tokenAccountInfo } = makeAmmFixtures();
+    return {
+      globalConfig,
+      feeConfig: null,
+      poolKey: POOL_KEY,
+      poolAccountInfo: {
+        executable: false,
+        owner: Keypair.generate().publicKey,
+        lamports: 1,
+        data: Buffer.alloc(300), // POOL_ACCOUNT_NEW_SIZE: no extend needed
+      },
+      pool,
+      poolBaseAmount: new BN("200000000000000"),
+      poolQuoteAmount: new BN("85000000000"),
+      baseTokenProgram: TOKEN_2022_PROGRAM_ID,
+      quoteTokenProgram: TOKEN_PROGRAM_ID,
+      baseMint: mint,
+      baseMintAccount: { supply: 1_000_000_000_000_000n, decimals: 6 },
+      user: nativeTreasury,
+      userBaseTokenAccount: treasuryBaseAta,
+      userQuoteTokenAccount: treasuryWsolAta,
+      userBaseAccountInfo: tokenAccountInfo(TOKEN_2022_PROGRAM_ID),
+      userQuoteAccountInfo: tokenAccountInfo(TOKEN_PROGRAM_ID),
+      ...overrides,
+    };
+  }
+
+  function makeAmmBuyback(
+    params: Record<string, unknown> = {},
+    stateOverrides: Record<string, unknown> = {},
+  ) {
+    return buildAmmBuybackIxs({
+      vault,
+      nativeTreasury,
+      mint,
+      solLamports: 100_000_000n,
+      vaultBalanceLamports: 1_000_000_000n,
+      swapState: makeSwapState(stateOverrides),
+      ...params,
+    } as Parameters<typeof buildAmmBuybackIxs>[0]);
+  }
+
+  it("the vault leg stages exactly maxQuote to the native treasury, vault-signed only", async () => {
+    const { vaultIxs } = await makeAmmBuyback();
+    expect(vaultIxs).toHaveLength(1);
+    const ix = vaultIxs[0]!;
+    expect(ix.programId.equals(SystemProgram.programId)).toBe(true);
+    expect(ix.keys[0]!.pubkey.equals(vault)).toBe(true);
+    expect(ix.keys[1]!.pubkey.equals(nativeTreasury)).toBe(true);
+    expect(ix.data.readBigUInt64LE(4)).toBe(105_000_000n); // default 5% slippage
+    expect(signersOf(vaultIxs)).toEqual(new Set([vault.toBase58()]));
+  });
+
+  it("the treasury leg is treasury-signed only, buys from the DAO's own pool, and ends by returning the bought tokens to the vault's ATA", async () => {
+    const { treasuryIxs } = await makeAmmBuyback();
+    expect(signersOf(treasuryIxs)).toEqual(new Set([nativeTreasury.toBase58()]));
+    expect(
+      treasuryIxs.some((ix) => ix.keys.some((k) => k.pubkey.equals(POOL_KEY))),
+    ).toBe(true);
+    // last ix: SPL transfer treasury base ATA -> vault base ATA
+    const back = treasuryIxs[treasuryIxs.length - 1]!;
+    expect(back.programId.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
+    expect(back.keys[0]!.pubkey.equals(treasuryBaseAta)).toBe(true);
+    expect(back.keys[1]!.pubkey.equals(vaultBaseAta)).toBe(true);
+    expect(back.keys[2]!.pubkey.equals(nativeTreasury)).toBe(true);
+  });
+
+  it("does NOT create ATAs inside the proposal — requires them pre-created (D-019 size ceiling)", async () => {
+    const { vaultIxs, treasuryIxs } = await makeAmmBuyback();
+    expect(
+      [...vaultIxs, ...treasuryIxs].some((ix) =>
+        ix.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID),
+      ),
+    ).toBe(false);
+    await expect(
+      makeAmmBuyback({}, { userQuoteAccountInfo: null }),
+    ).rejects.toThrow(/pre-created/);
+    await expect(
+      makeAmmBuyback({}, { userBaseAccountInfo: null }),
+    ).rejects.toThrow(/pre-created/);
+  });
+
+  it("bounds: rejects zero, over-balance, rent-floor strip (D-009), a foreign pool, and a state whose user is not the native treasury", async () => {
+    await expect(makeAmmBuyback({ solLamports: 0n })).rejects.toThrow(
+      /positive/,
+    );
+    await expect(
+      makeAmmBuyback({ solLamports: 2_000_000_000n }),
+    ).rejects.toThrow(/exceeds/);
+    await expect(
+      makeAmmBuyback({ solLamports: 999_000_000n }), // maxQuote > balance - floor
+    ).rejects.toThrow(/rent floor/);
+    const { pool } = makeAmmFixtures();
+    await expect(
+      makeAmmBuyback(
+        {},
+        { pool: { ...pool, baseMint: Keypair.generate().publicKey } },
+      ),
+    ).rejects.toThrow(/own pool/);
+    await expect(makeAmmBuyback({}, { user: vault })).rejects.toThrow(
+      /native treasury/,
+    );
+  });
+});
+
+describe("provideLiquidity (staged two-leg — the token's own PumpSwap pool, spec 6.8 / D-022)", () => {
+  const treasuryLpAta = getAssociatedTokenAddressSync(
+    LP_MINT,
+    nativeTreasury,
+    true,
+    TOKEN_2022_PROGRAM_ID,
+  );
+  const vaultLpAta = getAssociatedTokenAddressSync(
+    LP_MINT,
+    vault,
+    true,
+    TOKEN_2022_PROGRAM_ID,
+  );
+
+  function makeLiquidityState(overrides: Record<string, unknown> = {}) {
+    const { globalConfig, pool, tokenAccountInfo } = makeAmmFixtures();
+    return {
+      globalConfig,
+      poolKey: POOL_KEY,
+      poolAccountInfo: {
+        executable: false,
+        owner: Keypair.generate().publicKey,
+        lamports: 1,
+        data: Buffer.alloc(300),
+      },
+      pool,
+      poolBaseTokenAccount: { amount: 200_000_000_000_000n },
+      poolQuoteTokenAccount: { amount: 85_000_000_000n },
+      baseTokenProgram: TOKEN_2022_PROGRAM_ID,
+      quoteTokenProgram: TOKEN_PROGRAM_ID,
+      user: nativeTreasury,
+      userBaseTokenAccount: treasuryBaseAta,
+      userQuoteTokenAccount: treasuryWsolAta,
+      userPoolTokenAccount: treasuryLpAta,
+      userBaseAccountInfo: tokenAccountInfo(TOKEN_2022_PROGRAM_ID),
+      userQuoteAccountInfo: tokenAccountInfo(TOKEN_PROGRAM_ID),
+      userPoolAccountInfo: tokenAccountInfo(TOKEN_2022_PROGRAM_ID),
+      ...overrides,
+    };
+  }
+
+  function makeProvide(
+    params: Record<string, unknown> = {},
+    stateOverrides: Record<string, unknown> = {},
+  ) {
+    return buildProvideLiquidityIxs({
+      vault,
+      nativeTreasury,
+      mint,
+      quoteLamports: 100_000_000n,
+      vaultBalanceLamports: 1_000_000_000n,
+      vaultBaseTokenBalance: 1_000_000_000_000n,
+      liquidityState: makeLiquidityState(stateOverrides),
+      ...params,
+    } as Parameters<typeof buildProvideLiquidityIxs>[0]);
+  }
+
+  it("the vault leg stages maxQuote SOL AND maxBase tokens to the treasury, vault-signed only", async () => {
+    const { vaultIxs } = await makeProvide();
+    expect(vaultIxs).toHaveLength(2);
+    const [sol, base] = vaultIxs;
+    expect(sol!.programId.equals(SystemProgram.programId)).toBe(true);
+    expect(sol!.keys[0]!.pubkey.equals(vault)).toBe(true);
+    expect(sol!.keys[1]!.pubkey.equals(nativeTreasury)).toBe(true);
+    expect(base!.programId.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
+    expect(base!.keys[0]!.pubkey.equals(vaultBaseAta)).toBe(true);
+    expect(base!.keys[1]!.pubkey.equals(treasuryBaseAta)).toBe(true);
+    expect(base!.keys[2]!.pubkey.equals(vault)).toBe(true);
+    expect(signersOf(vaultIxs)).toEqual(new Set([vault.toBase58()]));
+  });
+
+  it("the treasury leg deposits and ends by returning the LP tokens (exact-lp-out) to the vault's LP ATA, treasury-signed only", async () => {
+    const { treasuryIxs } = await makeProvide();
+    expect(signersOf(treasuryIxs)).toEqual(new Set([nativeTreasury.toBase58()]));
+    expect(
+      treasuryIxs.some((ix) => ix.keys.some((k) => k.pubkey.equals(POOL_KEY))),
+    ).toBe(true);
+    const back = treasuryIxs[treasuryIxs.length - 1]!;
+    expect(back.programId.equals(TOKEN_2022_PROGRAM_ID)).toBe(true);
+    expect(back.keys[0]!.pubkey.equals(treasuryLpAta)).toBe(true);
+    expect(back.keys[1]!.pubkey.equals(vaultLpAta)).toBe(true);
+    expect(back.keys[2]!.pubkey.equals(nativeTreasury)).toBe(true);
+  });
+
+  it("does NOT create ATAs inside the proposal — the LP token ATA must be pre-created too (D-019)", async () => {
+    const { vaultIxs, treasuryIxs } = await makeProvide();
+    expect(
+      [...vaultIxs, ...treasuryIxs].some((ix) =>
+        ix.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID),
+      ),
+    ).toBe(false);
+    await expect(
+      makeProvide({}, { userPoolAccountInfo: null }),
+    ).rejects.toThrow(/pre-created/);
+  });
+
+  it("bounds: rejects zero, rent-floor strip (D-009), more base than the treasury holds, foreign pools, and a non-treasury user", async () => {
+    await expect(makeProvide({ quoteLamports: 0n })).rejects.toThrow(
+      /positive/,
+    );
+    await expect(
+      makeProvide({ quoteLamports: 999_000_000n }),
+    ).rejects.toThrow(/rent floor/);
+    await expect(
+      makeProvide({ vaultBaseTokenBalance: 1_000n }),
+    ).rejects.toThrow(/base/);
+    const { pool } = makeAmmFixtures();
+    await expect(
+      makeProvide(
+        {},
+        { pool: { ...pool, baseMint: Keypair.generate().publicKey } },
+      ),
+    ).rejects.toThrow(/own pool/);
+    await expect(makeProvide({}, { user: vault })).rejects.toThrow(
+      /native treasury/,
+    );
   });
 });

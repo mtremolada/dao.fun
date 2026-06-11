@@ -66,8 +66,17 @@
       (tests/action-buyback.integration.test.ts): the DAO votes to buy its
       own token with vault SOL through the buffered custody chain; the
       vault receives the tokens and — being the coin creator — the buy's
-      creator fee flows back to its own creator vault. Still blocked:
-      post-graduation buyback + provideLiquidity (PumpSwap pool ixs),
+      creator fee flows back to its own creator vault. Post-graduation
+      buyback (AMM venue) + provideLiquidity shipped tests-first (8 unit
+      tests) on the STAGED two-leg design (D-021/D-022: vault legs through
+      the custody chain stage funds to the native treasury; direct legs —
+      new buildProposeIxs `directIxs`, treasury-signed via governance —
+      act on the PumpSwap pool and return the proceeds to the vault) and
+      PROVEN end-to-end on the real binaries
+      (tests/action-amm.integration.test.ts): a whale completes the curve,
+      ANYONE migrates (permissionless migrate_v2), pool.coinCreator ==
+      vault survives graduation, then both actions execute by vote + 72h
+      hold-up with final custody back in the vault. Still blocked:
       distribute (merkle distributor ID), setParam (param registry).
 - [x] 13.6c backend orchestrator (6.6): step machine (5 tests) + concrete
       launch steps (6 tests: exact fee, INV-1 creator plumbing, resume

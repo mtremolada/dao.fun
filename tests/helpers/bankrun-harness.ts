@@ -188,10 +188,12 @@ export async function send(
  */
 export async function sendWithAlt(
   ctx: ProgramTestContext,
-  ix: TransactionInstruction,
+  ixs: TransactionInstruction[],
   payer: Keypair,
 ): Promise<void> {
-  const slot = await ctx.banksClient.getSlot();
+  // recentSlot must be IN SlotHashes; the current slot itself never is
+  // (at genesis the sysvar holds only slot 0 while getSlot() is 1).
+  const slot = (await ctx.banksClient.getSlot()) - 1n;
   const [createIx, table] = AddressLookupTableProgram.createLookupTable({
     authority: payer.publicKey,
     payer: payer.publicKey,
@@ -201,7 +203,8 @@ export async function sendWithAlt(
   // from the table.
   const addresses = [
     ...new Map(
-      ix.keys
+      ixs
+        .flatMap((ix) => ix.keys)
         .filter((k) => !k.isSigner) // signers must be static
         .map((k) => [k.pubkey.toBase58(), k.pubkey]),
     ).values(),
@@ -226,7 +229,7 @@ export async function sendWithAlt(
   const msg = new TransactionMessage({
     payerKey: payer.publicKey,
     recentBlockhash: blockhash,
-    instructions: [ix],
+    instructions: ixs,
   }).compileToV0Message([lookup]);
   const vtx = new VersionedTransaction(msg);
   vtx.sign([payer]);
@@ -571,6 +574,7 @@ export async function proposeInner(
   proposalIndex: number,
   inner: TransactionInstruction[],
   label: string,
+  directIxs?: TransactionInstruction[],
 ): Promise<MadeProposal> {
   const recipient = PublicKey.default; // unused for non-sweep proposals
 
@@ -597,6 +601,7 @@ export async function proposeInner(
     proposalIndex,
     name: `${label} #${proposalIndex}`,
     innerIxs: inner,
+    ...(directIxs ? { directIxs } : {}),
     wrapCtx: {
       multisigPda: dao.multisigPda,
       vaultIndex: 0,
@@ -614,7 +619,7 @@ export async function proposeInner(
     } catch (e) {
       if (!/too large/i.test((e as Error).message) || group.length !== 1) throw e;
       // account-heavy execute insert: pack as v0 + lookup table
-      await sendWithAlt(ctx, group[0]!, dao.voter);
+      await sendWithAlt(ctx, group, dao.voter);
     }
     ptAddrs.push(
       await getProposalTransactionAddress(
@@ -742,7 +747,14 @@ export async function executeAll(ctx: ProgramTestContext, dao: Dao, made: MadePr
     // Production tx hygiene: governance execute -> Squads execute -> inner
     // CPIs stack beyond the 200k default (the mainnet runs sent 400k too).
     const cu = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
-    await send(ctx, [cu, ...(await executeIxsFor(dao, made, i))], []);
+    const ixs = [cu, ...(await executeIxsFor(dao, made, i))];
+    try {
+      await send(ctx, ixs, []);
+    } catch (e) {
+      if (!/too large/i.test((e as Error).message)) throw e;
+      // account-heavy direct-leg execute (D-022): v0 + lookup table
+      await sendWithAlt(ctx, ixs, ctx.payer);
+    }
   }
 }
 

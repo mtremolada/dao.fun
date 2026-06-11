@@ -11,6 +11,9 @@ importers:
       '@pump-fun/pump-sdk':
         specifier: 1.36.0
         version: 1.36.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@pump-fun/pump-swap-sdk':
+        specifier: 1.17.0
+        version: 1.17.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@solana/spl-governance':
         specifier: 0.3.28
         version: 0.3.28(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
@@ -123,6 +126,9 @@ importers:
       '@pump-fun/pump-sdk':
         specifier: 1.36.0
         version: 1.36.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@pump-fun/pump-swap-sdk':
+        specifier: 1.17.0
+        version: 1.17.0(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@solana/spl-governance':
         specifier: 0.3.28
         version: 0.3.28(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)

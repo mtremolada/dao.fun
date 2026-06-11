@@ -339,6 +339,71 @@ D-004 open question is closed. Operationally, D-009 generalizes: every
 account receiving fee crumbs (fee recipients, creator vault) must be
 prefunded to the rent floor or the runtime rejects the trade.
 
+## D-021 — PumpSwap pool ixs resolved; graduation is permissionless and provable hermetically (2026-06-11)
+
+The post-graduation (verify) item is closed against the deployed binaries:
+
+- `@pump-fun/pump-swap-sdk` 1.17.0 (pinned; already a transitive dep of
+  pump-sdk) ships a fully OFFLINE `PumpAmmSdk` — decoders + instruction
+  builders that take pre-fetched chain state, same shape as the pump rail.
+- **Graduation needs no authority**: pump `migrate_v2`'s only signer is
+  `user`; `withdrawAuthority` is a `relations: [global]` account (must
+  match global state, never signs). A whale buy-out (curve `complete`)
+  plus anyone's `migrateV2Instruction` produces the canonical PumpSwap
+  pool in bankrun. New fixtures: `amm-global-config`, `amm-fee-config`,
+  `amm-global-volume-accumulator` (dump script now tops up missing
+  labels).
+- **Creator-fee continuity (INV-1) survives graduation**: the migrated
+  pool's `coinCreator` == the bonding-curve creator == the DAO vault,
+  verified on chain state in tests/action-amm.integration.test.ts. On the
+  AMM venue creator fees accrue in WSOL to `coinCreatorVaultAta(vault)`.
+- sdk bug found running the real binary: `extendAccount` (auto-prepended
+  by the sdk when a pool predates POOL_ACCOUNT_NEW_SIZE) marks `user`
+  READ-ONLY — on mainnet the fee payer is implicitly writable, but under
+  governance CPI the stored proposal metas are the only privilege source
+  and the program charges `user` the realloc rent. The action builders
+  promote that meta (`promoteExtendAccountUser`).
+
+## D-022 — AMM-venue actions are STAGED: direct treasury legs after the custody chain (2026-06-11)
+
+The hard wall: a PumpSwap buy carries 26 accounts, so its Squads
+`vaultTransactionExecute` needs ~30 account metas and the governance
+insert's DATA alone (~1080 bytes of raw metas) busts the 1232-byte
+transaction limit — past D-019's ~25-meta execute ceiling, and no packing
+trick compresses instruction data. Adding a second Squads member with
+Execute permission would break the spec's load-bearing sole-member
+custody (INV-7, "exactly ONE member"), so it was rejected.
+
+Resolution — one proposal, two kinds of legs, all hash-pinned and
+hold-up-gated:
+
+- **vault legs** (`buildProposeIxs.innerIxs`): vault-signed, through the
+  unchanged Squads custody chain — stage the spend (SOL and/or tokens)
+  from the vault to the governance native treasury.
+- **direct legs** (`buildProposeIxs.directIxs`, new): inserted as
+  ProposalTransactions AFTER the chain, one each; at execution the
+  governance program itself invoke_signs for the NATIVE TREASURY — the
+  multisig's sole member, a no-human-key PDA that already roots the
+  custody chain, so INV-7 is intact. The treasury acts on the AMM and the
+  proceeds RETURN TO THE VAULT inside the same proposal (exact-out
+  amounts: the buy is exact-base-out, the deposit exact-lp-out, so the
+  return transfers are deterministic at build time).
+- INV-9 convention: `unwrap()` treats instructions after the
+  `vaultTransactionExecute` as direct legs and appends them to the
+  recovered inner set; `descriptionLink` hashes inner + direct in
+  execution order. The chain reader needs no change.
+- Slippage margins (unspent maxQuote remainder, base dust) stay with the
+  native treasury — it is the D-016 execution-rent sink, so this is
+  self-funding, and any residue remains DAO-custodied.
+- Execute-side: account-heavy direct executes fall back to v0+ALT like
+  the inserts (harness `sendWithAlt` now takes instruction arrays).
+
+Proven end-to-end on the real binaries
+(tests/action-amm.integration.test.ts): graduation → staged AMM buyback
+(bought tokens land in the VAULT's ATA; the buy's WSOL creator fee lands
+in the DAO's own creator vault ATA) → staged provideLiquidity (LP tokens
+land in the VAULT's LP ATA), both via vote + 72h hold-up.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
@@ -347,9 +412,10 @@ prefunded to the rent floor or the runtime rejects the trade.
   wrapped ixs from chain post-execution and their hash matched the
   artifact published at proposal time
 - Merkle distributor deployed program ID (Stage 1, `distribute` action)
-- PumpSwap pool ixs for POST-GRADUATION buyback / provideLiquidity
-  (Stage 1, action menu) — curve-venue buyback shipped and proven on the
-  real binaries (tests/action-buyback.integration.test.ts)
+- ~~PumpSwap pool ixs for POST-GRADUATION buyback / provideLiquidity~~
+  RESOLVED: D-021/D-022 — offline PumpAmmSdk + permissionless migration;
+  both actions shipped (staged two-leg design) and proven end-to-end on
+  the real binaries (tests/action-amm.integration.test.ts)
 - `transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)
 - ~~Creator Fee Sharing at-launch config (GATE 0c; risk D-007)~~
   RESOLVED: D-019 — at-launch impossible (hard on-chain constraint);

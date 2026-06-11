@@ -5,6 +5,8 @@
  *
  * - the inner set is wrapped through the ExecutionAdapter (Squads custody
  *   chain), one ProposalTransaction per wrapped instruction (CU isolation);
+ *   optional direct legs (D-022) follow the chain, one ProposalTransaction
+ *   each, signed by the native treasury at execution;
  * - descriptionLink == the inner instruction-set hash (D-017): the UI can
  *   locate the artifact from chain state alone, and the badge verifies the
  *   re-read instructions against it (INV-9);
@@ -47,6 +49,15 @@ export interface ProposeParams {
   proposalIndex: number;
   name: string;
   innerIxs: TransactionInstruction[];
+  /**
+   * Direct legs (D-022): inserted as ProposalTransactions AFTER the
+   * custody chain, one per instruction, signed by the governance native
+   * treasury at execution time (no Squads wrapping). For account-heavy
+   * venue instructions (e.g. a PumpSwap buy: ~26 accounts) whose Squads
+   * execute insert cannot fit the transaction limit. The INV-9 hash and
+   * unwrap() cover them.
+   */
+  directIxs?: TransactionInstruction[];
   wrapCtx: WrapContext;
   /** Resolved matrix hold-up (sovereign may be 0 by explicit choice). */
   holdUpSeconds: number;
@@ -58,7 +69,10 @@ export interface ProposeResult {
   proposal: PublicKey;
   /** Publish this with the artifact; it is also the descriptionLink. */
   innerInstructionSetHash: string;
-  /** The ExecutionAdapter chain actually inserted on-chain. */
+  /**
+   * One entry per ProposalTransaction inserted on-chain: the
+   * ExecutionAdapter chain, then any direct legs.
+   */
   wrapped: TransactionInstruction[];
   /** True when the inner set was too large for a plain wrap (buffered chain). */
   buffered: boolean;
@@ -78,12 +92,22 @@ export async function buildProposeIxs(
   if (p.innerIxs.length === 0) {
     throw new Error("buildProposeIxs: inner instruction set is empty");
   }
-  const innerInstructionSetHash = computeInstructionSetHash(p.innerIxs);
+  const directIxs = p.directIxs ?? [];
+  // INV-9 covers the full effective set: the vault-signed inner set AND
+  // the direct treasury-signed legs, in execution order (== what unwrap()
+  // recovers from the on-chain ProposalTransactions).
+  const innerInstructionSetHash = computeInstructionSetHash([
+    ...p.innerIxs,
+    ...directIxs,
+  ]);
   // Account-heavy inner sets overflow the InsertTransaction carrying the
   // plain VaultTransactionCreate — switch to the buffered Squads chain.
   const plain = wrap(p.innerIxs, p.wrapCtx);
   const buffered = plain[0]!.data.length > PLAIN_CREATE_DATA_BUDGET;
-  const wrapped = buffered ? wrapBuffered(p.innerIxs, p.wrapCtx).ixs : plain;
+  const wrapped = [
+    ...(buffered ? wrapBuffered(p.innerIxs, p.wrapCtx).ixs : plain),
+    ...directIxs,
+  ];
 
   const create: TransactionInstruction[] = [];
   const proposal = await withCreateProposal(
