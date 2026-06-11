@@ -58,6 +58,7 @@ import {
   getVoteRecordAddress,
   ProposalState,
   ProposalTransaction,
+  InstructionExecutionStatus,
   withCastVote,
   withCreateProposal,
   withCreateTokenOwnerRecord,
@@ -170,10 +171,11 @@ async function simulate(
   payer: PublicKey,
   label: string,
 ): Promise<{ err: unknown; logs: string[] } | null> {
-  const { blockhash } = await connection.getLatestBlockhash();
+  // replaceRecentBlockhash:true means any well-formed blockhash compiles —
+  // skip getLatestBlockhash to stay under the public RPC rate limit.
   const msg = new TransactionMessage({
     payerKey: payer,
-    recentBlockhash: blockhash,
+    recentBlockhash: "11111111111111111111111111111111",
     instructions: ixs,
   }).compileToLegacyMessage();
   const sim = await connection.simulateTransaction(new VersionedTransaction(msg), {
@@ -711,7 +713,16 @@ async function main() {
     console.log(`  INV-9 holds: on-chain hash == artifact (${onChainHash.slice(0, 16)}...)`);
 
     const executeSigs: string[] = [];
+    const treasuryTopUps: Record<string, string> = {};
     for (const [i, ptAddr] of ptAddrs.entries()) {
+      // Idempotent on resume: a rate-limit abort mid-stage leaves some
+      // ProposalTransactions already executed on-chain.
+      const fresh = await getGovernanceAccount(connection, ptAddr, ProposalTransaction);
+      if (fresh.account.executionStatus === InstructionExecutionStatus.Success) {
+        console.log(`  execute-${i}: already executed, skipping`);
+        executeSigs.push("already-executed");
+        continue;
+      }
       const ixs: TransactionInstruction[] = [];
       await withExecuteTransaction(
         ixs,
@@ -722,9 +733,35 @@ async function main() {
         ptAddr,
         [createInstructionData(onChainWrapped[i]!)],
       );
-      const sim = await simulate(connection, ixs, buyer.publicKey, `execute-${i}`);
+      // The native treasury is Squads' rent payer during execution
+      // (VaultTransactionCreate / ProposalCreate create accounts). The
+      // 890,880 prefund is only its own floor — fund the exact transfer
+      // the failing sim asks for, so the floor survives each CPI.
+      let sim = await simulate(connection, ixs, buyer.publicKey, `execute-${i}`);
+      for (let round = 0; sim && round < 3; round++) {
+        const m = sim.logs
+          .join("\n")
+          .match(/insufficient lamports \d+, need (\d+)/);
+        if (!m) break;
+        const topUp = Number(m[1]!);
+        const fundSig = await sendTx(
+          connection,
+          [
+            SystemProgram.transfer({
+              fromPubkey: buyer.publicKey,
+              toPubkey: chain.nativeTreasury,
+              lamports: topUp,
+            }),
+          ],
+          [buyer],
+          `fund-treasury-${i}`,
+        );
+        treasuryTopUps[`execute-${i}`] = `${topUp}:${fundSig}`;
+        sim = await simulate(connection, ixs, buyer.publicKey, `execute-${i}`);
+      }
       if (sim) throw new Error(`execute-${i} simulation failed`);
       executeSigs.push(await sendTx(connection, ixs, [buyer], `execute-${i}`));
+      await new Promise((r) => setTimeout(r, 3000)); // public-RPC pacing
     }
 
     const vaultAfter = await connection.getBalance(vaultPda);
@@ -734,6 +771,7 @@ async function main() {
     if (vaultAfter !== 0) throw new Error("vault not fully swept by the proposal");
     record("execute", {
       executeSigs,
+      treasuryTopUps,
       inv9OnChainHash: onChainHash,
       vaultBefore,
       vaultAfter,

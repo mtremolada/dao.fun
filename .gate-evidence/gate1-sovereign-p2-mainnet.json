@@ -82,6 +82,11 @@
       "state": "Voting",
       "yesVotes": "200000000000",
       "at": "2026-06-11T02:00:09.052Z"
+    },
+    "finalize": {
+      "sig": "3jRRgeBjpW4zoCSmrsbtxTGmM8D8mKa6GUXB54PnsHagX9ypTaZrTU8XoUfCMGeGf9dvAZPWgr4Gvsti8Pr6Q8CA",
+      "state": "Succeeded",
+      "at": "2026-06-11T03:00:18.417Z"
     }
   },
   "findings": []
