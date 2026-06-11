@@ -1,0 +1,22 @@
+{
+  "gate": "0a",
+  "cluster": "https://api.mainnet-beta.solana.com",
+  "note": "operator-overridden mainnet run (DECISIONS.md D-008); buyer leg resumed after rent-floor edge",
+  "mint": "E8T9KAM4tkytKe2qbMYt9ygEfz3GbjrZgMzTZt7sP1KC",
+  "multisigPda": "5572XY2dwdq2srxLBRgDeVzUkNxuGcBafn9xqStko8q8",
+  "vaultPda": "3qnu5xeFW2vwHPK116PccxwuBTqvQqfikp73tvVR4uJA",
+  "predictedNativeTreasury": "FmGNFAZmRdNYnf9eGwcXysZCPM7PJDMUiT2W94kHLsuo",
+  "txs": {
+    "multisig-create": "65XXqYszYCWidRHujrW3jRs8aZZmyTRbmKxPittemvz2ZwVere9uM7gLDS5pJhraDZNR69mfhnYXvVpYDxXKVgRM",
+    "rent-prefund-vaults": "2TBiz2sFgs24G1w9vmQQGMVdoBhcpTY7puAwShgrfTW5BKxa8Egmif4vR8UP2vbnn6Bp1xUC9o4V7Ur5gGsYpzQD",
+    "create-v2-and-dev-buy": "2nHuT8LacbvqBveW4qegMxwRPJLZSBfWpk2xJsC5UbYmDDnstKiMKnmzth1fqZqA8hCTEgM23HZLsLXSN6dr7JsF",
+    "third-party-buy": "5YtVtcprYyBq2MzzXsUcYscUEKBnkMcg5bFu38mVSZ9ZJuN79B1cwPZL8SzGd5D6QQfBhGvX1W8Svn4njRdV6Qfk",
+    "permissionless-collect": "5ipd9HVbwDc4YtWhbujMsNviUJiDtmMqiZiRKhbEA3FLUEaF7VAacA3MjmCnKXR34bsbesQgMJRhHEAqzxRCgHMz"
+  },
+  "balances": {
+    "creator-fee-vault-before-collect": "7271603",
+    "squads-vault-before-collect": "890880",
+    "squads-vault-after-collect": "7271603"
+  },
+  "result": "PASS"
+}

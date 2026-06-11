@@ -11,10 +11,10 @@
       (D-003, 13 green tests); spec-breaking finding D-001 (realm-name seed
       length) fixed and flagged for operator; remaining (verify) items listed
       as Open in DECISIONS.md, due at first use per component
-- [~] 13.4 GATE 0a script → evidence → STOP for operator sign-off
-  - script ready: `scripts/devnet-validate-creator.ts` (`pnpm gate:0a`)
-  - 2026-06-11: devnet run BLOCKED on faucet funding (429 limit for this
-    environment's IP) — see GATES.md for options; not a gate failure
+- [x] 13.4 GATE 0a → **PASS on mainnet 2026-06-11** (operator-funded
+      override, D-008) — vault-as-creator + permissionless collect proven
+      live; evidence in GATES.md; rent-floor lessons in D-009; awaiting
+      formal operator sign-off line in GATES.md
 - [ ] GATE 0b (soft) — note D-004: v2 creates are already Token-2022; re-scope
 - [ ] GATE 0c (soft) — fee shares at launch for PDA creator
 

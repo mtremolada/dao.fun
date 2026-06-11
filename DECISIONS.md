@@ -85,6 +85,37 @@ separate payer or config-via-CPI. Flagging now so the 0c result is not a
 surprise; MVP protocol revenue may be launch-fee-only, per the spec's
 fallback. `buildFeeSharesAtLaunchIxs` stays gated (FeatureUnavailable).
 
+## D-008 — Operator override: GATE 0a executed on mainnet with operator funds (2026-06-11)
+
+The devnet faucet was IP-rate-limited in the execution environment. The
+operator explicitly directed a mainnet run funded with his own USDC
+(~$4.60) sent to an agent-generated disposable gas wallet
+(`FMA5xzVDiEYptXfxNeS6PQtWRvrMyEy9FPLCFKMXcTds`), swapped gasless to SOL
+via Jupiter Ultra (JupiterZ RFQ; sig
+`5gMHW95mBXxRZ2W7VY6c737e6NpAwCXckVbEQHzh4SyBiVeERHQXx7JSCso8cVUqmYanXZtwiAFDzwMWjFcM4W1`).
+This deviates from spec Section 11 ("no mainnet key is agent-generated")
+for a *gas-only, disposable* key — not a revenue or upgrade key — at the
+operator's explicit, repeated instruction. All liquid funds (0.0593 SOL)
+were swept back to the operator wallet immediately after the run; ATAs
+closed. Gate evidence in GATES.md.
+
+## D-009 — Rent-exempt floors are a real constraint on small fund paths (2026-06-11)
+
+Two encounters during the mainnet run:
+1. 0-data system accounts (pump creator-fee vault, Squads vault PDA)
+   cannot end a tx below ~890,880 lamports; tiny creator-fee transfers
+   into fresh vaults would fail. Fix applied: rent pre-fund step in the
+   gate script.
+2. A fee payer cannot drop below the rent floor either: the buyer leg
+   failed sim with "insufficient funds for rent" and was resumed with a
+   smaller buy.
+
+**Consequences for Stage 1:** the keeper (6.5) must treat
+`balance - rentMin` as spendable, never `balance`; the orchestrator (6.6)
+must budget rent floors for every account it touches; sweep logic must
+leave rent-min in accounts that persist. Add explicit tests at the u64 and
+rent boundaries (INV-6 suite).
+
 ## Open (verify) items — to resolve before/at their first use
 
 - spl-gov v3 Veto vote config (Stage 1, Governance component)

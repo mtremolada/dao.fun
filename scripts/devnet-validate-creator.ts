@@ -21,6 +21,7 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
+  SystemProgram,
   Transaction,
   TransactionInstruction,
   sendAndConfirmTransaction,
@@ -51,6 +52,20 @@ import { loadOrCreateKeypair } from "./init-wallets";
 
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const EVIDENCE_DIR = join(process.cwd(), ".gate-evidence");
+// Tunables so the same validation can run on mainnet with a small budget
+// (operator override D-008). Defaults preserve the devnet profile.
+const WALLET_PREFIX = process.env.GATE0A_WALLET_PREFIX ?? "";
+const DEV_BUY_LAMPORTS = Number(process.env.GATE0A_DEV_BUY_LAMPORTS ?? 0.02 * LAMPORTS_PER_SOL);
+const BUY_LAMPORTS = Number(process.env.GATE0A_BUY_LAMPORTS ?? 0.05 * LAMPORTS_PER_SOL);
+const MIN_DEPLOYER_LAMPORTS = Number(
+  process.env.GATE0A_MIN_DEPLOYER_LAMPORTS ?? 0.5 * LAMPORTS_PER_SOL,
+);
+const MIN_KEEPER_LAMPORTS = Number(
+  process.env.GATE0A_MIN_KEEPER_LAMPORTS ?? 0.5 * LAMPORTS_PER_SOL,
+);
+const MIN_BUYER_LAMPORTS = Number(
+  process.env.GATE0A_MIN_BUYER_LAMPORTS ?? 0.5 * LAMPORTS_PER_SOL,
+);
 
 interface Evidence {
   gate: "0a";
@@ -100,19 +115,19 @@ async function main() {
   };
 
   const walletsDir = join(process.cwd(), ".wallets");
-  const deployer = loadOrCreateKeypair(walletsDir, "deployer");
-  const keeper = loadOrCreateKeypair(walletsDir, "keeper");
-  const buyer = loadOrCreateKeypair(walletsDir, "buyer");
+  const deployer = loadOrCreateKeypair(walletsDir, `${WALLET_PREFIX}deployer`);
+  const keeper = loadOrCreateKeypair(walletsDir, `${WALLET_PREFIX}keeper`);
+  const buyer = loadOrCreateKeypair(walletsDir, `${WALLET_PREFIX}buyer`);
 
-  for (const [name, kp] of [
-    ["deployer", deployer],
-    ["keeper", keeper],
-    ["buyer", buyer],
+  for (const [name, kp, min] of [
+    ["deployer", deployer, MIN_DEPLOYER_LAMPORTS],
+    ["keeper", keeper, MIN_KEEPER_LAMPORTS],
+    ["buyer", buyer, MIN_BUYER_LAMPORTS],
   ] as const) {
     const bal = await connection.getBalance(kp.publicKey);
     console.log(`${name}: ${kp.publicKey.toBase58()} — ${bal / LAMPORTS_PER_SOL} SOL`);
-    if (bal < 0.5 * LAMPORTS_PER_SOL) {
-      throw new Error(`${name} underfunded (<0.5 SOL). Run: pnpm init-wallets`);
+    if (bal < min) {
+      throw new Error(`${name} underfunded (<${min / LAMPORTS_PER_SOL} SOL)`);
     }
   }
 
@@ -150,11 +165,37 @@ async function main() {
   console.log("  ✓ sole member == predicted native-treasury PDA, threshold 1");
 
   // ---- Step 3: pump createV2 with creator = vault PDA + dev buy ----
+  // Rent pre-fund: a 0-data system account cannot end a tx below the
+  // rent-exempt minimum (~0.00089 SOL), and both the pump creator-fee vault
+  // and the Squads vault receive small lamport transfers. Top both up so
+  // tiny-fee CPI transfers cannot fail rent checks.
+  const rentMin = await connection.getMinimumBalanceForRentExemption(0);
+  const creatorFeeVault = derivePumpCreatorVault(vaultPda);
+  await sendTx(
+    connection,
+    [
+      SystemProgram.transfer({
+        fromPubkey: deployer.publicKey,
+        toPubkey: creatorFeeVault,
+        lamports: rentMin,
+      }),
+      SystemProgram.transfer({
+        fromPubkey: deployer.publicKey,
+        toPubkey: vaultPda,
+        lamports: rentMin,
+      }),
+    ],
+    deployer,
+    [],
+    "rent-prefund-vaults",
+    evidence,
+  );
+
   const onlineSdk = new OnlinePumpSdk(connection);
   const offlineSdk = new PumpSdk();
   const global = await onlineSdk.fetchGlobal();
 
-  const devBuySol = new BN(0.02 * LAMPORTS_PER_SOL);
+  const devBuySol = new BN(DEV_BUY_LAMPORTS);
   const createIxs = await offlineSdk.createV2AndBuyInstructions({
     global,
     mint: mint.publicKey,
@@ -177,7 +218,7 @@ async function main() {
   await sendTx(connection, createIxs, deployer, [mint], "create-v2-and-dev-buy", evidence);
 
   // ---- Step 4: third-party buy generates creator fees ----
-  const buySol = new BN(0.05 * LAMPORTS_PER_SOL);
+  const buySol = new BN(BUY_LAMPORTS);
   // createV2 mints are Token-2022 (see pump-sdk createV2Instruction source).
   const buyState = await onlineSdk.fetchBuyState(
     mint.publicKey,
@@ -246,11 +287,11 @@ async function main() {
   }
 
   mkdirSync(EVIDENCE_DIR, { recursive: true });
-  writeFileSync(
-    join(EVIDENCE_DIR, "gate-0a.json"),
-    JSON.stringify(evidence, null, 2),
-  );
-  console.log(`evidence written to .gate-evidence/gate-0a.json`);
+  const evidenceFile = RPC_URL.includes("mainnet")
+    ? "gate-0a-mainnet.json"
+    : "gate-0a.json";
+  writeFileSync(join(EVIDENCE_DIR, evidenceFile), JSON.stringify(evidence, null, 2));
+  console.log(`evidence written to .gate-evidence/${evidenceFile}`);
   if (evidence.result === "FAIL") process.exit(1);
 }
 
