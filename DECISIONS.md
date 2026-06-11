@@ -404,6 +404,51 @@ Proven end-to-end on the real binaries
 in the DAO's own creator vault ATA) → staged provideLiquidity (LP tokens
 land in the VAULT's LP ATA), both via vote + 72h hold-up.
 
+## D-023 — Keeper sweeps the AMM venue by CONSOLIDATION; the DAO never custodies WSOL (2026-06-11)
+
+Post-graduation, creator fees accrue as WSOL in the AMM creator-vault ATA
+(`coinCreatorVaultAtaPda`). Two permissionless ways to move them existed:
+
+- `collect_coin_creator_fee` (AMM program, zero signers) pays the WSOL to
+  the coinCreator's own WSOL ATA. REJECTED as the keeper path: the vault
+  would custody WSOL it can only unwrap by proposal (the close needs the
+  vault's signature), and the keeper's INV-8 gross accounting is
+  native-SOL denominated.
+- `transfer_creator_fees_to_pump_v2` (AMM program, only signer = payer)
+  moves the AMM WSOL into the CURVE creator vault as native SOL. CHOSEN:
+  one ordinary curve collect then sweeps both venues, all native SOL.
+
+Findings on the way:
+
+- The pump-sdk's `transferCreatorFeesToPumpV2` wrapper hardcodes
+  `coinCreator = feeSharingConfigPda(mint)` (it serves the fee-sharing
+  flow). For a plain PDA creator we encode the instruction through the
+  sdk's own offline anchor programs with `coinCreator = vault`; a unit
+  test pins byte-identity against the sdk wrapper for the sharing-config
+  creator, so drift in the sdk's encoding is caught.
+- The rail's `buildCollectFeesIxs(creator, feePayer)` is now
+  venue-composing: `[consolidate?, curve collect]`, the consolidation leg
+  included only when the AMM ATA holds a positive amount. It throws if
+  AMM fees exist but no feePayer was given (the creator must never sign —
+  INV-2). The previous implementation went through
+  `collectCoinCreatorFeeV2Instructions`, which would have stranded the
+  AMM portion as treasury WSOL.
+- Keeper accrual (`getAccruedFees`) = curve lamports above the D-009 rent
+  floor + AMM ATA WSOL amount (1:1 lamports). The consolidation also
+  releases the source ATA rent into the curve vault, so a sweep can credit
+  slightly MORE than the measured accrual — the integration assertion is
+  `gross >= curve + amm`, with components pinned exactly (AMM ATA drained
+  to 0, curve vault back at its floor).
+- Scope note: pump curve coins are SOL-quoted, so the graduated pool's
+  quote is always WSOL; the spec's USDC-ATA mention (6.5) has no
+  reachable instance on this rail in MVP.
+
+Proven end-to-end on the real binaries
+(tests/action-amm.integration.test.ts phase 4): pre-graduation curve fees
+and post-graduation AMM fees both live, ONE keeper-signed tx through the
+real `sweepVault` core (INV-2 checked against the real ix set), vault
+credited native SOL, second sweep a no-op.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
@@ -416,7 +461,9 @@ land in the VAULT's LP ATA), both via vote + 72h hold-up.
   RESOLVED: D-021/D-022 — offline PumpAmmSdk + permissionless migration;
   both actions shipped (staged two-leg design) and proven end-to-end on
   the real binaries (tests/action-amm.integration.test.ts)
-- `transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)
+- ~~`transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)~~
+  RESOLVED: D-023 — keeper consolidates AMM WSOL into the curve creator
+  vault and sweeps both venues as native SOL; proven on the real binaries
 - ~~Creator Fee Sharing at-launch config (GATE 0c; risk D-007)~~
   RESOLVED: D-019 — at-launch impossible (hard on-chain constraint);
   DAO-governed config post-launch verified on the real binaries

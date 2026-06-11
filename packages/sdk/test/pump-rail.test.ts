@@ -4,13 +4,23 @@
  * integration suite; here the installed pump-sdk + IDL act as oracles.
  */
 import { describe, expect, it } from "vitest";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { BorshInstructionCoder } from "@coral-xyz/anchor";
 import {
+  ACCOUNT_SIZE,
+  AccountLayout,
+  NATIVE_MINT,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import {
+  PumpSdk,
   ammCreatorVaultPda,
   creatorVaultPda,
+  feeSharingConfigPda,
   pumpIdl,
 } from "@pump-fun/pump-sdk";
+import { PUMP_AMM_PROGRAM_ID } from "../src/constants";
 import type { LaunchParams } from "../src/types";
 import {
   FeatureUnavailableError,
@@ -107,6 +117,149 @@ describe("PumpFunRail.buildCollectFeesIxs (INV-2)", () => {
         }
       }
     }
+  });
+});
+
+// ---- AMM venue (spec 6.5): post-graduation creator fees accrue as WSOL in
+// the AMM creator-vault ATA. The keeper consolidates them into the CURVE
+// creator vault (native SOL) via transfer_creator_fees_to_pump_v2, then the
+// ordinary curve collect sweeps everything — the DAO never holds WSOL.
+
+/** Spendable WSOL ATA for the AMM creator-vault authority of `creator`. */
+function ammVaultAtaOf(creator: PublicKey): PublicKey {
+  return getAssociatedTokenAddressSync(
+    NATIVE_MINT,
+    ammCreatorVaultPda(creator),
+    true,
+    TOKEN_PROGRAM_ID,
+  );
+}
+
+/** Minimal packed WSOL token account, as getMultipleAccountsInfo returns it. */
+function wsolAccountInfo(owner: PublicKey, amount: bigint) {
+  const data = Buffer.alloc(ACCOUNT_SIZE);
+  AccountLayout.encode(
+    {
+      mint: NATIVE_MINT,
+      owner,
+      amount,
+      delegateOption: 0,
+      delegate: PublicKey.default,
+      state: 1,
+      isNativeOption: 1,
+      isNative: 2_039_280n,
+      delegatedAmount: 0n,
+      closeAuthorityOption: 0,
+      closeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return {
+    executable: false,
+    owner: TOKEN_PROGRAM_ID,
+    lamports: 2_039_280 + Number(amount),
+    data,
+  };
+}
+
+/** Connection stub answering getMultipleAccountsInfo from a fixed map. */
+function connectionWith(accounts: Map<string, ReturnType<typeof wsolAccountInfo>>) {
+  return {
+    getMultipleAccountsInfo: async (keys: PublicKey[]) =>
+      keys.map((k) => accounts.get(k.toBase58()) ?? null),
+  } as unknown as Connection;
+}
+
+describe("PumpFunRail.buildConsolidateAmmFeesIx (spec 6.5)", () => {
+  const rail = new PumpFunRail(offlineConnection);
+  const payer = Keypair.generate().publicKey;
+
+  it("byte-identical to the pump-sdk's own builder (oracle: sharing-config creator)", async () => {
+    // The sdk only exposes the instruction with the fee-sharing-config PDA
+    // as coinCreator; for that creator the two builds must coincide exactly.
+    const mint = Keypair.generate().publicKey;
+    const cfg = feeSharingConfigPda(mint);
+    const ours = await rail.buildConsolidateAmmFeesIx(cfg, payer);
+    const theirs = await new PumpSdk().transferCreatorFeesToPumpV2({
+      payer,
+      mint,
+      quoteMint: NATIVE_MINT,
+    });
+    expect(ours.programId.equals(theirs.programId)).toBe(true);
+    expect(ours.data.equals(theirs.data)).toBe(true);
+    expect(ours.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable])).toEqual(
+      theirs.keys.map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable]),
+    );
+  });
+
+  it("INV-2: the payer is the only signer; the creator never signs", async () => {
+    const creator = Keypair.generate().publicKey; // the Squads vault PDA
+    const ix = await rail.buildConsolidateAmmFeesIx(creator, payer);
+    for (const meta of ix.keys) {
+      if (meta.isSigner) expect(meta.pubkey.equals(payer)).toBe(true);
+      if (meta.pubkey.equals(creator)) expect(meta.isSigner).toBe(false);
+    }
+  });
+
+  it("executes on the AMM program and credits the CURVE creator vault", async () => {
+    const creator = Keypair.generate().publicKey;
+    const ix = await rail.buildConsolidateAmmFeesIx(creator, payer);
+    expect(ix.programId.equals(PUMP_AMM_PROGRAM_ID)).toBe(true);
+    const source = ix.keys.find((k) => k.pubkey.equals(ammVaultAtaOf(creator)));
+    const dest = ix.keys.find((k) => k.pubkey.equals(creatorVaultPda(creator)));
+    expect(source?.isWritable).toBe(true);
+    expect(dest?.isWritable).toBe(true);
+  });
+});
+
+describe("PumpFunRail.buildCollectFeesIxs venue composition (spec 6.5)", () => {
+  const creator = Keypair.generate().publicKey;
+  const feePayer = Keypair.generate().publicKey;
+
+  function curveVaultTouched(ix: TransactionInstruction): boolean {
+    return ix.keys.some((k) => k.pubkey.equals(creatorVaultPda(creator)));
+  }
+
+  it("curve-only when no AMM vault ATA exists: one collect ix, zero signers", async () => {
+    const rail = new PumpFunRail(connectionWith(new Map()));
+    const ixs = await rail.buildCollectFeesIxs(creator, feePayer);
+    expect(ixs).toHaveLength(1);
+    expect(curveVaultTouched(ixs[0]!)).toBe(true);
+    expect(ixs[0]!.keys.every((k) => !k.isSigner)).toBe(true);
+  });
+
+  it("consolidates BEFORE collecting when AMM WSOL has accrued", async () => {
+    const ata = ammVaultAtaOf(creator);
+    const rail = new PumpFunRail(
+      connectionWith(new Map([[ata.toBase58(), wsolAccountInfo(ammCreatorVaultPda(creator), 5_000n)]])),
+    );
+    const ixs = await rail.buildCollectFeesIxs(creator, feePayer);
+    expect(ixs).toHaveLength(2);
+    expect(ixs[0]!.programId.equals(PUMP_AMM_PROGRAM_ID)).toBe(true);
+    expect(curveVaultTouched(ixs[1]!)).toBe(true);
+    // the whole pair still only ever needs the keeper's signature
+    for (const ix of ixs) {
+      for (const meta of ix.keys) {
+        if (meta.isSigner) expect(meta.pubkey.equals(feePayer)).toBe(true);
+      }
+    }
+  });
+
+  it("an empty AMM vault ATA adds no consolidation leg", async () => {
+    const ata = ammVaultAtaOf(creator);
+    const rail = new PumpFunRail(
+      connectionWith(new Map([[ata.toBase58(), wsolAccountInfo(ammCreatorVaultPda(creator), 0n)]])),
+    );
+    const ixs = await rail.buildCollectFeesIxs(creator, feePayer);
+    expect(ixs).toHaveLength(1);
+  });
+
+  it("refuses AMM consolidation without a feePayer (the vault must never sign)", async () => {
+    const ata = ammVaultAtaOf(creator);
+    const rail = new PumpFunRail(
+      connectionWith(new Map([[ata.toBase58(), wsolAccountInfo(ammCreatorVaultPda(creator), 5_000n)]])),
+    );
+    await expect(rail.buildCollectFeesIxs(creator)).rejects.toThrow(/feePayer/);
   });
 });
 

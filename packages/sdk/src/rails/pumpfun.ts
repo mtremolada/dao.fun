@@ -12,7 +12,12 @@ import {
   PublicKey,
   TransactionInstruction,
 } from "@solana/web3.js";
-import { NATIVE_MINT, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  NATIVE_MINT,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+  unpackAccount,
+} from "@solana/spl-token";
 import {
   OnlinePumpSdk,
   PumpSdk,
@@ -26,6 +31,25 @@ import {
   derivePumpAmmCreatorVaultAuthority,
   derivePumpCreatorVault,
 } from "../pda";
+
+// The offline PumpSdk carries pre-built anchor Program objects for the pump
+// and pump_amm IDLs; they are typed private but are the supported way to
+// encode instructions the sdk has no creator-agnostic wrapper for (its own
+// transferCreatorFeesToPumpV2 hardcodes the fee-sharing-config PDA as
+// coinCreator, which is wrong for a plain PDA creator like our vault).
+type AnchorIxBuilder = {
+  accountsPartial(accounts: Record<string, PublicKey>): {
+    instruction(): Promise<TransactionInstruction>;
+  };
+};
+type OfflinePumpPrograms = {
+  offlinePumpProgram: {
+    methods: { collectCreatorFeeV2(): AnchorIxBuilder };
+  };
+  offlinePumpAmmProgram: {
+    methods: { transferCreatorFeesToPumpV2(): AnchorIxBuilder };
+  };
+};
 
 /** Thrown when a feature is gated off (e.g. GATE 0c not passed). */
 export class FeatureUnavailableError extends Error {
@@ -113,18 +137,74 @@ export class PumpFunRail implements LaunchRail {
     ];
   }
 
+  /**
+   * Curve venue collect (collect_creator_fee_v2): zero signer accounts; the
+   * accrued lamports above the rent floor (D-009) move to `creator`. Offline.
+   */
+  buildCurveCollectIx(creator: PublicKey): Promise<TransactionInstruction> {
+    const programs = this.sdk as unknown as OfflinePumpPrograms;
+    return programs.offlinePumpProgram.methods
+      .collectCreatorFeeV2()
+      .accountsPartial({
+        creator,
+        quoteMint: NATIVE_MINT,
+        quoteTokenProgram: TOKEN_PROGRAM_ID,
+        creatorVault: derivePumpCreatorVault(creator),
+      })
+      .instruction();
+  }
+
+  /**
+   * AMM venue consolidation (transfer_creator_fees_to_pump_v2, spec 6.5):
+   * moves the WSOL accrued in the AMM creator-vault ATA into the CURVE
+   * creator vault as native SOL, so one curve collect sweeps both venues
+   * and the DAO never custodies WSOL. The only signer is `payer`. Offline.
+   */
+  buildConsolidateAmmFeesIx(
+    creator: PublicKey,
+    payer: PublicKey,
+  ): Promise<TransactionInstruction> {
+    const programs = this.sdk as unknown as OfflinePumpPrograms;
+    return programs.offlinePumpAmmProgram.methods
+      .transferCreatorFeesToPumpV2()
+      .accountsPartial({
+        payer,
+        quoteMint: NATIVE_MINT,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        coinCreator: creator,
+      })
+      .instruction();
+  }
+
   async buildCollectFeesIxs(
     creator: PublicKey,
     feePayer?: PublicKey,
   ): Promise<TransactionInstruction[]> {
-    // Covers both venues: curve (collect_creator_fee_v2) and, post-graduation,
-    // the PumpSwap AMM collect when the vault ATA exists.
-    return this.online.collectCoinCreatorFeeV2Instructions(
-      creator,
+    // Both venues, native-SOL denominated: consolidate AMM WSOL into the
+    // curve creator vault first (when any has accrued), then collect.
+    const ammVaultAta = getAssociatedTokenAddressSync(
       NATIVE_MINT,
+      derivePumpAmmCreatorVaultAuthority(creator),
+      true,
       TOKEN_PROGRAM_ID,
-      feePayer,
     );
+    const [ammInfo] = await this.connection.getMultipleAccountsInfo([
+      ammVaultAta,
+    ]);
+    const ammAccrued = ammInfo
+      ? unpackAccount(ammVaultAta, ammInfo, TOKEN_PROGRAM_ID).amount
+      : 0n;
+    const ixs: TransactionInstruction[] = [];
+    if (ammAccrued > 0n) {
+      if (!feePayer) {
+        throw new Error(
+          "feePayer required: AMM consolidation needs a paying signer and the creator must never sign (INV-2)",
+        );
+      }
+      ixs.push(await this.buildConsolidateAmmFeesIx(creator, feePayer));
+    }
+    ixs.push(await this.buildCurveCollectIx(creator));
+    return ixs;
   }
 
   /**

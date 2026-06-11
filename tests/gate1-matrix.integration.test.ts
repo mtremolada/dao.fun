@@ -18,6 +18,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  ComputeBudgetProgram,
   Keypair,
   SystemProgram,
   TransactionInstruction,
@@ -226,10 +227,18 @@ describe("GATE 1 VSR leg — lockup-weighted vote power under clock warp (real b
         voter.publicKey,
       );
 
+      // Each call must form a UNIQUE transaction: bankrun's blockhash often
+      // stands still between sends, and a byte-identical tx is rejected as
+      // "already processed". A varying CU limit disambiguates them.
+      let readWeightNonce = 0;
       const readWeight = async (): Promise<bigint> => {
+        readWeightNonce += 1;
         await send(
           ctx,
           [
+            ComputeBudgetProgram.setComputeUnitLimit({
+              units: 200_000 + readWeightNonce,
+            }),
             buildUpdateVoterWeightRecordIx({
               registrar: dao.registrar,
               voterAuthority: voter.publicKey,

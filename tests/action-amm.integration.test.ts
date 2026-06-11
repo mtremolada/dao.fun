@@ -14,6 +14,12 @@
  *      the DAO's own AMM creator-vault WSOL ATA.
  *   3. provideLiquidity (same staging): SOL + the vault's tokens go in,
  *      the LP tokens come back to the vault.
+ *   4. keeper sweep (spec 6.5, both venues): the curve creator vault holds
+ *      pre-graduation fees (native SOL) and the AMM creator-vault ATA holds
+ *      post-graduation fees (WSOL). The keeper — sole signer, no authority —
+ *      consolidates the AMM WSOL into the curve vault
+ *      (transfer_creator_fees_to_pump_v2) and collects everything to the
+ *      vault as native SOL in one tx, through the real sweepVault core.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -46,11 +52,18 @@ import {
   coinCreatorVaultAuthorityPda,
 } from "@pump-fun/pump-swap-sdk";
 import { ProposalState } from "@solana/spl-governance";
+import type { Connection } from "@solana/web3.js";
 import type { ProgramTestContext } from "solana-bankrun";
 import {
   buildAmmBuybackIxs,
   buildProvideLiquidityIxs,
 } from "../packages/sdk/src/actions";
+import { PumpFunRail } from "../packages/sdk/src/rails/pumpfun";
+import { derivePumpCreatorVault } from "../packages/sdk/src/pda";
+import {
+  sweepVault,
+  type KeeperDeps,
+} from "../packages/keeper/src/keeper";
 import {
   MICRO_HOLDUP_S,
   TEST_TIMEOUT,
@@ -482,6 +495,80 @@ describe("13.6b post-graduation: migrate + AMM buyback + provideLiquidity (real 
       expect(
         await tokenAmount(ctx, vaultBaseAta, TOKEN_2022_PROGRAM_ID),
       ).toBeLessThan(vaultBaseBefore);
+
+      // ===== keeper sweep (spec 6.5): both venues, one native-SOL credit =====
+      const keeper = Keypair.generate();
+      await send(
+        ctx,
+        [
+          SystemProgram.transfer({
+            fromPubkey: ctx.payer.publicKey,
+            toPubkey: keeper.publicKey,
+            lamports: 1_000_000_000,
+          }),
+        ],
+        [],
+      );
+      // the rail reads chain state through the Connection surface only; in
+      // bankrun a one-method adapter over banksClient suffices.
+      const rail = new PumpFunRail({
+        getMultipleAccountsInfo: async (keys: PublicKey[]) =>
+          Promise.all(
+            keys.map(async (k) => {
+              const a = await ctx.banksClient.getAccount(k);
+              return a ? toInfo(a) : null;
+            }),
+          ),
+      } as unknown as Connection);
+
+      const FLOOR = 890_880n; // rent-exempt min for a 0-data account (D-009)
+      const curveVault = derivePumpCreatorVault(dao.vaultPda);
+      const curveAccrued = BigInt(await balance(ctx, curveVault)) - FLOOR;
+      const ammAccrued = await tokenAmount(ctx, creatorVaultAta, TOKEN_PROGRAM_ID);
+      // pre-graduation curve fees AND post-graduation AMM fees are both live
+      expect(curveAccrued).toBeGreaterThan(0n);
+      expect(ammAccrued).toBeGreaterThan(0n);
+
+      const deps: KeeperDeps = {
+        keeper: keeper.publicKey,
+        getAccruedFees: async () => {
+          const lamports = BigInt(await balance(ctx, curveVault));
+          const curve = lamports > FLOOR ? lamports - FLOOR : 0n;
+          return curve + (await tokenAmount(ctx, creatorVaultAta, TOKEN_PROGRAM_ID));
+        },
+        getVaultBalance: async () => BigInt(await balance(ctx, dao.vaultPda)),
+        buildCollectIxs: (v, payer) => rail.buildCollectFeesIxs(v, payer),
+        sendAndConfirm: async (ixs) => {
+          await send(
+            ctx,
+            [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...ixs],
+            [keeper],
+            keeper,
+          );
+          return "bankrun";
+        },
+        maxAttempts: 1,
+        backoffMs: 1,
+      };
+
+      const vaultBeforeSweep = BigInt(await balance(ctx, dao.vaultPda));
+      const sweep = await sweepVault(dao.vaultPda, deps);
+      expect(sweep).not.toBeNull();
+
+      // INV-8 gross accounting: the vault received at least both venues'
+      // accruals (consolidation may release WSOL-ATA rent on top), as
+      // native SOL, with the keeper as the only signer (INV-2 was checked
+      // inside sweepVault against the REAL instruction set).
+      const vaultAfterSweep = BigInt(await balance(ctx, dao.vaultPda));
+      expect(vaultAfterSweep - vaultBeforeSweep).toBe(sweep!.grossLamports);
+      expect(sweep!.grossLamports).toBeGreaterThanOrEqual(
+        curveAccrued + ammAccrued,
+      );
+      // the AMM venue drained; the curve vault is back at its rent floor
+      expect(await tokenAmount(ctx, creatorVaultAta, TOKEN_PROGRAM_ID)).toBe(0n);
+      expect(BigInt(await balance(ctx, curveVault))).toBe(FLOOR);
+      // idempotency on real state: nothing left, second sweep is a no-op
+      expect(await sweepVault(dao.vaultPda, deps)).toBeNull();
     },
     TEST_TIMEOUT,
   );

@@ -12,7 +12,17 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { PumpFunRail, derivePumpCreatorVault } from "@daofun/sdk";
+import {
+  NATIVE_MINT,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+  unpackAccount,
+} from "@solana/spl-token";
+import {
+  PumpFunRail,
+  derivePumpAmmCreatorVaultAuthority,
+  derivePumpCreatorVault,
+} from "@daofun/sdk";
 import type { KeeperDeps } from "./keeper";
 
 export interface KeeperServiceConfig {
@@ -38,13 +48,28 @@ export function makeKeeperDeps(cfg: KeeperServiceConfig): KeeperDeps {
     keeper: keeperKeypair.publicKey,
 
     // Curve venue: lamports in the pump creator-fee vault above the rent
-    // floor (D-009: the floor is not spendable). AMM venue accrual is added
-    // when the first graduated token exists to test against (open item).
+    // floor (D-009: the floor is not spendable). AMM venue (post-graduation):
+    // WSOL in the AMM creator-vault ATA, 1 lamport per unit — the collect
+    // path consolidates it into the curve vault before sweeping (spec 6.5).
     async getAccruedFees(vault: PublicKey): Promise<bigint> {
       const feeVault = derivePumpCreatorVault(vault);
-      const balance = BigInt(await connection.getBalance(feeVault));
+      const ammVaultAta = getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        derivePumpAmmCreatorVaultAuthority(vault),
+        true,
+        TOKEN_PROGRAM_ID,
+      );
+      const [feeInfo, ammInfo] = await connection.getMultipleAccountsInfo([
+        feeVault,
+        ammVaultAta,
+      ]);
       const floor = await rentMin();
-      return balance > floor ? balance - floor : 0n;
+      const curveLamports = feeInfo ? BigInt(feeInfo.lamports) : 0n;
+      const curve = curveLamports > floor ? curveLamports - floor : 0n;
+      const amm = ammInfo
+        ? unpackAccount(ammVaultAta, ammInfo, TOKEN_PROGRAM_ID).amount
+        : 0n;
+      return curve + amm;
     },
 
     async getVaultBalance(vault: PublicKey): Promise<bigint> {

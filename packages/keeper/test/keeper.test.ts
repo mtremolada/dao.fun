@@ -7,8 +7,20 @@
  * with injected deps; live venue behavior is the Stage 1 integration suite.
  */
 import { describe, expect, it, vi } from "vitest";
-import { Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import {
+  ACCOUNT_SIZE,
+  AccountLayout,
+  NATIVE_MINT,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import {
+  derivePumpAmmCreatorVaultAuthority,
+  derivePumpCreatorVault,
+} from "@daofun/sdk";
 import { sweepVault, runTick, type KeeperDeps } from "../src/keeper";
+import { makeKeeperDeps } from "../src/service";
 
 const keeperKey = Keypair.generate().publicKey;
 const vault = Keypair.generate().publicKey;
@@ -130,6 +142,104 @@ describe("sweepVault", () => {
     });
     const result = await sweepVault(vault, deps);
     expect(result!.grossLamports).toBe(7n);
+  });
+});
+
+describe("makeKeeperDeps.getAccruedFees (spec 6.5: both venues, native-SOL denominated)", () => {
+  // D-009: the curve creator vault's rent floor is never spendable.
+  const FLOOR = 890_880n;
+  const curveVault = derivePumpCreatorVault(vault);
+  const ammVaultAta = getAssociatedTokenAddressSync(
+    NATIVE_MINT,
+    derivePumpAmmCreatorVaultAuthority(vault),
+    true,
+    TOKEN_PROGRAM_ID,
+  );
+
+  type StubInfo = {
+    executable: boolean;
+    owner: PublicKey;
+    lamports: number;
+    data: Buffer;
+  };
+
+  function systemAccount(lamports: bigint): StubInfo {
+    return {
+      executable: false,
+      owner: new PublicKey("11111111111111111111111111111111"),
+      lamports: Number(lamports),
+      data: Buffer.alloc(0),
+    };
+  }
+
+  function wsolAccount(amount: bigint): StubInfo {
+    const data = Buffer.alloc(ACCOUNT_SIZE);
+    AccountLayout.encode(
+      {
+        mint: NATIVE_MINT,
+        owner: derivePumpAmmCreatorVaultAuthority(vault),
+        amount,
+        delegateOption: 0,
+        delegate: PublicKey.default,
+        state: 1,
+        isNativeOption: 1,
+        isNative: 2_039_280n,
+        delegatedAmount: 0n,
+        closeAuthorityOption: 0,
+        closeAuthority: PublicKey.default,
+      },
+      data,
+    );
+    return {
+      executable: false,
+      owner: TOKEN_PROGRAM_ID,
+      lamports: 2_039_280 + Number(amount),
+      data,
+    };
+  }
+
+  function depsWith(accounts: Map<string, StubInfo>): KeeperDeps {
+    const connection = {
+      getMinimumBalanceForRentExemption: async () => Number(FLOOR),
+      getMultipleAccountsInfo: async (keys: PublicKey[]) =>
+        keys.map((k) => accounts.get(k.toBase58()) ?? null),
+    } as unknown as Connection;
+    return makeKeeperDeps({ connection, keeperKeypair: Keypair.generate() });
+  }
+
+  it("curve venue: lamports above the rent floor", async () => {
+    const deps = depsWith(
+      new Map([[curveVault.toBase58(), systemAccount(FLOOR + 5_000n)]]),
+    );
+    expect(await deps.getAccruedFees(vault)).toBe(5_000n);
+  });
+
+  it("AMM venue: the creator-vault ATA's WSOL amount counts 1:1 in lamports", async () => {
+    const deps = depsWith(
+      new Map([
+        [curveVault.toBase58(), systemAccount(FLOOR)],
+        [ammVaultAta.toBase58(), wsolAccount(7_000n)],
+      ]),
+    );
+    expect(await deps.getAccruedFees(vault)).toBe(7_000n);
+  });
+
+  it("both venues sum; a missing account is zero, not an error", async () => {
+    const deps = depsWith(
+      new Map([
+        [curveVault.toBase58(), systemAccount(FLOOR + 5_000n)],
+        [ammVaultAta.toBase58(), wsolAccount(7_000n)],
+      ]),
+    );
+    expect(await deps.getAccruedFees(vault)).toBe(12_000n);
+    expect(await depsWith(new Map()).getAccruedFees(vault)).toBe(0n);
+  });
+
+  it("a curve vault at or below the floor contributes nothing (D-009)", async () => {
+    const deps = depsWith(
+      new Map([[curveVault.toBase58(), systemAccount(FLOOR - 1n)]]),
+    );
+    expect(await deps.getAccruedFees(vault)).toBe(0n);
   });
 });
 

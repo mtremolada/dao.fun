@@ -54,10 +54,17 @@
       chain, member signs every step, vault never tx-level signer,
       unwrap(wrap(x)) == x, plumbing hidden from decoder). Full-path /
       CU-split tests are integration-bound.
-- [x] 13.6a keeper — tests first (10 tests: gross accounting INV-8,
+- [x] 13.6a keeper — tests first (14 tests: gross accounting INV-8,
       idempotency, INV-2 refusal, retry/backoff, u64-bound math INV-6,
-      per-vault failure isolation); service wiring rent-floor-aware (D-009).
-      AMM venue accrual open until a graduated token exists to test against.
+      per-vault failure isolation, two-venue accrual); service wiring
+      rent-floor-aware (D-009). AMM venue CLOSED (D-023): the keeper
+      consolidates post-graduation WSOL into the curve creator vault
+      (transfer_creator_fees_to_pump_v2, payer-only signer) and one curve
+      collect sweeps both venues as native SOL — the DAO never custodies
+      WSOL. Rail builders + venue composition unit-tested (7 new sdk
+      tests) and PROVEN end-to-end on the real binaries
+      (tests/action-amm.integration.test.ts phase 4: real sweepVault core,
+      keeper as only signer, vault credited, idempotent re-sweep).
 - [~] 13.6b action menu (6.8): grant + burn shipped tests-first (5 tests,
       bounds + declared-account-set). buyback (curve venue) shipped
       tests-first (3 unit tests: vault-as-only-inner-signer, no ATA-create
