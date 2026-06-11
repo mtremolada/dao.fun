@@ -55,13 +55,19 @@ export function deriveNativeTreasury(governance: PublicKey): PublicKey {
   )[0];
 }
 
-/** VSR registrar: ["registrar", realm, community_mint]. */
+/**
+ * VSR registrar: [realm, "registrar", community_mint] — the deployed
+ * program's Anchor seeds put the realm BEFORE the literal, matching the
+ * voter PDA's object-first pattern. Verified against the real binary by
+ * the GATE 1 bankrun VSR leg: the literal-first order fails
+ * create_registrar with "signer privilege escalated".
+ */
 export function deriveVsrRegistrar(
   realm: PublicKey,
   communityMint: PublicKey,
 ): PublicKey {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("registrar"), realm.toBuffer(), communityMint.toBuffer()],
+    [realm.toBuffer(), Buffer.from("registrar"), communityMint.toBuffer()],
     VSR_PROGRAM_ID,
   )[0];
 }

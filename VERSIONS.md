@@ -15,7 +15,7 @@ Pinned exactly in package.json files; lockfile (`pnpm-lock.yaml`) committed.
 | bn.js | 5.2.2 | |
 | typescript | ^5.6 (resolved 5.9.3) | |
 | vitest | ^3.0 (resolved 3.2.6) | |
-| solana-bankrun | 0.4.0 (to be added at Stage 1) | clock-warp suites |
+| solana-bankrun | 0.4.0 | GATE 1 matrix suite: real mainnet binaries + clock warp |
 | next | ^15 (resolved 15.5.19) | app shell (13.7) |
 | react / react-dom | ^19 (resolved 19.2.7) | |
 | @playwright/test | ^1.60 (resolved 1.60.0) | e2e vs real backend handler |

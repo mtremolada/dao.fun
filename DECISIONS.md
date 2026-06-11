@@ -253,6 +253,35 @@ Playwright stub server. Conventions it pins:
   backend-orchestrated (server signs), so the MVP UI needs no wallet;
   user-signed vote/execute from the browser is Stage 2 scope.
 
+## D-018 — GATE 1 matrix on real binaries; two sdk bugs found (2026-06-11)
+
+The council/cypherpunk/VSR legs run in solana-bankrun against the DEPLOYED
+mainnet binaries (dumped by `scripts/dump-mainnet-programs.ts` into
+`tests/fixtures/`, committed for hermetic CI). Clock warp gives the
+assertions a live cluster can't: 72h hold-up refusal, lockup-weight decay.
+Running the real programs immediately caught two bugs the unit suites
+(which only check instruction SHAPES) could not:
+
+1. **Ceremony ordering**: `createRealm` registers — and validates — the
+   council mint, so the council-mint creation ixs must execute FIRST.
+   `buildCreateDaoIxs` previously ordered them after realm setup; a
+   council-mode launch would have failed its first transaction on
+   mainnet. Fixed: `groups`/`ixs` now put council first; the order is
+   part of the builder's contract.
+2. **VSR registrar PDA seeds**: the deployed program derives the
+   registrar as `[realm, "registrar", mint]` (object-first, like its
+   voter PDA), not `["registrar", realm, mint]`. With the wrong order,
+   `create_registrar` fails with "signer privilege escalated".
+   CONSEQUENCE: the mainnet experiment behind D-013 ran with wrong seeds,
+   so its failure proved nothing about Token-2022. Re-run cleanly in
+   bankrun: `create_registrar` rejects a Token-2022 mint on the mint's
+   OWNER (`AccountOwnedByWrongProgram`) — D-013's conclusion (no-addin
+   realms for Token-2022 at MVP) stands, now on sound evidence.
+
+Also: bankrun's program-test preloads classic SPL Token but not
+Token-2022 — the dump script fetches it too. The CI integration job now
+runs `pnpm test:integration` hermetically (no validator, no network).
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
@@ -265,5 +294,8 @@ Playwright stub server. Conventions it pins:
 - `transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)
 - Creator Fee Sharing at-launch config + admin revoke (GATE 0c; risk D-007)
 - ~~VSR registrar seed + manual ix layout on-chain validation~~ RESOLVED:
-  D-013 — layouts correct (program reached its own constraint checks);
-  registrar creation itself blocked for Token-2022 mints
+  D-018 — registrar seed order was WRONG in D-013's experiment and is now
+  fixed (`[realm, "registrar", mint]`) and verified against the real
+  binary; ix layouts validated end-to-end by the bankrun VSR leg
+  (createVoter / createDepositEntry / deposit / updateVoterWeightRecord);
+  Token-2022 registrar rejection re-confirmed on clean evidence

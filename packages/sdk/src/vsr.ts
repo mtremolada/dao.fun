@@ -37,7 +37,9 @@ export function buildCreateRegistrarIx(args: {
   payer: PublicKey;
 }): { ix: TransactionInstruction; registrar: PublicKey } {
   const [registrar, registrarBump] = PublicKey.findProgramAddressSync(
-    [Buffer.from("registrar"), args.realm.toBuffer(), args.communityMint.toBuffer()],
+    // Object-first seed order, like the voter PDA (verified on the real
+    // binary by the GATE 1 bankrun VSR leg — see deriveVsrRegistrar).
+    [args.realm.toBuffer(), Buffer.from("registrar"), args.communityMint.toBuffer()],
     VSR_PROGRAM_ID,
   );
   const data = Buffer.concat([

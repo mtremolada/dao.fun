@@ -61,7 +61,7 @@ transfer-fee extensions.
 Not run. Risk flag D-007: `createFeeSharingConfig` requires the creator as
 payer/signer, which a PDA creator cannot satisfy in a plain launch tx.
 
-## GATE 1 — mode matrix e2e (sovereign leg PASS on mainnet; council/cypherpunk legs pending)
+## GATE 1 — mode matrix e2e (sovereign leg PASS on mainnet; council/cypherpunk/VSR legs PASS on real binaries)
 
 Operator-funded mainnet runs (D-008 regime), 2026-06-11. Devnet remains
 faucet-blocked; operator directed mainnet runs instead. Smoke deviations
@@ -116,8 +116,51 @@ only deviation: 1h baseVotingTime, the program minimum — D-014):
 
 Machine evidence: `.gate-evidence/gate1-sovereign-p2-mainnet.json`.
 
-Remaining for GATE 1 full PASS: council and cypherpunk legs (veto blocks
-execution; VSR lockup weight) — these need a local validator with cloned
-programs or devnet (clock control / addin constraints, D-013/D-014).
+### Council / cypherpunk / VSR legs — real mainnet binaries in bankrun (PASS)
+
+`tests/gate1-matrix.integration.test.ts` (`pnpm test:integration`), run
+2026-06-11 against the DEPLOYED program binaries dumped from mainnet the
+same day (`scripts/dump-mainnet-programs.ts` → `tests/fixtures/*.so`:
+spl_governance 1,319,856 B, squads_v4 1,470,416 B, vsr 1,301,200 B,
+token_2022 1,382,016 B, plus the live Squads ProgramConfig account).
+Production micro-tier params throughout, including the 3-day voting
+window and the 72h hold-up — bankrun clock-warp covers what a live
+cluster cannot. 4/4 tests PASS; the suite runs hermetically in CI
+(`integration` job, no network).
+
+- **Council leg (INV-4 + INV-3 + INV-9)**: community YES + council veto
+  (1-member council, 50% veto threshold, D-011 config) → proposal state
+  `Vetoed`; execution refused even after every timer has elapsed, vault
+  untouched. A second, non-vetoed proposal on the same DAO finalizes to
+  `Succeeded`, is refused before the 72h hold-up
+  (`GOVERNANCE-ERROR: Can't execute transaction within its hold up time`),
+  then executes the full 4-step Squads chain after the warp — vault
+  890,880 → 0, recipient +890,880. Both proposals' instruction sets
+  re-read from chain state, unwrapped, and hash-matched (INV-9).
+- **Cypherpunk leg (structural no-veto + INV-3 + INV-9)**: realm built
+  with NO council accounts (`Realm.config.councilMint` undefined — veto
+  structurally impossible, spec 12.2); 72h hold-up refusal, then clean
+  custody-chain execution; proposal ends `Completed`.
+- **VSR leg (spec 6.3 lockup weighting under clock warp)**: baseline-0
+  registrar (production config): an UNLOCKED deposit carries zero voter
+  weight and proposal creation is refused; a 365-day cliff lockup (the
+  micro saturation horizon) carries full weight and the proposal goes
+  through; warping half the horizon decays the weight to ~half; past the
+  cliff it is zero. First execution of the VSR path against the deployed
+  binary.
+- **D-013 re-verified with clean evidence**: the original mainnet D-013
+  experiment ran with a wrong registrar seed order (D-018), confounding
+  its failure. With correct seeds, `create_registrar` rejects a
+  Token-2022 community mint on the MINT's owner
+  (`AccountOwnedByWrongProgram`), not on seeds — the no-addin-at-MVP
+  architecture stands.
+
+The suite found and fixed two real sdk bugs before any council-mode or
+VSR launch could hit them live (D-018): council-mint creation must
+precede createRealm, and the VSR registrar PDA seed order is
+`[realm, "registrar", mint]`.
+
+Remaining for GATE 1 full PASS: nothing technical — operator sign-off.
 
 Operator sign-off (sovereign leg): ______
+Operator sign-off (council/cypherpunk/VSR legs): ______

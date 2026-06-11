@@ -1,9 +1,9 @@
 /**
  * Governance — spec 6.3. Builds the full createDao instruction sequence:
  *
- *   createRealm (name = realmNameForMint, authority = payer)
+ *   [council mode] council mint: create, init, mint 1/member, null authority
+ *   -> createRealm (name = realmNameForMint, authority = payer)
  *   -> VSR createRegistrar + configureVotingMint (baseline weight 0)
- *   -> [council mode] council mint: create, init, mint 1/member, null authority
  *   -> createGovernance (resolved GovernanceParams)
  *   -> createNativeTreasury (must equal the advance-derived prediction)
  *   -> setRealmAuthority -> governance   (no platform backdoor)
@@ -100,13 +100,16 @@ export interface CreateDaoResult {
   /** All instructions in execution order (== groups flattened). */
   ixs: TransactionInstruction[];
   /**
-   * The same instructions grouped at tx-size-safe boundaries, in order:
-   * realmSetup (realm + VSR), council (empty outside council mode),
-   * governanceSetup (governance + native treasury + authority transfer).
+   * The same instructions grouped at tx-size-safe boundaries, in EXECUTION
+   * order: council FIRST (createRealm registers the council mint, so the
+   * mint must already exist on chain — found by the GATE 1 bankrun leg),
+   * then realmSetup (realm + VSR), then governanceSetup (governance +
+   * native treasury + authority transfer). council is empty outside
+   * council mode.
    */
   groups: {
-    realmSetup: TransactionInstruction[];
     council: TransactionInstruction[];
+    realmSetup: TransactionInstruction[];
     governanceSetup: TransactionInstruction[];
   };
   realm: PublicKey;
@@ -193,6 +196,7 @@ export async function buildCreateDaoIxs(
 
   // 3. Council mint (council mode only): 1 token per member, then no mint
   //    authority exists — membership is fixed at launch (structural veto set).
+  //    Executes BEFORE createRealm, which registers (and validates) the mint.
   if (p.mode === "council" && p.council) {
     council.push(
       SystemProgram.createAccount({
@@ -295,8 +299,8 @@ export async function buildCreateDaoIxs(
   );
 
   return {
-    ixs: [...realmSetup, ...council, ...governanceSetup],
-    groups: { realmSetup, council, governanceSetup },
+    ixs: [...council, ...realmSetup, ...governanceSetup],
+    groups: { council, realmSetup, governanceSetup },
     realm,
     governance,
     nativeTreasury,

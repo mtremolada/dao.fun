@@ -76,16 +76,22 @@
       (conventions in D-017). Wallet adapter deliberately deferred
       (D-017: launch is backend-orchestrated; browser signing is
       Stage 2).
-- [~] 13.8 GATE 1: sovereign leg PASS live on mainnet, operator-funded
-      (D-008): full lifecycle proposal -> vote -> finalize -> execute on a
-      fresh DAO under production sovereign/micro params (only deviation:
-      1h baseVotingTime, the program minimum). INV-3/INV-5/INV-7 verified
-      on-chain; INV-9 verified by re-reading the wrapped ixs FROM CHAIN
-      and matching the artifact hash; custody chain moved real lamports
-      (Squads vault 890,880 -> 0 via governance-executed 4-step chain).
-      Critical findings D-013 (VSR can't do Token-2022 -> no-addin realms
-      at MVP), D-015 (proposal deposit default), D-016 (treasury pays
-      Squads execution rent). Phase-1 realm's proposal leg remains blocked
-      at its pre-fix 0.102 deposit (resumable). Council/cypherpunk legs +
-      clock-warp behavior still need the integration suite (validator with
-      clones) or devnet.
+- [x] 13.8 GATE 1 mode matrix — all technical legs PASS; awaiting
+      operator sign-off. (a) Sovereign leg PASS live on mainnet,
+      operator-funded (D-008): full lifecycle proposal -> vote -> finalize
+      -> execute on a fresh DAO under production sovereign/micro params
+      (only deviation: 1h baseVotingTime, the program minimum).
+      INV-3/INV-5/INV-7 verified on-chain; INV-9 verified by re-reading
+      the wrapped ixs FROM CHAIN and matching the artifact hash; custody
+      chain moved real lamports (Squads vault 890,880 -> 0 via
+      governance-executed 4-step chain). Findings D-013/D-015/D-016.
+      (b) Council, cypherpunk, and VSR legs PASS against the REAL mainnet
+      binaries in solana-bankrun (tests/gate1-matrix.integration.test.ts,
+      `pnpm test:integration`, hermetic in CI): council veto -> Vetoed,
+      execution refused (INV-4) while a non-vetoed proposal executes after
+      the 72h hold-up (INV-3); cypherpunk realm structurally council-free;
+      VSR baseline-0 lockup weighting incl. clock-warp decay; D-013
+      re-verified on clean evidence. Two sdk bugs found+fixed (D-018):
+      council-mint-before-realm ordering, VSR registrar seed order.
+      Phase-1 realm's proposal leg remains blocked at its pre-fix 0.102
+      deposit (resumable; optional).

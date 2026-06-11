@@ -9,7 +9,8 @@
   "scripts": {
     "build": "pnpm -r run build",
     "test": "vitest run && pnpm -r run test",
-    "test:unit": "vitest run && pnpm -r run test:unit",
+    "test:unit": "vitest run --exclude 'tests/**/*.integration.test.ts' && pnpm -r run test:unit",
+    "test:integration": "vitest run tests --testTimeout=300000",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
     "init-wallets": "tsx scripts/init-wallets.ts",
@@ -28,6 +29,7 @@
     "bn.js": "5.2.2",
     "eslint": "^9.0.0",
     "prettier": "^3.3.0",
+    "solana-bankrun": "0.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
