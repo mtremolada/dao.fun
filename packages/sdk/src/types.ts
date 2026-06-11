@@ -9,6 +9,12 @@ export interface LaunchParams {
   daoConfig: DaoConfig;
   devBuyLamports?: bigint;
   rail: "pumpfun" | "meteora-dbc";
+  /**
+   * The launching wallet. Amendment to the spec Section 4 shape (DECISIONS.md
+   * D-005): pump `create_v2` requires a `user` signer, so rails need to know
+   * the launcher to build the create instruction. Required by PumpFunRail.
+   */
+  launcher?: PublicKey;
 }
 
 export interface DaoConfig {

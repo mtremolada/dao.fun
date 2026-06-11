@@ -43,6 +43,10 @@ import {
   deriveGovernanceChainFromMint,
   derivePumpCreatorVault,
 } from "../packages/sdk/src/pda";
+import {
+  buildCreateTreasuryIx,
+  fetchProgramConfigTreasury,
+} from "../packages/sdk/src/treasury";
 import { loadOrCreateKeypair } from "./init-wallets";
 
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
@@ -122,36 +126,16 @@ async function main() {
 
   // ---- Step 2: Squads multisig, sole member = predicted native treasury ----
   const createKey = Keypair.generate();
-  const [multisigPda] = multisig.getMultisigPda({ createKey: createKey.publicKey });
-  const [vaultPda] = multisig.getVaultPda({ multisigPda, index: 0 });
+  const { ix: createMsIx, multisigPda, vaultPda } = buildCreateTreasuryIx({
+    payer: deployer.publicKey,
+    predictedNativeTreasury: chain.nativeTreasury,
+    createKey: createKey.publicKey,
+    programConfigTreasury: await fetchProgramConfigTreasury(connection),
+  });
   evidence.multisigPda = multisigPda.toBase58();
   evidence.vaultPda = vaultPda.toBase58();
   console.log(`multisig: ${evidence.multisigPda}`);
   console.log(`vault (pump creator): ${evidence.vaultPda}`);
-
-  const programConfigPda = multisig.getProgramConfigPda({})[0];
-  const programConfig =
-    await multisig.accounts.ProgramConfig.fromAccountAddress(
-      connection,
-      programConfigPda,
-    );
-
-  const createMsIx = multisig.instructions.multisigCreateV2({
-    treasury: programConfig.treasury,
-    creator: deployer.publicKey,
-    multisigPda,
-    configAuthority: null, // config final at creation (spec 6.2)
-    threshold: 1,
-    members: [
-      {
-        key: chain.nativeTreasury,
-        permissions: multisig.types.Permissions.all(),
-      },
-    ],
-    timeLock: 0,
-    createKey: createKey.publicKey,
-    rentCollector: null,
-  });
   await sendTx(connection, [createMsIx], deployer, [createKey], "multisig-create", evidence);
 
   // Assert sole-member configuration on-chain before proceeding.
