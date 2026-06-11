@@ -59,7 +59,10 @@ export function buildCreateTreasuryIx(params: CreateTreasuryParams): {
     ],
     timeLock: 0,
     createKey: params.createKey,
-    rentCollector: null,
+    // D-016: Squads Transaction/Proposal accounts created during execution
+    // lock rent the native treasury paid; with the treasury as collector,
+    // closing them returns that rent to the DAO — never to a platform key.
+    rentCollector: params.predictedNativeTreasury,
   });
   return { ix, multisigPda, vaultPda };
 }

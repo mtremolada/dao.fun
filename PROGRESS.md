@@ -76,6 +76,16 @@
       (conventions in D-017). Wallet adapter deliberately deferred
       (D-017: launch is backend-orchestrated; browser signing is
       Stage 2).
+- [x] Stage 1 polish from the gate findings (tests-first): treasury
+      `rentCollector = nativeTreasury` so Squads execution rent returns to
+      the DAO (D-016; accepted by the real program in the bankrun suite);
+      launch flow `prefund-treasury` step funds the treasury floor + one
+      execution's rent headroom (D-016); sdk `buildProposeIxs` is the
+      production propose path — ExecutionAdapter wrapping, per-transaction
+      hold-up (INV-3), and `descriptionLink == innerInstructionSetHash`
+      (D-017, verified on chain state); canonical INV-9 hash moved to the
+      sdk, backend re-exports. The bankrun matrix legs now drive proposals
+      through this builder.
 - [x] 13.8 GATE 1 mode matrix — all technical legs PASS; awaiting
       operator sign-off. (a) Sovereign leg PASS live on mainnet,
       operator-funded (D-008): full lifecycle proposal -> vote -> finalize

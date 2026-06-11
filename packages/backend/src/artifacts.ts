@@ -7,27 +7,11 @@
  * signer/writable flags, and instruction data — so any tamper or reorder
  * breaks the key and the UI badge turns red (INV-9/10).
  */
-import { createHash } from "node:crypto";
-import type { PublicKey, TransactionInstruction } from "@solana/web3.js";
+import type { PublicKey } from "@solana/web3.js";
 
-export function computeInstructionSetHash(
-  ixs: TransactionInstruction[],
-): string {
-  const h = createHash("sha256");
-  for (const ix of ixs) {
-    h.update(ix.programId.toBuffer());
-    h.update(Buffer.from([ix.keys.length]));
-    for (const meta of ix.keys) {
-      h.update(meta.pubkey.toBuffer());
-      h.update(Buffer.from([meta.isSigner ? 1 : 0, meta.isWritable ? 1 : 0]));
-    }
-    const len = Buffer.alloc(4);
-    len.writeUInt32LE(ix.data.length);
-    h.update(len);
-    h.update(ix.data);
-  }
-  return h.digest("hex");
-}
+// The hash itself lives in the sdk (the proposer publishes it as
+// descriptionLink, D-017); re-exported here for the store's consumers.
+export { computeInstructionSetHash } from "@daofun/sdk";
 
 export interface ProposalArtifact {
   decodedSummary: string;

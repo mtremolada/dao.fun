@@ -60,8 +60,6 @@ import {
   withDepositGoverningTokens,
   withExecuteTransaction,
   withFinalizeVote,
-  withInsertTransaction,
-  withSignOffProposal,
 } from "@solana/spl-governance";
 import * as multisig from "@sqds/multisig";
 import { Clock, start, type ProgramTestContext } from "solana-bankrun";
@@ -80,10 +78,9 @@ import {
 import { resolveGovernanceParams } from "../packages/sdk/src/matrix";
 import { buildCreateDaoIxs } from "../packages/sdk/src/governance";
 import { buildCreateTreasuryIx } from "../packages/sdk/src/treasury";
+import { buildProposeIxs } from "../packages/sdk/src/proposal";
 import { deriveGovernanceChainFromMint } from "../packages/sdk/src/pda";
-import { wrap } from "../packages/sdk/src/execution-adapter";
 import type { GovernanceMode, GovernanceParams } from "../packages/sdk/src/types";
-import { computeInstructionSetHash } from "../packages/backend/src/artifacts";
 import { hashWrappedInstructionSet } from "../packages/backend/src/chain-reader";
 
 process.env.SBF_OUT_DIR = resolve(__dirname, "fixtures");
@@ -283,6 +280,17 @@ async function createDao(
   });
   await send(ctx, [treasury.ix], [createKey]);
 
+  // D-016: the real program accepted rentCollector == native treasury, so
+  // execution rent flows back to the DAO when Squads accounts close.
+  const msInfo = await ctx.banksClient.getAccount(treasury.multisigPda);
+  const [msState] = multisig.accounts.Multisig.fromAccountInfo({
+    executable: false,
+    owner: SQUADS_V4_PROGRAM_ID,
+    lamports: Number(msInfo!.lamports),
+    data: Buffer.from(msInfo!.data),
+  });
+  expect(msState.rentCollector?.toBase58()).toBe(chain.nativeTreasury.toBase58());
+
   const dao = await buildCreateDaoIxs({
     mint: mint.publicKey,
     payer: payer.publicKey,
@@ -422,7 +430,6 @@ async function proposeSweep(
       lamports: VAULT_FUND,
     }),
   ];
-  const innerHash = computeInstructionSetHash(inner);
 
   const msAccount = await ctx.banksClient.getAccount(dao.multisigPda);
   const [ms] = multisig.accounts.Multisig.fromAccountInfo({
@@ -432,77 +439,56 @@ async function proposeSweep(
     data: Buffer.from(msAccount!.data),
   });
   const txIndex = BigInt(ms.transactionIndex.toString()) + 1n;
-  const wrapped = wrap(inner, {
-    multisigPda: dao.multisigPda,
-    vaultIndex: 0,
-    transactionIndex: txIndex,
-    member: dao.nativeTreasury,
+
+  // The production propose builder (D-017: descriptionLink == hash;
+  // per-transaction hold-up; ExecutionAdapter wrapping).
+  const made = await buildProposeIxs({
+    realm: dao.realm,
+    governance: dao.governance,
+    governingTokenMint: dao.mint,
+    tokenOwnerRecord: dao.voterTor,
+    governanceAuthority: dao.voter.publicKey,
+    payer: ctx.payer.publicKey,
+    proposalIndex,
+    name: `sweep vault #${proposalIndex}`,
+    innerIxs: inner,
+    wrapCtx: {
+      multisigPda: dao.multisigPda,
+      vaultIndex: 0,
+      transactionIndex: txIndex,
+      member: dao.nativeTreasury,
+    },
+    holdUpSeconds: dao.params.holdUpSeconds,
   });
 
-  const createIxs: TransactionInstruction[] = [];
-  const proposal = await withCreateProposal(
-    createIxs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    dao.realm,
-    dao.governance,
-    dao.voterTor,
-    `sweep vault #${proposalIndex}`,
-    innerHash, // D-017: descriptionLink carries the artifact hash
-    dao.mint,
-    dao.voter.publicKey,
-    proposalIndex,
-    VoteType.SINGLE_CHOICE,
-    ["Approve"],
-    true,
-    ctx.payer.publicKey,
-  );
-  await send(ctx, createIxs, [dao.voter]);
-
+  await send(ctx, made.groups.create, [dao.voter]);
   const ptAddrs: PublicKey[] = [];
-  for (const [i, ix] of wrapped.entries()) {
-    const ixs: TransactionInstruction[] = [];
-    await withInsertTransaction(
-      ixs,
-      SPL_GOVERNANCE_PROGRAM_ID,
-      PROGRAM_VERSION,
-      dao.governance,
-      proposal,
-      dao.voterTor,
-      dao.voter.publicKey,
-      i,
-      0,
-      dao.params.holdUpSeconds, // tier hold-up on every transaction (INV-3)
-      [createInstructionData(ix)],
-      ctx.payer.publicKey,
-    );
-    await send(ctx, ixs, [dao.voter]);
+  for (const [i, group] of made.groups.inserts.entries()) {
+    await send(ctx, group, [dao.voter]);
     ptAddrs.push(
       await getProposalTransactionAddress(
         SPL_GOVERNANCE_PROGRAM_ID,
         PROGRAM_VERSION,
-        proposal,
+        made.proposal,
         0,
         i,
       ),
     );
   }
+  await send(ctx, made.groups.signOff, [dao.voter]);
 
-  const signOffIxs: TransactionInstruction[] = [];
-  withSignOffProposal(
-    signOffIxs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    dao.realm,
-    dao.governance,
-    proposal,
-    dao.voter.publicKey,
-    undefined,
-    dao.voterTor,
-  );
-  await send(ctx, signOffIxs, [dao.voter]);
+  // D-017 verified on chain state: the proposal's descriptionLink IS the
+  // artifact hash.
+  const onChain = await readGov(ctx, made.proposal, Proposal);
+  expect(onChain.descriptionLink).toBe(made.innerInstructionSetHash);
 
-  return { proposal, wrapped, ptAddrs, innerHash, recipient };
+  return {
+    proposal: made.proposal,
+    wrapped: made.wrapped,
+    ptAddrs,
+    innerHash: made.innerInstructionSetHash,
+    recipient,
+  };
 }
 
 async function castCommunityYes(

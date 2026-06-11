@@ -9,3 +9,5 @@ export * from "./governance";
 export * from "./execution-adapter";
 export * from "./actions";
 export * from "./launch-form";
+export * from "./artifact-hash";
+export * from "./proposal";

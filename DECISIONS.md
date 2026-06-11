@@ -217,9 +217,11 @@ unless the treasury holds execution rent on top. Consequences:
   prefund at launch and/or top up at proposal time;
 - that rent stays locked in the Squads Transaction/Proposal accounts
   unless the multisig sets a `rentCollector` and the accounts are closed
-  after execution (`vault_transaction_accounts_close`) — wire
-  `rentCollector = nativeTreasury` into the vault-creation builder as
-  Stage 1 polish;
+  after execution (`vault_transaction_accounts_close`) — DONE:
+  `buildCreateTreasuryIx` sets `rentCollector = nativeTreasury` (accepted
+  by the real program in the bankrun suite), and the launch flow's
+  `prefund-treasury` step funds the floor + one execution's headroom
+  (`TREASURY_EXECUTION_PREFUND_LAMPORTS`);
 - the gate script now funds the exact shortfall reported by simulation
   before each execute (verified live: two top-ups, then clean execution).
 
@@ -243,9 +245,12 @@ Playwright stub server. Conventions it pins:
   64-hex artifact hash (`publishedArtifactHash`), so the UI finds the
   artifact with no off-chain coordination. The gate-1 proposal predates
   this convention (empty descriptionLink) — the UI accepts a query-param
-  override. The propose/launch builders must set
-  `descriptionLink = artifact hash` (Stage 1 polish, with D-016's
-  rentCollector).
+  override. DONE: the sdk `buildProposeIxs` builder publishes
+  `descriptionLink = innerInstructionSetHash` (verified on the real
+  governance program by the bankrun suite, which re-reads the proposal
+  and matches the field), wraps through the ExecutionAdapter, and stamps
+  the resolved hold-up on every ProposalTransaction. The canonical hash
+  moved to the sdk (`computeInstructionSetHash`); the backend re-exports.
 - **Vote power**: for no-addin realms (D-013) the dashboard reports
   `governingTokenDepositAmount` — deposit IS the vote weight until VSR
   lands.

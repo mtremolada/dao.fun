@@ -5,7 +5,9 @@
  *   create-treasury     Squads multisig, sole member = predicted PDA (INV-7)
  *   collect-launch-fee  launcher -> protocol treasury, exact lamports
  *   create-token        pump create, creator = vault PDA (INV-1)
- *   create-dao          realm + VSR -> [council] -> governance + authority
+ *   create-dao          council mint first -> realm + VSR -> governance
+ *   prefund-treasury    native treasury rent floor + Squads execution
+ *                       rent headroom (D-016)
  *   assert-invariants   INV-5 (mint authority null), INV-7 (sole member),
  *                       predictedPdasMatched — failure HALTS, never improvises
  *
@@ -33,6 +35,16 @@ import {
   type TreasuryRef,
 } from "@daofun/sdk";
 import type { LaunchStep } from "./launch-machine";
+
+/**
+ * D-016, measured live on mainnet: when governance executes the wrapped
+ * Squads chain, the native treasury pays rent for the accounts Squads
+ * creates — VaultTransactionCreate 2,429,040 + ProposalCreate 2,046,240
+ * lamports for a 1-instruction sweep — on top of its own 890,880 floor.
+ * Prefund the floor plus headroom for one execution; rent returns to the
+ * treasury when the Squads accounts close (rentCollector, spec 6.2).
+ */
+export const TREASURY_EXECUTION_PREFUND_LAMPORTS = 6_000_000;
 
 export interface LaunchStepDeps {
   /** Sends ixs (with tx hygiene) signed by the wallet set the API holds. */
@@ -143,6 +155,17 @@ export function buildLaunchSteps(
           );
         }
         return sigs;
+      },
+    },
+    {
+      name: "prefund-treasury",
+      async run() {
+        const ix = SystemProgram.transfer({
+          fromPubkey: args.launcher,
+          toPubkey: predicted.nativeTreasury,
+          lamports: TREASURY_EXECUTION_PREFUND_LAMPORTS,
+        });
+        return [await send([ix], "prefund-treasury")];
       },
     },
     {

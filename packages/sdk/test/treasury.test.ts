@@ -59,14 +59,19 @@ describe("buildCreateTreasuryIx (INV-7 from the first instruction)", () => {
     expect(args.members[0]!.permissions.mask).toBe(7);
   });
 
-  it("config is final: configAuthority null, timeLock 0, no rent collector", () => {
+  it("config is final: configAuthority null, timeLock 0; rentCollector is the native treasury (D-016)", () => {
     const { ix } = build();
     const [decoded] = multisig.generated.multisigCreateV2Struct.deserialize(
       ix.data,
     );
     expect(decoded.args.configAuthority).toBeNull();
     expect(decoded.args.timeLock).toBe(0);
-    expect(decoded.args.rentCollector).toBeNull();
+    // D-016: execution rent locked in Squads Transaction/Proposal accounts
+    // flows back to the DAO when they are closed — never to a platform key.
+    expect(decoded.args.rentCollector).not.toBeNull();
+    expect(new PublicKey(decoded.args.rentCollector!).equals(predicted)).toBe(
+      true,
+    );
   });
 
   it("createKey signs; the predicted PDA does NOT sign (it cannot)", () => {

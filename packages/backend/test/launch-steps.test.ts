@@ -19,7 +19,11 @@ import {
   resolveGovernanceParams,
 } from "@daofun/sdk";
 import { MemoryLaunchStore, runLaunch } from "../src/launch-machine";
-import { buildLaunchSteps, type LaunchStepDeps } from "../src/launch-steps";
+import {
+  TREASURY_EXECUTION_PREFUND_LAMPORTS,
+  buildLaunchSteps,
+  type LaunchStepDeps,
+} from "../src/launch-steps";
 
 const launcher = Keypair.generate().publicKey;
 const protocolTreasury = Keypair.generate().publicKey;
@@ -79,6 +83,7 @@ describe("buildLaunchSteps", () => {
       "collect-launch-fee",
       "create-token",
       "create-dao",
+      "prefund-treasury",
       "assert-invariants",
     ]);
 
@@ -113,6 +118,35 @@ describe("buildLaunchSteps", () => {
     expect(ix.keys[1]!.pubkey.equals(protocolTreasury)).toBe(true);
     // SystemProgram.transfer data: u32 tag + u64 lamports LE
     expect(ix.data.readBigUInt64LE(4)).toBe(50_000_000n);
+  });
+
+  it("prefunds the native treasury with rent floor + Squads execution headroom (D-016)", async () => {
+    const args = makeArgs();
+    const sent: { ixs: TransactionInstruction[]; label: string }[] = [];
+    const deps = makeDeps({
+      sendAndConfirm: vi.fn(async (ixs, label: string) => {
+        sent.push({ ixs, label });
+        return `sig-${label}`;
+      }),
+    });
+    const { steps } = buildLaunchSteps(args, deps);
+    await runLaunch(args.mint.toBase58(), steps, new MemoryLaunchStore());
+
+    const prefund = sent.find((s) => s.label === "prefund-treasury")!;
+    expect(prefund.ixs).toHaveLength(1);
+    const ix = prefund.ixs[0]!;
+    const predicted = deriveGovernanceChainFromMint(args.mint);
+    expect(ix.programId.equals(SystemProgram.programId)).toBe(true);
+    expect(ix.keys[0]!.pubkey.equals(launcher)).toBe(true);
+    expect(ix.keys[1]!.pubkey.equals(predicted.nativeTreasury)).toBe(true);
+    expect(ix.data.readBigUInt64LE(4)).toBe(
+      BigInt(TREASURY_EXECUTION_PREFUND_LAMPORTS),
+    );
+    // Must cover the treasury's own floor plus the two Squads accounts it
+    // pays rent for at execution time (measured live, D-016).
+    expect(TREASURY_EXECUTION_PREFUND_LAMPORTS).toBeGreaterThanOrEqual(
+      890_880 + 2_429_040 + 2_046_240,
+    );
   });
 
   it("INV-1: the token create builder receives the vault PDA as creator", async () => {
