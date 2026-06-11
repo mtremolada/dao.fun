@@ -46,8 +46,13 @@
       bounds + declared-account-set). buyback / provideLiquidity /
       distribute / setParam blocked on open verify items (PumpSwap pool
       ixs, merkle distributor ID, param registry).
-- [ ] 13.6c backend orchestrator (6.6): launch sequence with idempotency
-      keys, resumable state, launch-fee collection, artifact store — next up
+- [~] 13.6c backend orchestrator (6.6): step machine shipped tests-first
+      (5 tests: per-step idempotency keys, resumable partial failure,
+      resume-only-missing, no-op re-resume, persist-every-step) + 12.3
+      artifact store (5 tests: deterministic / order- / flag-sensitive
+      instruction-set hash, keyed retrieval). Remaining: the concrete chain
+      steps (treasury/fee/token/dao txs via the sdk builders) + sqlite
+      store + HTTP API — these are wiring over already-tested builders.
 - [ ] 13.7 app
 - [ ] 13.8 GATE 1 mode matrix on devnet (needs faucet or operator funding;
       integration suites also want solana-test-validator with clones)
