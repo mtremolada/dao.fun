@@ -28,10 +28,16 @@
       1, configAuthority null, off-curve vault, createKey signer shape)
 - [x] Section 5 matrix resolution — tests first (7 tests incl. the v2.0
       mode/tier resolution rule and checked threshold math)
-- [ ] 13.5d Governance (Realms + VSR + council) — next: realm/governance ix
-      builders, VSR registrar config (needs VSR IDL — open verify item),
-      council mint flow; integration tests need a validator with clones
-- [ ] 13.5e ExecutionAdapter — after Governance
+- [x] 13.5d Governance builders — tests first (9 tests: advance-derivation
+      through real builders, VSR baseline-0 byte layout, mode-structural
+      council mint, realm authority -> governance, registrar-before-transfer
+      ordering). VSR IDL resolved + vendored (D-010); veto config verified
+      (D-011); open spec params fixed (D-012). On-chain legs await the
+      Stage 1 integration suite (validator with clones).
+- [x] 13.5e ExecutionAdapter builders — tests first (7 tests: 4-step Squads
+      chain, member signs every step, vault never tx-level signer,
+      unwrap(wrap(x)) == x, plumbing hidden from decoder). Full-path /
+      CU-split tests are integration-bound.
 - [ ] 13.6 keeper, backend orchestrator, action menu builders
 - [ ] 13.7 app
 - [ ] 13.8 GATE 1 mode matrix on devnet

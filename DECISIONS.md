@@ -116,12 +116,50 @@ must budget rent floors for every account it touches; sweep logic must
 leave rent-min in accounts that persist. Add explicit tests at the u64 and
 rent boundaries (INV-6 suite).
 
+## D-010 — VSR IDL resolved and vendored; instructions built manually (2026-06-11)
+
+The deployed VSR (`vsr2nf...`) publishes **no on-chain anchor IDL**
+(verified via `Program.fetchIdl` against mainnet). IDL obtained from
+`@blockworks-foundation/voter-stake-registry-client@0.2.3` (program v0.2.1)
+and vendored at `packages/sdk/src/idl/vsr.json`. That IDL is legacy-anchor
+format, incompatible with @coral-xyz/anchor 0.30's `Program`, so
+`create_registrar` and `configure_voting_mint` are built manually
+(`src/vsr.ts`): sha256("global:<name>")[0..8] discriminators + borsh args,
+account lists pinned to the IDL. Layout is asserted byte-level in
+`test/governance.test.ts`. On-chain validation lands with the Stage 1
+integration suite. Scaled factors use 1e9 == 1.0 (VSR convention).
+
+## D-011 — spl-gov v3 veto semantics verified (2026-06-11)
+
+`GovernanceConfig` in @solana/spl-governance 0.3.28 carries
+`councilVetoVoteThreshold` (council vetoes community proposals) and
+`communityVetoVoteThreshold` (the reverse). Our modes map to:
+council mode -> councilVetoVoteThreshold = YesVotePercentage(vetoPercent);
+all other modes -> Disabled (and no council mint exists — structural).
+Community veto of council proposals: Disabled (council cannot pass its own
+proposals anyway: councilVoteThreshold = Disabled, veto-only council).
+
+## D-012 — Parameters the spec left open, fixed in code (2026-06-11)
+
+- **Voting duration** is absent from the Section 5 tier table. Default
+  `baseVotingTime` = 3 days (`DEFAULT_BASE_VOTING_TIME_SECONDS`),
+  overridable per launch.
+- **Quorum semantics**: spec's `quorumPercent` maps to
+  `communityVoteThreshold = YesVotePercentage(quorum)` — i.e. YES votes
+  must reach that share of max voter weight (VSR-scaled). This is the
+  v3-native reading of "percent of max voter weight".
+- **Vote tipping**: community Disabled (full voting window always — the
+  cypherpunk "exit window" must never be shortened by early tipping);
+  council Strict.
+- `votingCoolOffTime` 0 and `depositExemptProposalCount` 0 for MVP.
+
 ## Open (verify) items — to resolve before/at their first use
 
-- spl-gov v3 Veto vote config (Stage 1, Governance component)
+- ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
 - SPL Governance proposal state-machine immutability after sign-off (INV-9)
 - Merkle distributor deployed program ID (Stage 1, `distribute` action)
 - PumpSwap pool ixs for buyback/provideLiquidity (Stage 1, action menu)
 - `transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)
-- Creator Fee Sharing at-launch config + admin revoke (GATE 0c)
-- VSR registrar seed re-verification on-chain (Stage 1)
+- Creator Fee Sharing at-launch config + admin revoke (GATE 0c; risk D-007)
+- VSR registrar seed + manual ix layout on-chain validation (Stage 1
+  integration; vendored-IDL verification done, D-010)
