@@ -24,9 +24,11 @@
  * keeps account resolution synchronous (Squads' accountsForTransactionExecute
  * only consults the network for ALTs).
  */
+import { createHash } from "node:crypto";
 import {
   Connection,
   PublicKey,
+  SystemProgram,
   TransactionInstruction,
   TransactionMessage,
 } from "@solana/web3.js";
@@ -95,33 +97,203 @@ export function wrap(
     programId: SQUADS_V4_PROGRAM_ID,
   });
 
-  const execute = buildExecuteIx(create, ctx, vaultPda, transactionPda);
+  const execute = buildExecuteIx(
+    decodeVaultMessage(create),
+    ctx,
+    vaultPda,
+    transactionPda,
+  );
 
   return [create, proposalCreate, approve, execute];
 }
 
-function decodeVaultMessage(create: TransactionInstruction) {
-  const [decoded] = multisig.generated.vaultTransactionCreateStruct.deserialize(
-    create.data,
+// Squads v4 TransactionBuffer PDA:
+// ["multisig", multisig, "transaction_buffer", creator, buffer_index (u8)].
+function getTransactionBufferPda(
+  multisigPda: PublicKey,
+  creator: PublicKey,
+  bufferIndex: number,
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("multisig"),
+      multisigPda.toBuffer(),
+      Buffer.from("transaction_buffer"),
+      creator.toBuffer(),
+      Buffer.from([bufferIndex]),
+    ],
+    SQUADS_V4_PROGRAM_ID,
+  )[0];
+}
+
+export interface WrapBufferedResult {
+  /**
+   * bufferCreate, extend×n, vaultTransactionCreateFromBuffer,
+   * proposalCreate, approve, execute — one governance ProposalTransaction
+   * each, executed in order.
+   */
+  ixs: TransactionInstruction[];
+  extendCount: number;
+}
+
+/**
+ * Buffered variant of wrap() for account-heavy inner sets: the plain
+ * VaultTransactionCreate carries the whole serialized vault message, which
+ * overflows the 1232-byte budget of the governance InsertTransaction that
+ * has to carry it (~19-account instructions already exceed it — found by
+ * GATE 0c). Here the message is staged on-chain in chunks through Squads
+ * transaction buffers, then the vault transaction is created FROM the
+ * buffer; the buffer is hash-pinned (sha256 + final size) at creation, so
+ * chunking does not weaken INV-9.
+ */
+export function wrapBuffered(
+  innerIxs: TransactionInstruction[],
+  ctx: WrapContext,
+  chunkSize = 400,
+  bufferIndex = 0,
+): WrapBufferedResult {
+  if (innerIxs.length === 0) {
+    throw new Error("wrapBuffered: inner instruction set is empty");
+  }
+  const [vaultPda] = multisig.getVaultPda({
+    multisigPda: ctx.multisigPda,
+    index: ctx.vaultIndex,
+    programId: SQUADS_V4_PROGRAM_ID,
+  });
+  const [transactionPda] = multisig.getTransactionPda({
+    multisigPda: ctx.multisigPda,
+    index: ctx.transactionIndex,
+    programId: SQUADS_V4_PROGRAM_ID,
+  });
+  const bufferPda = getTransactionBufferPda(
+    ctx.multisigPda,
+    ctx.member,
+    bufferIndex,
   );
-  const messageBytes = Buffer.from(decoded.args.transactionMessage as Uint8Array);
+
+  const messageBytes = Buffer.from(
+    multisig.utils.transactionMessageToMultisigTransactionMessageBytes({
+      message: new TransactionMessage({
+        payerKey: vaultPda,
+        recentBlockhash: PLACEHOLDER_BLOCKHASH,
+        instructions: innerIxs,
+      }),
+      vaultPda,
+    }),
+  );
+  const chunks: Buffer[] = [];
+  for (let offset = 0; offset < messageBytes.length; offset += chunkSize) {
+    chunks.push(messageBytes.subarray(offset, offset + chunkSize));
+  }
+
+  const bufferCreate = multisig.generated.createTransactionBufferCreateInstruction(
+    {
+      multisig: ctx.multisigPda,
+      transactionBuffer: bufferPda,
+      creator: ctx.member,
+      rentPayer: ctx.member,
+    },
+    {
+      args: {
+        bufferIndex,
+        vaultIndex: ctx.vaultIndex,
+        finalBufferHash: Array.from(
+          createHash("sha256").update(messageBytes).digest(),
+        ),
+        finalBufferSize: messageBytes.length,
+        buffer: chunks[0]!,
+      },
+    },
+    SQUADS_V4_PROGRAM_ID,
+  );
+  const extendIxs = chunks.slice(1).map((chunk) =>
+    multisig.generated.createTransactionBufferExtendInstruction(
+      {
+        multisig: ctx.multisigPda,
+        transactionBuffer: bufferPda,
+        creator: ctx.member,
+      },
+      { args: { buffer: chunk } },
+      SQUADS_V4_PROGRAM_ID,
+    ),
+  );
+  const createFromBuffer =
+    multisig.generated.createVaultTransactionCreateFromBufferInstruction(
+      {
+        vaultTransactionCreateItemMultisig: ctx.multisigPda,
+        vaultTransactionCreateItemTransaction: transactionPda,
+        vaultTransactionCreateItemCreator: ctx.member,
+        vaultTransactionCreateItemRentPayer: ctx.member,
+        vaultTransactionCreateItemSystemProgram: SystemProgram.programId,
+        transactionBuffer: bufferPda,
+        creator: ctx.member,
+      },
+      {
+        args: {
+          vaultIndex: ctx.vaultIndex,
+          ephemeralSigners: 0,
+          // the real message comes from the buffer account; the program
+          // REQUIRES this exact six-zero-byte placeholder
+          // (vault_transaction_create_from_buffer.rs: InvalidInstructionArgs
+          // otherwise).
+          transactionMessage: new Uint8Array([0, 0, 0, 0, 0, 0]),
+          memo: null,
+        },
+      },
+      SQUADS_V4_PROGRAM_ID,
+    );
+
+  const proposalCreate = multisig.instructions.proposalCreate({
+    multisigPda: ctx.multisigPda,
+    creator: ctx.member,
+    transactionIndex: ctx.transactionIndex,
+    programId: SQUADS_V4_PROGRAM_ID,
+  });
+  const approve = multisig.instructions.proposalApprove({
+    multisigPda: ctx.multisigPda,
+    transactionIndex: ctx.transactionIndex,
+    member: ctx.member,
+    programId: SQUADS_V4_PROGRAM_ID,
+  });
+  const execute = buildExecuteIx(
+    deserializeVaultMessage(messageBytes),
+    ctx,
+    vaultPda,
+    transactionPda,
+  );
+
+  return {
+    ixs: [bufferCreate, ...extendIxs, createFromBuffer, proposalCreate, approve, execute],
+    extendCount: extendIxs.length,
+  };
+}
+
+type DecodedVaultMessage = Parameters<typeof multisig.utils.isSignerIndex>[0];
+
+function deserializeVaultMessage(messageBytes: Buffer): DecodedVaultMessage {
   const [message] = multisig.types.transactionMessageBeet.deserialize(messageBytes);
   // The beet wire type and the generated account type are structurally
   // identical for the fields the index helpers read (numSigners,
   // numWritable*, accountKeys, instructions); only the array element types
   // differ nominally (number[] vs Uint8Array).
-  return message as unknown as Parameters<
-    typeof multisig.utils.isSignerIndex
-  >[0];
+  return message as unknown as DecodedVaultMessage;
+}
+
+function decodeVaultMessage(create: TransactionInstruction): DecodedVaultMessage {
+  const [decoded] = multisig.generated.vaultTransactionCreateStruct.deserialize(
+    create.data,
+  );
+  return deserializeVaultMessage(
+    Buffer.from(decoded.args.transactionMessage as Uint8Array),
+  );
 }
 
 function buildExecuteIx(
-  create: TransactionInstruction,
+  message: DecodedVaultMessage,
   ctx: WrapContext,
   vaultPda: PublicKey,
   transactionPda: PublicKey,
 ): TransactionInstruction {
-  const message = decodeVaultMessage(create);
   const [proposalPda] = multisig.getProposalPda({
     multisigPda: ctx.multisigPda,
     transactionIndex: ctx.transactionIndex,
@@ -159,24 +331,9 @@ function buildExecuteIx(
   );
 }
 
-/** Recover the inner instructions from a wrapped set (decoder seam). */
-export function unwrap(
-  wrappedIxs: TransactionInstruction[],
-  _ctx: WrapContext,
+function messageToInstructions(
+  message: DecodedVaultMessage,
 ): TransactionInstruction[] {
-  const createDisc = Buffer.from(
-    multisig.generated.vaultTransactionCreateInstructionDiscriminator,
-  );
-  const create = wrappedIxs.find(
-    (ix) =>
-      ix.programId.equals(SQUADS_V4_PROGRAM_ID) &&
-      ix.data.subarray(0, 8).equals(createDisc),
-  );
-  if (!create) {
-    throw new Error("unwrap: no vaultTransactionCreate instruction found");
-  }
-  const message = decodeVaultMessage(create);
-
   return message.instructions.map(
     (compiled) =>
       new TransactionInstruction({
@@ -189,6 +346,78 @@ export function unwrap(
         data: Buffer.from(compiled.data),
       }),
   );
+}
+
+function hasDiscriminator(ix: TransactionInstruction, disc: number[]): boolean {
+  return (
+    ix.programId.equals(SQUADS_V4_PROGRAM_ID) &&
+    ix.data.subarray(0, 8).equals(Buffer.from(disc))
+  );
+}
+
+/**
+ * Recover the inner instructions from a wrapped set (decoder seam).
+ * Handles both wrap() (plain VaultTransactionCreate) and wrapBuffered()
+ * (the vault message reassembled from the buffer chunks).
+ */
+export function unwrap(
+  wrappedIxs: TransactionInstruction[],
+  _ctx: WrapContext,
+): TransactionInstruction[] {
+  const create = wrappedIxs.find((ix) =>
+    hasDiscriminator(
+      ix,
+      multisig.generated.vaultTransactionCreateInstructionDiscriminator,
+    ),
+  );
+  if (create) {
+    return messageToInstructions(decodeVaultMessage(create));
+  }
+
+  // Buffered chain: reassemble the message from bufferCreate + extends.
+  const bufferCreate = wrappedIxs.find((ix) =>
+    hasDiscriminator(
+      ix,
+      multisig.generated.transactionBufferCreateInstructionDiscriminator,
+    ),
+  );
+  if (!bufferCreate) {
+    throw new Error(
+      "unwrap: no vaultTransactionCreate or transactionBufferCreate instruction found",
+    );
+  }
+  const [decoded] = multisig.generated.transactionBufferCreateStruct.deserialize(
+    bufferCreate.data,
+  );
+  const chunks = [Buffer.from(decoded.args.buffer as Uint8Array)];
+  for (const ix of wrappedIxs) {
+    if (
+      hasDiscriminator(
+        ix,
+        multisig.generated.transactionBufferExtendInstructionDiscriminator,
+      )
+    ) {
+      const [ext] = multisig.generated.transactionBufferExtendStruct.deserialize(
+        ix.data,
+      );
+      chunks.push(Buffer.from(ext.args.buffer as Uint8Array));
+    }
+  }
+  const messageBytes = Buffer.concat(chunks);
+  if (messageBytes.length !== decoded.args.finalBufferSize) {
+    throw new Error(
+      `unwrap: buffered message incomplete (${messageBytes.length} of ${decoded.args.finalBufferSize} bytes)`,
+    );
+  }
+  if (
+    !createHash("sha256")
+      .update(messageBytes)
+      .digest()
+      .equals(Buffer.from(decoded.args.finalBufferHash))
+  ) {
+    throw new Error("unwrap: buffered message hash mismatch");
+  }
+  return messageToInstructions(deserializeVaultMessage(messageBytes));
 }
 
 /**

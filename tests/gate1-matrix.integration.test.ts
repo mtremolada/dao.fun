@@ -1,10 +1,9 @@
 /**
- * GATE 1 mode matrix — council + cypherpunk legs (spec Section 13.8).
+ * GATE 1 mode matrix — council, cypherpunk, and VSR legs (spec 13.8).
  *
- * Runs the REAL mainnet program binaries (SPL Governance + Squads v4,
- * dumped by scripts/dump-mainnet-programs.ts) in solana-bankrun, driving
- * the SAME sdk builders the mainnet sovereign run used. Clock control
- * makes the assertions a live cluster cannot give us:
+ * Runs the REAL mainnet program binaries in solana-bankrun via the shared
+ * harness, driving the SAME sdk builders the launch flow uses. Clock
+ * control gives the assertions a live cluster cannot:
  *
  * - council leg: a council veto moves the proposal to Vetoed and execution
  *   is refused (INV-4); a NON-vetoed proposal on the same DAO executes —
@@ -12,60 +11,40 @@
  * - cypherpunk leg: the realm is built with NO council accounts
  *   (structural, spec 12.2), the 72h hold-up gates execution (INV-3),
  *   and the full Squads custody chain moves the vault's lamports.
- * - both legs: the instruction-set hash recomputed from the on-chain
+ * - VSR leg: baseline-0 lockup weighting incl. clock-warp decay, plus the
+ *   D-013 re-verification (Token-2022 rejected by create_registrar).
+ * - all legs: the instruction-set hash recomputed from the on-chain
  *   ProposalTransactions matches the published artifact hash (INV-9).
- *
- * Production params throughout (sovereign/micro deviation-free: 3-day
- * voting window included — we warp instead of shrinking it).
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import BN from "bn.js";
 import {
   Keypair,
-  PublicKey,
   SystemProgram,
-  Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
 import {
-  AuthorityType,
   MINT_SIZE,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
   createInitializeMint2Instruction,
   createMintToInstruction,
-  createSetAuthorityInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import {
-  GovernanceAccountParser,
   InstructionExecutionStatus,
   Proposal,
   ProposalState,
   ProposalTransaction,
   Realm,
-  Vote,
-  VoteChoice,
-  VoteKind,
   VoteType,
-  createInstructionData,
-  getProposalTransactionAddress,
   getTokenOwnerRecordAddress,
-  withCastVote,
   withCreateProposal,
   withCreateTokenOwnerRecord,
-  withDepositGoverningTokens,
-  withExecuteTransaction,
-  withFinalizeVote,
 } from "@solana/spl-governance";
-import * as multisig from "@sqds/multisig";
-import { Clock, start, type ProgramTestContext } from "solana-bankrun";
+import { start } from "solana-bankrun";
 import {
   SPL_GOVERNANCE_PROGRAM_ID,
-  SQUADS_V4_PROGRAM_ID,
   VSR_PROGRAM_ID,
 } from "../packages/sdk/src/constants";
 import {
@@ -77,545 +56,29 @@ import {
 } from "../packages/sdk/src/vsr";
 import { resolveGovernanceParams } from "../packages/sdk/src/matrix";
 import { buildCreateDaoIxs } from "../packages/sdk/src/governance";
-import { buildCreateTreasuryIx } from "../packages/sdk/src/treasury";
-import { buildProposeIxs } from "../packages/sdk/src/proposal";
-import { deriveGovernanceChainFromMint } from "../packages/sdk/src/pda";
-import type { GovernanceMode, GovernanceParams } from "../packages/sdk/src/types";
-import { hashWrappedInstructionSet } from "../packages/backend/src/chain-reader";
-
-process.env.SBF_OUT_DIR = resolve(__dirname, "fixtures");
-
-const PROGRAM_VERSION = 3;
-const SUPPLY = 200_000_000_000n; // 200k tokens at 6 decimals, like the mainnet run
-const BASE_VOTING_TIME_S = 3 * 86400; // production default (D-012) — we warp
-const MICRO_HOLDUP_S = 72 * 3600;
-const VAULT_FUND = 890_880;
-// D-016: the native treasury pays Squads rent at execution time
-// (VaultTransactionCreate 2,429,040 + ProposalCreate 2,046,240) on top of
-// its own 890,880 floor.
-const TREASURY_PREFUND = 6_000_000;
-const TEST_TIMEOUT = 300_000;
-
-const squadsConfig = JSON.parse(
-  readFileSync(resolve(__dirname, "fixtures/squads-program-config.json"), "utf8"),
-) as { address: string; owner: string; lamports: number; treasury: string; dataBase64: string };
-
-// ---------- bankrun harness ----------
-
-async function startCtx(): Promise<ProgramTestContext> {
-  return start(
-    [
-      { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
-      { name: "squads_v4", programId: SQUADS_V4_PROGRAM_ID },
-    ],
-    [
-      {
-        address: new PublicKey(squadsConfig.address),
-        info: {
-          lamports: squadsConfig.lamports,
-          data: Buffer.from(squadsConfig.dataBase64, "base64"),
-          owner: new PublicKey(squadsConfig.owner),
-          executable: false,
-        },
-      },
-    ],
-  );
-}
-
-async function send(
-  ctx: ProgramTestContext,
-  ixs: TransactionInstruction[],
-  signers: Keypair[],
-): Promise<void> {
-  const [blockhash] = (await ctx.banksClient.getLatestBlockhash())!;
-  const tx = new Transaction();
-  tx.add(...ixs);
-  tx.recentBlockhash = blockhash;
-  tx.feePayer = ctx.payer.publicKey;
-  tx.sign(ctx.payer, ...signers.filter((s) => !s.publicKey.equals(ctx.payer.publicKey)));
-  await ctx.banksClient.processTransaction(tx);
-}
-
-/** Sends expecting failure; returns error + program logs for assertions. */
-async function sendExpectFail(
-  ctx: ProgramTestContext,
-  ixs: TransactionInstruction[],
-  signers: Keypair[],
-): Promise<string> {
-  const [blockhash] = (await ctx.banksClient.getLatestBlockhash())!;
-  const tx = new Transaction();
-  tx.add(...ixs);
-  tx.recentBlockhash = blockhash;
-  tx.feePayer = ctx.payer.publicKey;
-  tx.sign(ctx.payer, ...signers.filter((s) => !s.publicKey.equals(ctx.payer.publicKey)));
-  const result = await ctx.banksClient.tryProcessTransaction(tx);
-  if (result.result === null) {
-    throw new Error("transaction unexpectedly succeeded");
-  }
-  return [result.result, ...(result.meta?.logMessages ?? [])].join("\n");
-}
-
-async function warpSeconds(ctx: ProgramTestContext, seconds: number) {
-  const clock = await ctx.banksClient.getClock();
-  ctx.setClock(
-    new Clock(
-      clock.slot,
-      clock.epochStartTimestamp,
-      clock.epoch,
-      clock.leaderScheduleEpoch,
-      clock.unixTimestamp + BigInt(seconds),
-    ),
-  );
-}
-
-async function balance(ctx: ProgramTestContext, addr: PublicKey): Promise<number> {
-  const acc = await ctx.banksClient.getAccount(addr);
-  return acc ? Number(acc.lamports) : 0;
-}
-
-async function readGov<T>(
-  ctx: ProgramTestContext,
-  addr: PublicKey,
-  type: new (...args: never[]) => T,
-): Promise<T> {
-  const info = await ctx.banksClient.getAccount(addr);
-  if (!info) throw new Error(`account ${addr.toBase58()} not found`);
-  return GovernanceAccountParser(type as never)(addr, {
-    executable: info.executable,
-    owner: info.owner,
-    lamports: Number(info.lamports),
-    data: Buffer.from(info.data),
-  }).account as T;
-}
-
-// ---------- DAO setup (same builders as the launch flow) ----------
-
-interface Dao {
-  mint: PublicKey;
-  realm: PublicKey;
-  governance: PublicKey;
-  nativeTreasury: PublicKey;
-  multisigPda: PublicKey;
-  vaultPda: PublicKey;
-  params: GovernanceParams;
-  voter: Keypair;
-  voterTor: PublicKey;
-  councilMint: PublicKey | null;
-  councilMember: Keypair;
-  councilTor: PublicKey | null;
-}
-
-async function mintRent(ctx: ProgramTestContext): Promise<bigint> {
-  const rent = await ctx.banksClient.getRent();
-  return rent.minimumBalance(BigInt(MINT_SIZE));
-}
-
-async function createDao(
-  ctx: ProgramTestContext,
-  mode: GovernanceMode,
-): Promise<Dao> {
-  const payer = ctx.payer;
-  const voter = Keypair.generate();
-  const councilMember = Keypair.generate();
-  const mint = Keypair.generate();
-  const councilMintKp = Keypair.generate();
-  const createKey = Keypair.generate();
-  const rentLamports = Number(await mintRent(ctx));
-
-  // Community mint: full supply to the voter, then no mint authority
-  // (mirrors a pump launch's null authority, INV-5).
-  const voterAta = getAssociatedTokenAddressSync(mint.publicKey, voter.publicKey);
-  await send(
-    ctx,
-    [
-      SystemProgram.transfer({
-        fromPubkey: payer.publicKey,
-        toPubkey: voter.publicKey,
-        lamports: 1_000_000_000,
-      }),
-      SystemProgram.transfer({
-        fromPubkey: payer.publicKey,
-        toPubkey: councilMember.publicKey,
-        lamports: 1_000_000_000,
-      }),
-      SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
-        newAccountPubkey: mint.publicKey,
-        lamports: rentLamports,
-        space: MINT_SIZE,
-        programId: TOKEN_PROGRAM_ID,
-      }),
-      createInitializeMint2Instruction(mint.publicKey, 6, payer.publicKey, null),
-      createAssociatedTokenAccountIdempotentInstruction(
-        payer.publicKey,
-        voterAta,
-        voter.publicKey,
-        mint.publicKey,
-      ),
-      createMintToInstruction(mint.publicKey, voterAta, payer.publicKey, SUPPLY),
-      createSetAuthorityInstruction(
-        mint.publicKey,
-        payer.publicKey,
-        AuthorityType.MintTokens,
-        null,
-      ),
-    ],
-    [mint],
-  );
-
-  const params = resolveGovernanceParams({
-    mode,
-    tier: "micro",
-    communitySupply: SUPPLY,
-  });
-
-  // Treasury first, against the advance-derived native treasury (the same
-  // ordering the launch orchestrator uses).
-  const chain = deriveGovernanceChainFromMint(mint.publicKey);
-  const treasury = buildCreateTreasuryIx({
-    payer: payer.publicKey,
-    predictedNativeTreasury: chain.nativeTreasury,
-    createKey: createKey.publicKey,
-    programConfigTreasury: new PublicKey(squadsConfig.treasury),
-  });
-  await send(ctx, [treasury.ix], [createKey]);
-
-  // D-016: the real program accepted rentCollector == native treasury, so
-  // execution rent flows back to the DAO when Squads accounts close.
-  const msInfo = await ctx.banksClient.getAccount(treasury.multisigPda);
-  const [msState] = multisig.accounts.Multisig.fromAccountInfo({
-    executable: false,
-    owner: SQUADS_V4_PROGRAM_ID,
-    lamports: Number(msInfo!.lamports),
-    data: Buffer.from(msInfo!.data),
-  });
-  expect(msState.rentCollector?.toBase58()).toBe(chain.nativeTreasury.toBase58());
-
-  const dao = await buildCreateDaoIxs({
-    mint: mint.publicKey,
-    payer: payer.publicKey,
-    mode,
-    params,
-    ...(mode === "council"
-      ? {
-          council: {
-            mint: councilMintKp.publicKey,
-            members: [councilMember.publicKey],
-            vetoThresholdPercent: 50,
-            mintRentLamports: BigInt(rentLamports),
-          },
-        }
-      : {}),
-    baseVotingTimeSeconds: BASE_VOTING_TIME_S,
-    communityVoterWeightAddin: null, // no-addin realm (D-013 MVP fallback)
-  });
-  expect(dao.realm.toBase58()).toBe(chain.realm.toBase58());
-  expect(dao.nativeTreasury.toBase58()).toBe(chain.nativeTreasury.toBase58());
-
-  // Execution order is the builder's contract: council mint first (the
-  // realm registers it), then realm, then governance.
-  if (dao.groups.council.length > 0) {
-    await send(ctx, dao.groups.council, [councilMintKp]);
-  }
-  await send(ctx, dao.groups.realmSetup, []);
-  await send(ctx, dao.groups.governanceSetup, []);
-
-  // Voting power: deposit the full supply (no-addin: deposit == weight).
-  const depositIxs: TransactionInstruction[] = [];
-  await withDepositGoverningTokens(
-    depositIxs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    dao.realm,
-    voterAta,
-    mint.publicKey,
-    voter.publicKey,
-    voter.publicKey,
-    payer.publicKey,
-    new BN(SUPPLY.toString()),
-  );
-  await send(ctx, depositIxs, [voter]);
-  const voterTor = await getTokenOwnerRecordAddress(
-    SPL_GOVERNANCE_PROGRAM_ID,
-    dao.realm,
-    mint.publicKey,
-    voter.publicKey,
-  );
-
-  // Council membership: deposit the 1 council token the ceremony minted.
-  let councilTor: PublicKey | null = null;
-  if (mode === "council") {
-    const memberAta = getAssociatedTokenAddressSync(
-      councilMintKp.publicKey,
-      councilMember.publicKey,
-      true,
-    );
-    const ixs: TransactionInstruction[] = [];
-    await withDepositGoverningTokens(
-      ixs,
-      SPL_GOVERNANCE_PROGRAM_ID,
-      PROGRAM_VERSION,
-      dao.realm,
-      memberAta,
-      councilMintKp.publicKey,
-      councilMember.publicKey,
-      councilMember.publicKey,
-      payer.publicKey,
-      new BN(1),
-    );
-    await send(ctx, ixs, [councilMember]);
-    councilTor = await getTokenOwnerRecordAddress(
-      SPL_GOVERNANCE_PROGRAM_ID,
-      dao.realm,
-      councilMintKp.publicKey,
-      councilMember.publicKey,
-    );
-  }
-
-  // Fund: vault gets the lamports the proposals will sweep; treasury gets
-  // its floor + Squads execution rent (D-016).
-  await send(
-    ctx,
-    [
-      SystemProgram.transfer({
-        fromPubkey: payer.publicKey,
-        toPubkey: treasury.vaultPda,
-        lamports: VAULT_FUND,
-      }),
-      SystemProgram.transfer({
-        fromPubkey: payer.publicKey,
-        toPubkey: dao.nativeTreasury,
-        lamports: TREASURY_PREFUND,
-      }),
-    ],
-    [],
-  );
-
-  return {
-    mint: mint.publicKey,
-    realm: dao.realm,
-    governance: dao.governance,
-    nativeTreasury: dao.nativeTreasury,
-    multisigPda: treasury.multisigPda,
-    vaultPda: treasury.vaultPda,
-    params,
-    voter,
-    voterTor,
-    councilMint: mode === "council" ? councilMintKp.publicKey : null,
-    councilMember,
-    councilTor,
-  };
-}
-
-// ---------- proposal lifecycle ----------
-
-interface MadeProposal {
-  proposal: PublicKey;
-  wrapped: TransactionInstruction[];
-  ptAddrs: PublicKey[];
-  innerHash: string;
-  recipient: PublicKey;
-}
-
-async function proposeSweep(
-  ctx: ProgramTestContext,
-  dao: Dao,
-  proposalIndex: number,
-): Promise<MadeProposal> {
-  const recipient = Keypair.generate().publicKey;
-  const inner = [
-    SystemProgram.transfer({
-      fromPubkey: dao.vaultPda,
-      toPubkey: recipient,
-      lamports: VAULT_FUND,
-    }),
-  ];
-
-  const msAccount = await ctx.banksClient.getAccount(dao.multisigPda);
-  const [ms] = multisig.accounts.Multisig.fromAccountInfo({
-    executable: false,
-    owner: SQUADS_V4_PROGRAM_ID,
-    lamports: Number(msAccount!.lamports),
-    data: Buffer.from(msAccount!.data),
-  });
-  const txIndex = BigInt(ms.transactionIndex.toString()) + 1n;
-
-  // The production propose builder (D-017: descriptionLink == hash;
-  // per-transaction hold-up; ExecutionAdapter wrapping).
-  const made = await buildProposeIxs({
-    realm: dao.realm,
-    governance: dao.governance,
-    governingTokenMint: dao.mint,
-    tokenOwnerRecord: dao.voterTor,
-    governanceAuthority: dao.voter.publicKey,
-    payer: ctx.payer.publicKey,
-    proposalIndex,
-    name: `sweep vault #${proposalIndex}`,
-    innerIxs: inner,
-    wrapCtx: {
-      multisigPda: dao.multisigPda,
-      vaultIndex: 0,
-      transactionIndex: txIndex,
-      member: dao.nativeTreasury,
-    },
-    holdUpSeconds: dao.params.holdUpSeconds,
-  });
-
-  await send(ctx, made.groups.create, [dao.voter]);
-  const ptAddrs: PublicKey[] = [];
-  for (const [i, group] of made.groups.inserts.entries()) {
-    await send(ctx, group, [dao.voter]);
-    ptAddrs.push(
-      await getProposalTransactionAddress(
-        SPL_GOVERNANCE_PROGRAM_ID,
-        PROGRAM_VERSION,
-        made.proposal,
-        0,
-        i,
-      ),
-    );
-  }
-  await send(ctx, made.groups.signOff, [dao.voter]);
-
-  // D-017 verified on chain state: the proposal's descriptionLink IS the
-  // artifact hash.
-  const onChain = await readGov(ctx, made.proposal, Proposal);
-  expect(onChain.descriptionLink).toBe(made.innerInstructionSetHash);
-
-  return {
-    proposal: made.proposal,
-    wrapped: made.wrapped,
-    ptAddrs,
-    innerHash: made.innerInstructionSetHash,
-    recipient,
-  };
-}
-
-async function castCommunityYes(
-  ctx: ProgramTestContext,
-  dao: Dao,
-  proposal: PublicKey,
-) {
-  const ixs: TransactionInstruction[] = [];
-  await withCastVote(
-    ixs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    dao.realm,
-    dao.governance,
-    proposal,
-    dao.voterTor,
-    dao.voterTor,
-    dao.voter.publicKey,
-    dao.mint,
-    new Vote({
-      voteType: VoteKind.Approve,
-      approveChoices: [new VoteChoice({ rank: 0, weightPercentage: 100 })],
-      deny: undefined,
-      veto: undefined,
-    }),
-    ctx.payer.publicKey,
-  );
-  await send(ctx, ixs, [dao.voter]);
-}
-
-async function castCouncilVeto(
-  ctx: ProgramTestContext,
-  dao: Dao,
-  proposal: PublicKey,
-) {
-  const ixs: TransactionInstruction[] = [];
-  await withCastVote(
-    ixs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    dao.realm,
-    dao.governance,
-    proposal,
-    dao.voterTor, // proposal owner's record
-    dao.councilTor!,
-    dao.councilMember.publicKey,
-    dao.councilMint!, // the VETOING token is the council mint (D-011)
-    new Vote({
-      voteType: VoteKind.Veto,
-      approveChoices: undefined,
-      deny: undefined,
-      veto: true,
-    }),
-    ctx.payer.publicKey,
-  );
-  await send(ctx, ixs, [dao.councilMember]);
-}
-
-async function finalizeAfterVotingWindow(
-  ctx: ProgramTestContext,
-  dao: Dao,
-  proposal: PublicKey,
-): Promise<ProposalState> {
-  await warpSeconds(ctx, BASE_VOTING_TIME_S + 10);
-  const ixs: TransactionInstruction[] = [];
-  await withFinalizeVote(
-    ixs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    dao.realm,
-    dao.governance,
-    proposal,
-    dao.voterTor,
-    dao.mint,
-  );
-  await send(ctx, ixs, []);
-  return (await readGov(ctx, proposal, Proposal)).state;
-}
-
-async function executeIxsFor(
-  dao: Dao,
-  made: MadeProposal,
-  i: number,
-): Promise<TransactionInstruction[]> {
-  const ixs: TransactionInstruction[] = [];
-  await withExecuteTransaction(
-    ixs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    dao.governance,
-    made.proposal,
-    made.ptAddrs[i]!,
-    [createInstructionData(made.wrapped[i]!)],
-  );
-  return ixs;
-}
-
-async function executeAll(ctx: ProgramTestContext, dao: Dao, made: MadeProposal) {
-  for (let i = 0; i < made.ptAddrs.length; i++) {
-    await send(ctx, await executeIxsFor(dao, made, i), []);
-  }
-}
-
-/** INV-9: re-read the ProposalTransactions and hash what will execute. */
-async function chainHashOf(
-  ctx: ProgramTestContext,
-  made: MadeProposal,
-): Promise<string | null> {
-  const onChain: TransactionInstruction[] = [];
-  for (const addr of made.ptAddrs) {
-    const pt = await readGov(ctx, addr, ProposalTransaction);
-    for (const d of pt.getAllInstructions()) {
-      onChain.push(
-        new TransactionInstruction({
-          programId: d.programId,
-          keys: d.accounts.map((a) => ({
-            pubkey: a.pubkey,
-            isSigner: a.isSigner,
-            isWritable: a.isWritable,
-          })),
-          data: Buffer.from(d.data),
-        }),
-      );
-    }
-  }
-  return hashWrappedInstructionSet(onChain);
-}
+import {
+  BASE_VOTING_TIME_S,
+  MICRO_HOLDUP_S,
+  PROGRAM_VERSION,
+  SUPPLY,
+  TEST_TIMEOUT,
+  VAULT_FUND,
+  balance,
+  castCommunityYes,
+  castCouncilVeto,
+  chainHashOf,
+  createDao,
+  executeAll,
+  executeIxsFor,
+  finalizeAfterVotingWindow,
+  mintRent,
+  proposeSweep,
+  readGov,
+  send,
+  sendExpectFail,
+  startCtx,
+  warpSeconds,
+} from "./helpers/bankrun-harness";
 
 // ---------- the legs ----------
 
@@ -1026,3 +489,4 @@ describe("GATE 1 cypherpunk leg (real binaries, bankrun)", () => {
     TEST_TIMEOUT,
   );
 });
+

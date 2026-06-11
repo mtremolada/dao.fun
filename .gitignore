@@ -12,3 +12,6 @@ coverage/
 test-results/
 playwright-report/
 next-env.d.ts
+
+# program binaries are committed gzipped; the harness inflates them
+tests/fixtures/*.so

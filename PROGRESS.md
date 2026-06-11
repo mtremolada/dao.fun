@@ -15,8 +15,19 @@
       override, D-008) — vault-as-creator + permissionless collect proven
       live; evidence in GATES.md; rent-floor lessons in D-009; awaiting
       formal operator sign-off line in GATES.md
-- [ ] GATE 0b (soft) — note D-004: v2 creates are already Token-2022; re-scope
-- [ ] GATE 0c (soft) — fee shares at launch for PDA creator
+- [ ] GATE 0b (soft) — note D-004: v2 creates are already Token-2022 (the
+      GATE 0c bankrun leg launched one against the real binary); the open
+      question narrows to transfer-fee extensions
+- [x] GATE 0c (soft) → **DETERMINED 2026-06-11 on real binaries** (D-019,
+      evidence in GATES.md): at-launch fee shares for a PDA creator are
+      impossible (PumpFees requires the creator as the paying signer) —
+      MVP protocol revenue = flat launch fee, per the spec fallback. The
+      DAO CAN configure its own fee sharing post-launch via the custody
+      chain (verified end-to-end: atomic create+set {vault 90/protocol
+      10} through proposal -> vote -> hold-up -> execute). Forced sdk
+      machinery: buffered ExecutionAdapter wrapping (wrapBuffered +
+      buffered unwrap), auto-switch in buildProposeIxs, v0+ALT insert
+      packing, 400k CU floor for stacked executes.
 
 ## Stage 1 — SDK started early by operator decision (2026-06-11), while
 ## GATE 0a awaits funding. No fund-moving devnet txs before 0a sign-off.

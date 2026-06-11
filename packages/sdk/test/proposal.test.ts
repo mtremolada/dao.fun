@@ -116,4 +116,43 @@ describe("buildProposeIxs", () => {
       buildProposeIxs(makeParams({ innerIxs: [] })),
     ).rejects.toThrow(/empty/);
   });
+
+  it("auto-switches to the buffered chain for account-heavy inner sets (insert size budget)", async () => {
+    // ~19-account instructions (pump updateFeeShares) overflow the plain
+    // VaultTransactionCreate's insert; the builder must go buffered.
+    const heavy = new TransactionInstruction({
+      programId: Keypair.generate().publicKey,
+      keys: Array.from({ length: 19 }, (_, i) => ({
+        pubkey: Keypair.generate().publicKey,
+        isSigner: i === 2,
+        isWritable: i % 3 === 0,
+      })),
+      data: Buffer.alloc(80, 7),
+    });
+    // payer == proposer keeps inserts single-signer.
+    const authority = Keypair.generate().publicKey;
+    const p = makeParams({
+      innerIxs: [heavy],
+      governanceAuthority: authority,
+      payer: authority,
+    });
+    const result = await buildProposeIxs(p);
+    expect(result.buffered).toBe(true);
+    expect(result.wrapped.length).toBeGreaterThan(4); // buffer steps added
+    // Every insert's DATA must fit a v0+ALT-packed 1232-byte tx (~130
+    // bytes of outer overhead once the governance accounts are table-
+    // compressed). The EXECUTE insert's account metas are irreducible —
+    // the send layer packs oversized inserts as v0+ALT (see the gate
+    // harness); plain-legacy fit is only guaranteed for the buffer steps.
+    for (const group of result.groups.inserts) {
+      expect(group[0]!.data.length).toBeLessThanOrEqual(1100);
+    }
+    // INV-9/10 still hold through the buffered chain
+    const recovered = unwrap(result.wrapped, p.wrapCtx);
+    expect(computeInstructionSetHash(recovered)).toBe(
+      result.innerInstructionSetHash,
+    );
+    // a light set stays on the plain 4-step chain
+    expect((await buildProposeIxs(makeParams())).buffered).toBe(false);
+  });
 });

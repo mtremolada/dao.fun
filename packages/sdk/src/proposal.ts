@@ -24,9 +24,16 @@ import {
 } from "@solana/spl-governance";
 import { SPL_GOVERNANCE_PROGRAM_ID } from "./constants";
 import { computeInstructionSetHash } from "./artifact-hash";
-import { wrap, type WrapContext } from "./execution-adapter";
+import { wrap, wrapBuffered, type WrapContext } from "./execution-adapter";
 
 const PROGRAM_VERSION = 3;
+/**
+ * Max VaultTransactionCreate data that still fits a governance
+ * InsertTransaction inside the 1232-byte transaction limit (measured:
+ * 732 bytes of create data made a 1420-byte insert tx). Above this the
+ * builder switches to the buffered Squads chain.
+ */
+const PLAIN_CREATE_DATA_BUDGET = 500;
 
 export interface ProposeParams {
   realm: PublicKey;
@@ -53,6 +60,8 @@ export interface ProposeResult {
   innerInstructionSetHash: string;
   /** The ExecutionAdapter chain actually inserted on-chain. */
   wrapped: TransactionInstruction[];
+  /** True when the inner set was too large for a plain wrap (buffered chain). */
+  buffered: boolean;
   /** Send in order; each inner array is one transaction. */
   groups: {
     create: TransactionInstruction[];
@@ -70,7 +79,11 @@ export async function buildProposeIxs(
     throw new Error("buildProposeIxs: inner instruction set is empty");
   }
   const innerInstructionSetHash = computeInstructionSetHash(p.innerIxs);
-  const wrapped = wrap(p.innerIxs, p.wrapCtx);
+  // Account-heavy inner sets overflow the InsertTransaction carrying the
+  // plain VaultTransactionCreate — switch to the buffered Squads chain.
+  const plain = wrap(p.innerIxs, p.wrapCtx);
+  const buffered = plain[0]!.data.length > PLAIN_CREATE_DATA_BUDGET;
+  const wrapped = buffered ? wrapBuffered(p.innerIxs, p.wrapCtx).ixs : plain;
 
   const create: TransactionInstruction[] = [];
   const proposal = await withCreateProposal(
@@ -129,6 +142,7 @@ export async function buildProposeIxs(
     proposal,
     innerInstructionSetHash,
     wrapped,
+    buffered,
     groups: { create, inserts, signOff },
   };
 }

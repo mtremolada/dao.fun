@@ -7,11 +7,22 @@
  *   npx tsx scripts/dump-mainnet-programs.ts
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
+import {
+  FEE_PROGRAM_GLOBAL_PDA,
+  GLOBAL_PDA,
+  PUMP_FEE_CONFIG_PDA,
+  getGlobalParamsPda,
+  getSolVaultPda,
+} from "@pump-fun/pump-sdk";
 import * as multisig from "@sqds/multisig";
 import {
+  PUMP_AMM_PROGRAM_ID,
+  PUMP_FEES_PROGRAM_ID,
+  PUMP_PROGRAM_ID,
   SPL_GOVERNANCE_PROGRAM_ID,
   SQUADS_V4_PROGRAM_ID,
   VSR_PROGRAM_ID,
@@ -31,10 +42,50 @@ const PROGRAMS: { name: string; id: PublicKey }[] = [
   { name: "vsr", id: VSR_PROGRAM_ID },
   // bankrun's program-test preloads classic SPL Token but NOT Token-2022.
   { name: "token_2022", id: TOKEN_2022_PROGRAM_ID },
+  // The pump stack (GATE 0c experiments).
+  { name: "pump", id: PUMP_PROGRAM_ID },
+  { name: "pump_fees", id: PUMP_FEES_PROGRAM_ID },
+  { name: "pump_amm", id: PUMP_AMM_PROGRAM_ID },
 ];
 
+// Live state accounts the pump stack reads (config/global PDAs).
+const ACCOUNTS: { label: string; address: PublicKey }[] = [
+  { label: "pump-global", address: GLOBAL_PDA },
+  { label: "pump-fee-config", address: PUMP_FEE_CONFIG_PDA },
+  { label: "fee-program-global", address: FEE_PROGRAM_GLOBAL_PDA },
+  { label: "mayhem-global-params", address: getGlobalParamsPda() },
+  { label: "mayhem-sol-vault", address: getSolVaultPda() },
+];
+
+async function dumpAccounts(connection: Connection) {
+  const out = join(OUT, "pump-accounts.json");
+  if (existsSync(out) && !FORCE) {
+    console.log(`${out} exists, skipping`);
+    return;
+  }
+  const entries = [];
+  for (const { label, address } of ACCOUNTS) {
+    const info = await connection.getAccountInfo(address);
+    if (!info) {
+      console.log(`${label} (${address.toBase58()}): missing on mainnet, skipped`);
+      continue;
+    }
+    entries.push({
+      label,
+      address: address.toBase58(),
+      owner: info.owner.toBase58(),
+      lamports: info.lamports,
+      dataBase64: info.data.toString("base64"),
+    });
+    console.log(`${label}: ${info.data.length} bytes`);
+  }
+  writeFileSync(out, JSON.stringify(entries, null, 2));
+}
+
 async function dumpProgram(connection: Connection, name: string, id: PublicKey) {
-  const out = join(OUT, `${name}.so`);
+  // Committed gzipped (zero-padded 10 MB programdata compresses ~10x);
+  // the test harness inflates to .so before bankrun loads it.
+  const out = join(OUT, `${name}.so.gz`);
   if (existsSync(out) && !FORCE) {
     console.log(`${out} exists, skipping`);
     return;
@@ -46,8 +97,11 @@ async function dumpProgram(connection: Connection, name: string, id: PublicKey) 
   const pd = await connection.getAccountInfo(programData);
   if (!pd) throw new Error(`${name}: programdata missing`);
   const elf = pd.data.subarray(PROGRAMDATA_HEADER);
-  writeFileSync(out, elf);
-  console.log(`${out}: ${elf.length} bytes (programdata ${programData.toBase58()})`);
+  const gz = gzipSync(elf, { level: 9 });
+  writeFileSync(out, gz);
+  console.log(
+    `${out}: ${gz.length} bytes gz (elf ${elf.length}, programdata ${programData.toBase58()})`,
+  );
 }
 
 async function dumpSquadsProgramConfig(connection: Connection) {
@@ -83,6 +137,7 @@ async function main() {
   const connection = new Connection(RPC, "confirmed");
   for (const p of PROGRAMS) await dumpProgram(connection, p.name, p.id);
   await dumpSquadsProgramConfig(connection);
+  await dumpAccounts(connection);
 }
 
 void main();

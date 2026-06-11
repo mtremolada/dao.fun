@@ -287,6 +287,46 @@ Also: bankrun's program-test preloads classic SPL Token but not
 Token-2022 — the dump script fetches it too. The CI integration job now
 runs `pnpm test:integration` hermetically (no validator, no network).
 
+## D-019 — GATE 0c determined on real binaries; size/CU machinery findings (2026-06-11)
+
+GATE 0c verdict (evidence in GATES.md): **at-launch fee shares for a PDA
+creator are impossible** — the deployed PumpFees binary refuses
+`createFeeSharingConfig` from any payer that is not the coin creator
+(`NotAuthorized`, and the payer is the instruction's only signer), so
+D-007 is confirmed as a hard on-chain constraint and MVP protocol revenue
+stays launch-fee-only. **But the DAO can configure its own fee sharing
+post-launch**: the vault PDA satisfies the creator-signature requirement
+via invoke_signed through the governance-executed Squads chain — create +
+set {vault 90%, protocol 10%} executed atomically and decoded back.
+Fee-sharing becomes a 6.8 menu action (build at first need), not a
+launch-ceremony feature.
+
+Machinery the gate forced, all now in the sdk/harness:
+
+- **Insert size binds before CU.** A governance `InsertTransaction`
+  carrying a plain `VaultTransactionCreate` overflows the 1232-byte tx at
+  ~500 bytes of create data (a 19-account inner ix is already too big).
+  `buildProposeIxs` auto-switches to the buffered chain above that
+  budget.
+- **`wrapBuffered`**: the vault message is staged on-chain in chunks
+  (Squads `transactionBufferCreate`/`Extend`, hash-and-size-pinned at
+  creation — chunking cannot weaken INV-9), then
+  `vaultTransactionCreateFromBuffer` builds the vault transaction. The
+  deployed program REQUIRES the args' `transaction_message` to be the
+  exact six-zero-byte placeholder. `unwrap` reassembles buffered chains,
+  so the decoder seam and the chain reader keep working.
+- **The execute insert is irreducible** (`vaultTransactionExecute`
+  carries every inner account as a meta). Keep inserts single-signer
+  (payer == proposer) and pack oversized ones as v0 + address-lookup-table
+  transactions — the table compresses the OUTER governance accounts; the
+  data is untouched. Practical ceiling ≈ 25 execute account metas; larger
+  actions wait for the Stage 3 coordinator.
+- **Stacked executes need an explicit CU budget**: governance execute →
+  Squads execute → 2 inner CPIs exceeded the 200k default; production
+  senders set 400k (the mainnet runs already did).
+- Program fixtures are committed gzipped (zero-padded 10 MB programdata
+  compresses ~10x); the test harness inflates them before bankrun loads.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
@@ -297,7 +337,9 @@ runs `pnpm test:integration` hermetically (no validator, no network).
 - Merkle distributor deployed program ID (Stage 1, `distribute` action)
 - PumpSwap pool ixs for buyback/provideLiquidity (Stage 1, action menu)
 - `transfer_creator_fees_to_pump_v2` consolidation (Stage 1, keeper)
-- Creator Fee Sharing at-launch config + admin revoke (GATE 0c; risk D-007)
+- ~~Creator Fee Sharing at-launch config (GATE 0c; risk D-007)~~
+  RESOLVED: D-019 — at-launch impossible (hard on-chain constraint);
+  DAO-governed config post-launch verified on the real binaries
 - ~~VSR registrar seed + manual ix layout on-chain validation~~ RESOLVED:
   D-018 — registrar seed order was WRONG in D-013's experiment and is now
   fixed (`[realm, "registrar", mint]`) and verified against the real

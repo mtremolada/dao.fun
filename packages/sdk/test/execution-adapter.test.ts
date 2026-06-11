@@ -7,11 +7,21 @@
  * there too. Here: structure, member plumbing, and the wrap/unwrap
  * round-trip the decoder depends on (INV-9/10 support).
  */
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { Keypair, SystemProgram } from "@solana/web3.js";
+import {
+  Keypair,
+  SystemProgram,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import * as multisig from "@sqds/multisig";
 import { SQUADS_V4_PROGRAM_ID } from "../src/constants";
-import { unwrap, wrap, type WrapContext } from "../src/execution-adapter";
+import {
+  unwrap,
+  wrap,
+  wrapBuffered,
+  type WrapContext,
+} from "../src/execution-adapter";
 import { deriveTreasuryPdas } from "../src/treasury";
 
 const createKey = Keypair.generate().publicKey;
@@ -121,5 +131,87 @@ describe("unwrap (decoder seam, INV-10)", () => {
   it("throws when no vaultTransactionCreate is present", () => {
     const ixs = wrap(innerTransfers(), ctx);
     expect(() => unwrap([ixs[1]!, ixs[2]!], ctx)).toThrow(/vaultTransactionCreate/);
+  });
+});
+
+describe("wrapBuffered (account-heavy inner sets, spec 6.4 size split)", () => {
+  // A 19-account instruction (like pump's updateFeeShares) makes the plain
+  // wrap's VaultTransactionCreate too large for the 1232-byte governance
+  // InsertTransaction. Buffered wrapping chunks the vault message through
+  // Squads transaction buffers instead.
+  function heavyInner(): TransactionInstruction[] {
+    return [
+      new TransactionInstruction({
+        programId: Keypair.generate().publicKey,
+        keys: Array.from({ length: 19 }, (_, i) => ({
+          pubkey: Keypair.generate().publicKey,
+          isSigner: i === 2,
+          isWritable: i % 3 === 0,
+        })),
+        data: Buffer.alloc(80, 7),
+      }),
+    ];
+  }
+
+  it("chunks reassemble to the exact vault message; hash and size in the create args match", () => {
+    const ctxArgs = ctx;
+    const result = wrapBuffered(heavyInner(), ctxArgs, 300);
+    const [decoded] = multisig.generated.transactionBufferCreateStruct.deserialize(
+      result.ixs[0]!.data,
+    );
+    const chunks = [Buffer.from(decoded.args.buffer as Uint8Array)];
+    for (const ix of result.ixs.slice(1, 1 + result.extendCount)) {
+      const [ext] = multisig.generated.transactionBufferExtendStruct.deserialize(ix.data);
+      chunks.push(Buffer.from(ext.args.buffer as Uint8Array));
+    }
+    const reassembled = Buffer.concat(chunks);
+    expect(reassembled.length).toBe(decoded.args.finalBufferSize);
+    expect(
+      createHash("sha256").update(reassembled).digest("hex"),
+    ).toBe(Buffer.from(decoded.args.finalBufferHash).toString("hex"));
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(300);
+    expect(result.extendCount).toBeGreaterThan(0);
+  });
+
+  it("every governance-inserted ix stays under the insert budget that broke the plain wrap", () => {
+    const inner = heavyInner();
+    const plain = wrap(inner, ctx);
+    const buffered = wrapBuffered(inner, ctx, 300);
+    // the plain create is what overflows; every buffered step must be smaller
+    const plainCreateSize = plain[0]!.data.length;
+    for (const ix of buffered.ixs) {
+      expect(ix.data.length).toBeLessThan(plainCreateSize);
+    }
+  });
+
+  it("unwrap recovers the inner set from a BUFFERED chain too (INV-9/10)", () => {
+    const inner = heavyInner();
+    const c = ctx;
+    const buffered = wrapBuffered(inner, c, 300);
+    const recovered = unwrap(buffered.ixs, c);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]!.programId.equals(inner[0]!.programId)).toBe(true);
+    expect(recovered[0]!.data.equals(inner[0]!.data)).toBe(true);
+    expect(recovered[0]!.keys.map((k) => k.pubkey.toBase58())).toEqual(
+      inner[0]!.keys.map((k) => k.pubkey.toBase58()),
+    );
+  });
+
+  it("the member signs every step; the vault is never a tx-level signer", () => {
+    const c = ctx;
+    const { ixs } = wrapBuffered(heavyInner(), c, 300);
+    const [vaultPda] = multisig.getVaultPda({
+      multisigPda: c.multisigPda,
+      index: c.vaultIndex,
+    });
+    for (const ix of ixs) {
+      expect(
+        ix.keys.some((k) => k.pubkey.equals(c.member) && k.isSigner),
+        "member signs each step",
+      ).toBe(true);
+      for (const k of ix.keys) {
+        if (k.pubkey.equals(vaultPda)) expect(k.isSigner).toBe(false);
+      }
+    }
   });
 });

@@ -56,10 +56,43 @@ Not run. Note D-004: pump `createV2` mints are already Token-2022 (the
 mainnet GATE 0a token is a live example); the open question narrows to
 transfer-fee extensions.
 
-## GATE 0c — Fee shares at launch for PDA creator (soft)
+## GATE 0c — Fee shares at launch for PDA creator (soft) — DETERMINED
 
-Not run. Risk flag D-007: `createFeeSharingConfig` requires the creator as
-payer/signer, which a PDA creator cannot satisfy in a plain launch tx.
+Run 2026-06-11 against the REAL pump + PumpFees mainnet binaries in
+bankrun (`tests/gate0c-fee-sharing.integration.test.ts`, part of
+`pnpm test:integration`). Split verdict, exactly as risk flag D-007
+predicted:
+
+- **At-launch config: FAIL (hard on-chain constraint).** A real
+  `create_v2` token was launched with creator == the DAO's Squads vault
+  PDA (INV-1 verified by decoding the live bonding curve). The launcher's
+  `createFeeSharingConfig` is refused by the deployed PumpFees binary
+  with `NotAuthorized` (6016, create_fee_sharing_config.rs): the
+  instruction's ONLY signer is the payer, and the payer must be the coin
+  creator. A PDA cannot sign a plain launch transaction, so the spec's
+  at-launch shares mechanism is impossible. **MVP protocol revenue =
+  flat launch fee only** (the spec's designated fallback); the Stage 3
+  coordinator supersedes this for programmatic splits.
+- **DAO-governed fee sharing post-launch: PASS.** The SAME instructions
+  succeed when the vault PDA invoke_signs through the governance-executed
+  Squads chain: one ATOMIC vault transaction carrying
+  `createFeeSharingConfig` + `updateFeeShares {vault 90%, protocol 10%}`
+  was proposed (buffered ExecutionAdapter chain), voted, finalized,
+  hold-up-warped, and executed against the real binaries; the resulting
+  on-chain SharingConfig decodes to exactly the voted split. Fee sharing
+  is therefore a DAO action (a future 6.8 menu item), not a launch-time
+  platform feature.
+
+Machinery findings (D-019): governance InsertTransaction size limits,
+buffered Squads wrapping (`wrapBuffered`), the six-zero-byte
+`vaultTransactionCreateFromBuffer` placeholder, v0+ALT packing for
+account-heavy execute inserts, and the 400k CU floor for stacked
+executes.
+
+`buildFeeSharesAtLaunchIxs` stays gated (`FeatureUnavailable`) — the
+at-launch path is closed by the program itself.
+
+Operator sign-off: ______
 
 ## GATE 1 — mode matrix e2e (sovereign leg PASS on mainnet; council/cypherpunk/VSR legs PASS on real binaries)
 

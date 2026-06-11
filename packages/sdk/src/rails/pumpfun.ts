@@ -129,9 +129,12 @@ export class PumpFunRail implements LaunchRail {
 
   /**
    * Creator Fee Sharing configured at launch: {vault: 10000-bps, protocol:
-   * bps}. Gated by GATE 0c (spec 6.1/7): until the gate proves a PDA creator
-   * can carry a sharing config set within the launch ceremony and then be
-   * admin-revoked, this throws FeatureUnavailable.
+   * bps}. GATE 0c DETERMINED (D-019): the deployed PumpFees program only
+   * accepts the coin creator as payer/signer, so a PDA creator can NEVER
+   * carry this within the launch ceremony — the gate stays closed and this
+   * throws FeatureUnavailable. The same instructions DO work post-launch
+   * through the governance custody chain (a 6.8 menu action, built at
+   * first need).
    */
   async buildFeeSharesAtLaunchIxs(
     params: FeeSharesParams,
