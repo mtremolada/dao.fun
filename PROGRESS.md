@@ -49,8 +49,11 @@
 - [x] 13.6c backend orchestrator (6.6): step machine (5 tests) + concrete
       launch steps (6 tests: exact fee, INV-1 creator plumbing, resume
       after token creation, INV-5/INV-7 halt-on-violation) + 12.3 artifact
-      store: hash (5 tests) + sqlite persistence via node:sqlite (4 tests).
-      Remaining for 6.6: thin HTTP API over these (wiring only).
+      store: hash (5 tests) + sqlite persistence via node:sqlite (4 tests)
+      + thin HTTP API (7 tests: server-side re-validation with the shared
+      launch-form contract, resumable failed state over the wire, artifact
+      lookups keyed proposal+hash). launch-form contract moved to sdk
+      (app re-exports) so client and server use the SAME functions.
 - [~] 13.7 app: UI logic layer shipped tests-first (9 tests: floor
       enforcement incl. stricter-only overrides, cypherpunk single +
       sovereign double confirmations, guarded unselectable, hash badge
