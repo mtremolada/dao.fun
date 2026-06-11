@@ -65,10 +65,11 @@ async function sellAllAndClose(
       TOKEN_2022_PROGRAM_ID,
     );
     const amount = new BN(raw);
+    const supply = await connection.getTokenSupply(MINT);
     const solOut = getSellSolAmountFromTokenAmount({
       global,
       feeConfig: null,
-      mintSupply: null,
+      mintSupply: new BN(supply.value.amount),
       bondingCurve: sellState.bondingCurve,
       amount,
       quoteMint: NATIVE_MINT,
