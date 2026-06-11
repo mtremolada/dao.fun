@@ -13,7 +13,6 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import {
-  NATIVE_MINT,
   TOKEN_2022_PROGRAM_ID,
   createCloseAccountInstruction,
   getAssociatedTokenAddressSync,
