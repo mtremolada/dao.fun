@@ -7,6 +7,11 @@
 import { TIER_FLOORS, resolveGovernanceParams } from "./matrix";
 import type { GovernanceMode, GovernanceParams, MarketCapTier } from "./types";
 
+// Re-exported so the frontend can import this module as a standalone
+// subpath ("@daofun/sdk/launch-form") without pulling the whole barrel
+// (which drags chain deps into the client bundle).
+export type { GovernanceMode, GovernanceParams, MarketCapTier };
+
 export interface LaunchFormInput {
   mode: GovernanceMode;
   tier: MarketCapTier;

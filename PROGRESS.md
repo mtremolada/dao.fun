@@ -54,11 +54,22 @@
       launch-form contract, resumable failed state over the wire, artifact
       lookups keyed proposal+hash). launch-form contract moved to sdk
       (app re-exports) so client and server use the SAME functions.
-- [~] 13.7 app: UI logic layer shipped tests-first (9 tests: floor
+- [x] 13.7 app: UI logic layer shipped tests-first (9 unit tests: floor
       enforcement incl. stricter-only overrides, cypherpunk single +
       sovereign double confirmations, guarded unselectable, hash badge
-      verified/mismatch/missing, hold-up-gated execute button). Remaining:
-      Next.js shell rendering these results + Playwright e2e.
+      verified/mismatch/missing, hold-up-gated execute button) + Next.js
+      shell (mode selection, launch form posting to the backend API via
+      same-origin /api rewrite, proposal view) + 7 Playwright e2e tests
+      written first and run against the REAL createApiHandler (stubbed
+      steps): guarded unselectable, sovereign double-confirm, sub-floor
+      override rejected client-side w/ floor error, stricter accepted,
+      launch round-trip renders completed state, hash badge
+      verified/red-mismatch/missing, execute disabled until hold-up
+      elapses. Client bundle stays ~105 kB: the form imports
+      "@daofun/sdk/launch-form" (TS-source subpath export) so chain deps
+      never reach the browser. Remaining for later: wallet adapter,
+      chain reader feeding the proposal view (query params today),
+      dashboard (vault balance / sweep history / vote power).
 - [~] 13.8 GATE 1: sovereign leg PASS live on mainnet, operator-funded
       (D-008): full lifecycle proposal -> vote -> finalize -> execute on a
       fresh DAO under production sovereign/micro params (only deviation:

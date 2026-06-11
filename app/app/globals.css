@@ -1,0 +1,155 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --green: #2ea043;
+  --red: #f85149;
+  --amber: #d29922;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.site-header {
+  padding: 1rem 2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+main {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+
+.card.disabled {
+  opacity: 0.55;
+}
+
+.card h3 {
+  margin-top: 0;
+}
+
+.card ul {
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.button {
+  display: inline-block;
+  background: var(--green);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+form.launch label {
+  display: block;
+  margin: 0.9rem 0 0.25rem;
+}
+
+form.launch input[type="text"],
+form.launch input[type="number"],
+form.launch select,
+form.launch textarea {
+  width: 100%;
+  max-width: 28rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.45rem;
+  font-size: 0.95rem;
+}
+
+.confirm {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin: 0.6rem 0;
+}
+
+.errors {
+  color: var(--red);
+  padding-left: 1.1rem;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.badge[data-state="verified"] {
+  background: rgba(46, 160, 67, 0.2);
+  color: var(--green);
+  border: 1px solid var(--green);
+}
+
+.badge[data-state="mismatch"] {
+  background: rgba(248, 81, 73, 0.2);
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+
+.badge[data-state="missing"] {
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--amber);
+  border: 1px solid var(--amber);
+}
+
+pre.result {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.muted {
+  color: var(--muted);
+}
