@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r run build
+      - run: pnpm test:unit
+
+  # Integration job (spec Section 3): solana-test-validator with pump /
+  # governance / VSR / Squads cloned from mainnet. Enabled at Stage 1 when the
+  # first integration suites land; kept as a separate job so unit stays fast.
+  integration:
+    runs-on: ubuntu-latest
+    if: false # TODO(Stage 1): enable with --clone validator setup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install Solana CLI
+        run: sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+      - run: pnpm install --frozen-lockfile
+      - name: Start validator with mainnet clones
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          solana-test-validator \
+            --clone 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P \
+            --clone pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA \
+            --clone pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ \
+            --clone GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw \
+            --clone vsr2nfGVNHmSY8uxoBGqq8AQbwz3JwaEaHqGbsTPXqQ \
+            --clone SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf \
+            --url mainnet-beta --reset --quiet &
+          sleep 15
+      - run: pnpm -r run test

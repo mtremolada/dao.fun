@@ -1,0 +1,16 @@
+{
+  "name": "@daofun/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:unit": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@daofun/sdk": "workspace:*",
+    "@solana/web3.js": "1.98.4"
+  }
+}
