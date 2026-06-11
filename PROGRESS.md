@@ -15,9 +15,14 @@
       override, D-008) — vault-as-creator + permissionless collect proven
       live; evidence in GATES.md; rent-floor lessons in D-009; awaiting
       formal operator sign-off line in GATES.md
-- [ ] GATE 0b (soft) — note D-004: v2 creates are already Token-2022 (the
-      GATE 0c bankrun leg launched one against the real binary); the open
-      question narrows to transfer-fee extensions
+- [x] GATE 0b (soft) → **DETERMINED 2026-06-11 on real binaries**
+      (evidence in GATES.md): plain Token-2022 launches AND trades on the
+      curve (buy + full sell-back, creator fees accrue — hermetic
+      replication of the GATE 0a live result); transfer-fee extensions
+      are structurally impossible (pump initializes the mint inside
+      create_v2 and refuses a pre-existing mint account) → dropped from
+      scope per the gate's fail branch. Stage-0 gates are now all
+      determined; sign-offs pending.
 - [x] GATE 0c (soft) → **DETERMINED 2026-06-11 on real binaries** (D-019,
       evidence in GATES.md): at-launch fee shares for a PDA creator are
       impossible (PumpFees requires the creator as the paying signer) —

@@ -16,10 +16,8 @@
  *    as the inner set. If this passes, fee sharing is DAO-governable
  *    post-launch even though the at-launch path is closed.
  */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+import { Keypair, SystemProgram } from "@solana/web3.js";
 import {
   PumpSdk,
   feeSharingConfigPda,
@@ -27,11 +25,9 @@ import {
 } from "@pump-fun/pump-sdk";
 import { ProposalState } from "@solana/spl-governance";
 import {
-  PUMP_AMM_PROGRAM_ID,
   PUMP_FEES_PROGRAM_ID,
   PUMP_PROGRAM_ID,
 } from "../packages/sdk/src/constants";
-import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import {
   MICRO_HOLDUP_S,
   TEST_TIMEOUT,
@@ -43,40 +39,9 @@ import {
   proposeInner,
   send,
   sendExpectFail,
-  startCtx,
+  startPumpCtx,
   warpSeconds,
 } from "./helpers/bankrun-harness";
-
-const pumpAccounts = (
-  JSON.parse(
-    readFileSync(resolve(__dirname, "fixtures/pump-accounts.json"), "utf8"),
-  ) as {
-    address: string;
-    owner: string;
-    lamports: number;
-    dataBase64: string;
-  }[]
-).map((a) => ({
-  address: new PublicKey(a.address),
-  info: {
-    lamports: a.lamports,
-    data: Buffer.from(a.dataBase64, "base64"),
-    owner: new PublicKey(a.owner),
-    executable: false,
-  },
-}));
-
-function startPumpCtx() {
-  return startCtx(
-    [
-      { name: "pump", programId: PUMP_PROGRAM_ID },
-      { name: "pump_fees", programId: PUMP_FEES_PROGRAM_ID },
-      { name: "pump_amm", programId: PUMP_AMM_PROGRAM_ID },
-      { name: "token_2022", programId: TOKEN_2022_PROGRAM_ID },
-    ],
-    pumpAccounts,
-  );
-}
 
 const pumpSdk = new PumpSdk(); // offline builder/decoder
 

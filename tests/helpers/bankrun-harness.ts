@@ -25,6 +25,7 @@ import {
 import {
   AuthorityType,
   MINT_SIZE,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
   createInitializeMint2Instruction,
@@ -57,6 +58,9 @@ import {
   type ProgramTestContext,
 } from "solana-bankrun";
 import {
+  PUMP_AMM_PROGRAM_ID,
+  PUMP_FEES_PROGRAM_ID,
+  PUMP_PROGRAM_ID,
   SPL_GOVERNANCE_PROGRAM_ID,
   SQUADS_V4_PROGRAM_ID,
 } from "../../packages/sdk/src/constants";
@@ -124,6 +128,38 @@ export async function startCtx(
         },
       },
     ],
+  );
+}
+
+/**
+ * Context with the pump stack loaded on top of governance + Squads, plus
+ * the live pump/PumpFees/mayhem state accounts from the fixtures dump.
+ */
+export function startPumpCtx(): Promise<ProgramTestContext> {
+  const pumpAccounts = (
+    JSON.parse(readFileSync(join(FIXTURES, "pump-accounts.json"), "utf8")) as {
+      address: string;
+      owner: string;
+      lamports: number;
+      dataBase64: string;
+    }[]
+  ).map((a) => ({
+    address: new PublicKey(a.address),
+    info: {
+      lamports: a.lamports,
+      data: Buffer.from(a.dataBase64, "base64"),
+      owner: new PublicKey(a.owner),
+      executable: false,
+    },
+  }));
+  return startCtx(
+    [
+      { name: "pump", programId: PUMP_PROGRAM_ID },
+      { name: "pump_fees", programId: PUMP_FEES_PROGRAM_ID },
+      { name: "pump_amm", programId: PUMP_AMM_PROGRAM_ID },
+      { name: "token_2022", programId: TOKEN_2022_PROGRAM_ID },
+    ],
+    pumpAccounts,
   );
 }
 

@@ -43,7 +43,7 @@ All pinned by `packages/sdk/test/pda.test.ts` (13 green tests, no network):
 | Realm | `["governance", realm_name]` | spl-governance `GOVERNANCE_PROGRAM_SEED = 'governance'` | CONFIRMED |
 | Governance | `["account-governance", realm, governed_seed]` | spl-governance `withCreateGovernance.js` | CONFIRMED |
 | Native treasury | `["native-treasury", governance]` | spl-governance `getNativeTreasuryAddress` (used as oracle in test) | CONFIRMED |
-| VSR registrar | `["registrar", realm, community_mint]` | reference impl; to be re-verified on-chain at Stage 1 when VSR is exercised | PROVISIONAL |
+| VSR registrar | ~~`["registrar", realm, community_mint]`~~ | the deployed binary (GATE 1 bankrun VSR leg) — order is `[realm, "registrar", mint]` | CORRECTED: D-018 |
 | Squads vault | `getVaultPda(multisig, index)` = `["multisig", multisigPda, "vault", u8(index)]` | @sqds/multisig `lib/index.js` seeds + oracle in test | CONFIRMED |
 | Pump program IDs (3) | Section 1 table | pump-sdk `src/sdk.ts` constants, asserted in test | CONFIRMED |
 
@@ -326,6 +326,18 @@ Machinery the gate forced, all now in the sdk/harness:
   senders set 400k (the mainnet runs already did).
 - Program fixtures are committed gzipped (zero-padded 10 MB programdata
   compresses ~10x); the test harness inflates them before bankrun loads.
+
+## D-020 — GATE 0b determined: transfer-fee Token-2022 dropped from scope (2026-06-11)
+
+On the real binaries (bankrun): a create_v2 token is Token-2022 and
+trades round-trip on the curve (creator fees accrue to a PDA creator's
+vault — the GATE 0a result, now hermetic in CI). pump initializes the
+mint INSIDE create_v2 (no TransferFeeConfig among its extensions) and
+refuses a pre-existing mint account, so transfer-fee mints can never
+reach the curve. Per the gate's fail branch the feature is dropped; the
+D-004 open question is closed. Operationally, D-009 generalizes: every
+account receiving fee crumbs (fee recipients, creator vault) must be
+prefunded to the rent floor or the runtime rejects the trade.
 
 ## Open (verify) items — to resolve before/at their first use
 

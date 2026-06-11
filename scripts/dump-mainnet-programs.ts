@@ -14,6 +14,7 @@ import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import {
   FEE_PROGRAM_GLOBAL_PDA,
   GLOBAL_PDA,
+  GLOBAL_VOLUME_ACCUMULATOR_PDA,
   PUMP_FEE_CONFIG_PDA,
   getGlobalParamsPda,
   getSolVaultPda,
@@ -53,6 +54,7 @@ const ACCOUNTS: { label: string; address: PublicKey }[] = [
   { label: "pump-global", address: GLOBAL_PDA },
   { label: "pump-fee-config", address: PUMP_FEE_CONFIG_PDA },
   { label: "fee-program-global", address: FEE_PROGRAM_GLOBAL_PDA },
+  { label: "pump-global-volume-accumulator", address: GLOBAL_VOLUME_ACCUMULATOR_PDA },
   { label: "mayhem-global-params", address: getGlobalParamsPda() },
   { label: "mayhem-sol-vault", address: getSolVaultPda() },
 ];

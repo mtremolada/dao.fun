@@ -50,11 +50,32 @@ Notes:
 
 Operator sign-off: ______ (run was operator-funded and operator-directed)
 
-## GATE 0b — Token-2022 on curve (soft)
+## GATE 0b — Token-2022 on curve (soft) — DETERMINED
 
-Not run. Note D-004: pump `createV2` mints are already Token-2022 (the
-mainnet GATE 0a token is a live example); the open question narrows to
-transfer-fee extensions.
+Run 2026-06-11 against the REAL pump binaries in bankrun
+(`tests/gate0b-token2022.integration.test.ts`, part of
+`pnpm test:integration`). Two halves:
+
+- **Plain Token-2022 on the curve: PASS** (and now hermetic, not just the
+  GATE 0a live evidence): `create_v2` with a PDA creator produced a
+  Token-2022 mint that was BOUGHT and fully SOLD BACK on the curve; the
+  creator vault accrued real fees from the buy (INV-8 surface). The
+  extension set pump initializes was decoded from the live mint — no
+  TransferFeeConfig.
+- **Transfer-fee extension: FAIL — drop from scope** (the gate's fail
+  branch): pump creates and initializes the mint INSIDE `create_v2`, so
+  a transfer-fee mint can only exist if pre-initialized — and a
+  pre-existing mint account is refused by `create_v2` (verified on the
+  real binary: the launch fails, no bonding curve is created). Transfer
+  fees are structurally impossible on the pump curve; nothing to build.
+
+Operational note (D-009 again): buys/sells make small lamport transfers
+to fee-recipient accounts — the test, like GATE 0a's
+rent-prefund-vaults step, prefunds missing writable accounts to the rent
+floor. The keeper/orchestrator rent-floor rule generalizes to every
+account that receives fee crumbs.
+
+Operator sign-off: ______
 
 ## GATE 0c — Fee shares at launch for PDA creator (soft) — DETERMINED
 
