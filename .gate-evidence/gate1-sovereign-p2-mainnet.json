@@ -1,0 +1,88 @@
+{
+  "gate": "1-partial-sovereign-p2",
+  "cluster": "https://api.mainnet-beta.solana.com",
+  "note": "phase 2 (budget-constrained): production sovereign/micro params via resolveGovernanceParams, holdUp 0, depositExemptProposalCount 10 (D-015 fix verified live). Synthetic Token-2022 community mint; baseVotingTime 3600s is the only config deviation (program min).",
+  "config": {
+    "baseVotingTimeSeconds": 3600,
+    "supplyRaw": "200000000000",
+    "mint": "3pEjEhJoKWEXb5aqKYN7pqG5GKFQL997Ndu1pUMn6Aq2",
+    "multisigPda": "2hEbJ9x64sY9jTdpyr9M3aUwcSvNJ3ULsc1X241fYa8L",
+    "squadsVault": "8Z4PfwCARrz3DbJQpwy9vhmYz3xvokn9tZN1vsHq1kj9",
+    "realm": "GRdkevbhSoJrnEtqadhvyuev81jSL99HYyhMCa3Tt8wR",
+    "governance": "AGqneWjmPQnMfDMhib2DoPnmoDbNiquaEennTWBj86mD",
+    "nativeTreasury": "B6XaWx7GJe2wGQameC5T914DcwV9Y6DL4P9SgK6c87r8"
+  },
+  "stages": {
+    "recover-old": {
+      "sigs": {
+        "withdraw-old": "5TJJHBaAwgktZDZgo2d12UeqGcv9vG1SrhrWv7zTmKbhqjtTvdTghzpobJmQLX6S3dbT2kXbZbMCq1fvRvoYP4FB",
+        "sell-old": "5xyomKyE5XxDBSiw7z939FGyzZAEYxxngzo1kFSujs9brZfUtQ92aVUs1XeJzWa6Cde9DH2ztZ1xaYxURbrt4Txi",
+        "close-old-ata": "pUPVS4ArxiZe28TCWFH6Ju469kwPnUpUx6A1NQwaLhrWKcnVcubWobytLsk6Nvu5f7kfJqAadUw6JVzsvyYShrv"
+      },
+      "at": "2026-06-11T01:58:54.965Z"
+    },
+    "mint": {
+      "sig": "59e9PPDnq7EnoqnqFVJWDuztSvK5M4jeZmdwU8kaxD3qKHqUFvrYrPhhJ4DEoNFAXWjFwtq7htAwRY81h7993eoX",
+      "supply": "200000000000",
+      "inv5MintAuthorityNull": true,
+      "at": "2026-06-11T01:58:55.781Z"
+    },
+    "treasury": {
+      "sig": "qjnxxAMCnNS7masetXzCuMrVub9k3t57xJzCoZXpmihww1kaoibWeCwztBHohybB7q5PLBM1ZUV48AVRADzXhnu",
+      "inv7SoleMemberIsNativeTreasury": true,
+      "prefund": 890880,
+      "at": "2026-06-11T01:58:56.445Z"
+    },
+    "rebalance": {
+      "sig": "RbKBqWX3yWmxZa718ixHPytebqczHeSuGfetJ9QzaDL6js5o1tu2Qu789VQs2VYpsDGYxWhCxkcsXqKNFUsS4tm",
+      "lamports": 7000000,
+      "at": "2026-06-11T01:59:57.654Z"
+    },
+    "realm-setup": {
+      "sig": "21PZbCFfoGsMLKHHZaxSYCpty6YD7RXQxKdakSDmQALFGDMzfMhc88H8aKkMCxgwoKwGMfjCqir8Pe9eFhG15scF",
+      "realm": "GRdkevbhSoJrnEtqadhvyuev81jSL99HYyhMCa3Tt8wR",
+      "params": {
+        "quorumPercent": 25,
+        "proposalThresholdTokens": "4000000000",
+        "holdUpSeconds": 0
+      },
+      "at": "2026-06-11T01:59:58.925Z"
+    },
+    "governance-setup": {
+      "sig": "ZPr7yDAmXDJ8i6b2wGW5Etm4axYCqjB5P56Ccm9zNK76aS3W3Ap7D2qXGej3G5UQrzwHXeSxeuXd2gi2eaLf8RW",
+      "governance": "AGqneWjmPQnMfDMhib2DoPnmoDbNiquaEennTWBj86mD",
+      "nativeTreasury": "B6XaWx7GJe2wGQameC5T914DcwV9Y6DL4P9SgK6c87r8",
+      "realmAuthorityIsGovernance": true,
+      "at": "2026-06-11T02:00:00.544Z"
+    },
+    "voting-power": {
+      "sig": "42DCD4h9AotnvXAArdFs5qvnNqtmHtzTGjFrUuLRXLXb6ukB23iHKXfckscwP1fqa13hdxpJbPffQiPjTWBJraUN",
+      "deposited": "200000000000",
+      "tor": "FnCV1QBqVWyup4dUzqkKbjzYqdpbx5neSqEX1DUAYDye",
+      "at": "2026-06-11T02:00:01.646Z"
+    },
+    "proposal": {
+      "proposal": "FJjnLM24XdRbTd5w4pvy2znMEn2d6CH1PfS5zmZRe7Fw",
+      "squadsTransactionIndex": "1",
+      "innerInstructionSetHash": "76962352e6c2b1cc756da0410fb325965d4bb69707f5fbe5886e325f74dd0649",
+      "vaultLamportsToSweep": 890880,
+      "sigCreate": "A99hKkvGfLqpMwzEWyrHHsFHUYEzdDB2nMCo5H9BiSSpLmNxp7u9xytv6ewHyUGMLHdyEUEuzS2ZbGwbZEzhjvk",
+      "insertSigs": [
+        "5QtxN9tfbockZNz5aTaDfFi7ECXKAqBdBy1Qp46XwVXyiUXcaQLqT6DbozK87SJ97XV9Fy9QEYb8dzzcFEGbk8jB",
+        "3uwugELmYQ4FNmmBxoieAHJLNDQWU3SivePYVNwPWgjspsqj8Db7qcYEEUbA5aaRKwssar1v6pum6pgTKMZosdQF",
+        "5kYveybas81REAEEvCkTBsc2xveXZoUq19KH2JzugRqam6vhK7sompNJYiys2HnxiX5Kh7vG1wbBbXF7tnvkKPsu",
+        "64sGYzwMcjt8h1bYn3bUGdVA2nJMtrstwAprhMD7V6RiZ2cnTtXczT16Brc1hGFyj98LWWJw1LFCHui3xRP93gLi"
+      ],
+      "sigSignOff": "3drYypwJJGnfJkPhMgns59CNQvFqesvBGRntcEuF9zYKH7V7qwt3WwWdEwYVkG91yGb9pYmwL4SbREMBnM4xN2SY",
+      "d015VerifiedNoSecurityDeposit": true,
+      "at": "2026-06-11T02:00:08.286Z"
+    },
+    "cast-vote": {
+      "sig": "28QQiuKXBmgS8d884qJ6BusbRpTU1De1j7tRCr79RSj7Uut3pdkjn3Tw9X3Jj3aENpbdSUiAEepnu6DBRZoEHeWk",
+      "state": "Voting",
+      "yesVotes": "200000000000",
+      "at": "2026-06-11T02:00:09.052Z"
+    }
+  },
+  "findings": []
+}
