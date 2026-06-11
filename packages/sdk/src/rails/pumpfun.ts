@@ -12,11 +12,7 @@ import {
   PublicKey,
   TransactionInstruction,
 } from "@solana/web3.js";
-import {
-  NATIVE_MINT,
-  TOKEN_2022_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { NATIVE_MINT, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   OnlinePumpSdk,
   PumpSdk,

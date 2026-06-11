@@ -60,6 +60,31 @@ collection.
 creates — the base path is already Token-2022. The 0b question narrows to
 transfer-fee extensions specifically. Re-scope 0b when reached.
 
+## D-005 — LaunchParams.launcher amendment (2026-06-11)
+
+pump `create_v2` requires a `user` signer (IDL: signers are `mint` and
+`user` only; `creator` is an instruction ARG, not an account). The spec's
+Section 4 `LaunchParams` had no launcher field, so rails could not build the
+create instruction. Added optional `launcher: PublicKey`; PumpFunRail throws
+if absent. INV-1 is strengthened by this verification: the creator
+structurally cannot be a signer.
+
+## D-006 — collect_creator_fee_v2 has ZERO signer accounts (2026-06-11)
+
+Verified from the pump IDL: every account in `collect_creator_fee_v2`
+(including `creator`) is `signer: false`. INV-2 is structural at the program
+level; the only tx signer is the fee-payer. Pinned by
+`test/pump-rail.test.ts` "signer set is a subset of {fee-payer}".
+
+## D-007 — Fee-sharing config creation requires creator as payer (GATE 0c risk flag) (2026-06-11)
+
+pump-sdk `createFeeSharingConfig` sets `payer: creator`. With our PDA
+creator (Squads vault), that account cannot sign a launch-ceremony tx. This
+makes GATE 0c likely to FAIL as specified unless the fees program accepts a
+separate payer or config-via-CPI. Flagging now so the 0c result is not a
+surprise; MVP protocol revenue may be launch-fee-only, per the spec's
+fallback. `buildFeeSharesAtLaunchIxs` stays gated (FeatureUnavailable).
+
 ## Open (verify) items — to resolve before/at their first use
 
 - spl-gov v3 Veto vote config (Stage 1, Governance component)

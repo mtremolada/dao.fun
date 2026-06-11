@@ -17,8 +17,9 @@ import {
   PumpFunRail,
 } from "../src/rails/pumpfun";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const coder = new BorshInstructionCoder(pumpIdl as any);
+const coder = new BorshInstructionCoder(
+  pumpIdl as ConstructorParameters<typeof BorshInstructionCoder>[0],
+);
 
 function launchParams(overrides: Partial<LaunchParams> = {}): LaunchParams {
   return {

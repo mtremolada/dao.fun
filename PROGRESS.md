@@ -18,4 +18,20 @@
 - [ ] GATE 0b (soft) — note D-004: v2 creates are already Token-2022; re-scope
 - [ ] GATE 0c (soft) — fee shares at launch for PDA creator
 
-## Stage 1 — not started (blocked on GATE 0a sign-off)
+## Stage 1 — SDK started early by operator decision (2026-06-11), while
+## GATE 0a awaits funding. No fund-moving devnet txs before 0a sign-off.
+
+- [x] 13.5a types (spec S4; amended D-005)
+- [x] 13.5b PumpFunRail — tests first (8 tests: INV-1 create-arg/non-signer,
+      INV-2 collect signer-set, GATE 0c gating, oracle-pinned vault PDAs)
+- [x] 13.5c Treasury — tests first (6 tests: sole-member ix decode, threshold
+      1, configAuthority null, off-curve vault, createKey signer shape)
+- [x] Section 5 matrix resolution — tests first (7 tests incl. the v2.0
+      mode/tier resolution rule and checked threshold math)
+- [ ] 13.5d Governance (Realms + VSR + council) — next: realm/governance ix
+      builders, VSR registrar config (needs VSR IDL — open verify item),
+      council mint flow; integration tests need a validator with clones
+- [ ] 13.5e ExecutionAdapter — after Governance
+- [ ] 13.6 keeper, backend orchestrator, action menu builders
+- [ ] 13.7 app
+- [ ] 13.8 GATE 1 mode matrix on devnet
