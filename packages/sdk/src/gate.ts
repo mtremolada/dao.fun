@@ -131,46 +131,9 @@ function deriveHolding(realm: PublicKey, mint: PublicKey): PublicKey {
 }
 
 // ---------- guarded veto arithmetic ----------
-
-/**
- * On a guarded realm the gate seat holds H+1 of the 2H+1 council tokens,
- * so a "nominal" human veto threshold (percent of the H humans) must be
- * mapped to an on-chain percent of the full council supply. Returns an
- * integer percent p such that k* = ceil(H*nominal/100) human vetoes
- * strictly cross it and k*-1 strictly do not — strict on both sides, so
- * the result is correct under either >=-or-> program semantics
- * (empirically pinned by the guarded integration suite).
- */
-export function guardedVetoPercent(
-  humanCount: number,
-  nominalPercent: number,
-): number {
-  if (!Number.isInteger(humanCount) || humanCount < 1 || humanCount > 49) {
-    throw new Error("guardedVetoPercent: humanCount must be 1..49");
-  }
-  if (
-    !Number.isInteger(nominalPercent) ||
-    nominalPercent < 1 ||
-    nominalPercent > 100
-  ) {
-    throw new Error("guardedVetoPercent: nominalPercent must be 1..100");
-  }
-  const k = Math.max(1, Math.ceil((humanCount * nominalPercent) / 100));
-  const supply = 2 * humanCount + 1;
-  const pLow = Math.floor(((k - 1) * 100) / supply) + 1;
-  const pHigh = Math.ceil((k * 100) / supply) - 1;
-  if (pLow > pHigh) {
-    throw new Error(
-      "guardedVetoPercent: no unambiguous integer threshold exists for this council size",
-    );
-  }
-  return Math.floor((pLow + pHigh) / 2);
-}
-
-/** How many council tokens the gate seat holds/needs: H+1. */
-export function gateSeatCouncilTokens(humanCount: number): number {
-  return humanCount + 1;
-}
+// Lives in matrix.ts (chain-dep-free, browser-bundleable); re-exported
+// here so gate consumers keep one import surface.
+export { gateSeatCouncilTokens, guardedVetoPercent } from "./matrix";
 
 // ---------- InstructionData serialization ----------
 

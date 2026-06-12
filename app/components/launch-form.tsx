@@ -25,8 +25,12 @@ interface LaunchState {
 
 export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [tier, setTier] = useState<MarketCapTier>("micro");
+  const [tokenName, setTokenName] = useState("");
+  const [tokenSymbol, setTokenSymbol] = useState("");
+  const [tokenUri, setTokenUri] = useState("");
   const [councilMembers, setCouncilMembers] = useState("");
   const [vetoPercent, setVetoPercent] = useState("60");
+  const needsCouncil = mode === "council" || mode === "guarded";
   const [sovereignHoldUp, setSovereignHoldUp] = useState("");
   const [overrideHoldUp, setOverrideHoldUp] = useState("");
   const [overrideQuorum, setOverrideQuorum] = useState("");
@@ -44,7 +48,12 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     return {
       mode,
       tier,
-      ...(mode === "council"
+      metadata: {
+        name: tokenName.trim(),
+        symbol: tokenSymbol.trim(),
+        uri: tokenUri.trim(),
+      },
+      ...(needsCouncil
         ? {
             councilMembers: councilMembers
               .split("\n")
@@ -62,6 +71,10 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   }, [
     mode,
     tier,
+    tokenName,
+    tokenSymbol,
+    tokenUri,
+    needsCouncil,
     councilMembers,
     vetoPercent,
     sovereignHoldUp,
@@ -124,6 +137,30 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         void submit();
       }}
     >
+      <label htmlFor="token-name">Token name</label>
+      <input
+        id="token-name"
+        data-testid="token-name"
+        value={tokenName}
+        maxLength={32}
+        onChange={(e) => setTokenName(e.target.value)}
+      />
+      <label htmlFor="token-symbol">Token symbol</label>
+      <input
+        id="token-symbol"
+        data-testid="token-symbol"
+        value={tokenSymbol}
+        maxLength={10}
+        onChange={(e) => setTokenSymbol(e.target.value)}
+      />
+      <label htmlFor="token-uri">Metadata URI (image/JSON)</label>
+      <input
+        id="token-uri"
+        data-testid="token-uri"
+        value={tokenUri}
+        onChange={(e) => setTokenUri(e.target.value)}
+      />
+
       <label htmlFor="tier">Market-cap tier (sets the floors)</label>
       <select
         id="tier"
@@ -138,7 +175,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         ))}
       </select>
 
-      {mode === "council" && (
+      {needsCouncil && (
         <>
           <label htmlFor="council-members">
             Council members (one pubkey per line, fixed at launch)

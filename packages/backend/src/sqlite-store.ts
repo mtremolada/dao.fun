@@ -8,6 +8,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { PublicKey } from "@solana/web3.js";
 import type { ArtifactStore, ProposalArtifact } from "./artifacts";
+import type { LaunchState, LaunchStore } from "./launch-machine";
 
 export class SqliteArtifactStore implements ArtifactStore {
   private db: DatabaseSync;
@@ -67,6 +68,49 @@ export class SqliteArtifactStore implements ArtifactStore {
       | { artifact: string }
       | undefined;
     return row ? (JSON.parse(row.artifact) as ProposalArtifact) : null;
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
+/**
+ * Sqlite-backed launch store — production persistence for the step
+ * machine (spec 6.6): a crash mid-ceremony leaves a resumable state row,
+ * same node:sqlite zero-toolchain approach as the artifact store.
+ */
+export class SqliteLaunchStore implements LaunchStore {
+  private db: DatabaseSync;
+
+  constructor(path: string) {
+    mkdirSync(dirname(path), { recursive: true });
+    this.db = new DatabaseSync(path);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS launches (
+        launch_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+  }
+
+  async load(launchId: string): Promise<LaunchState | null> {
+    const row = this.db
+      .prepare(`SELECT state FROM launches WHERE launch_id = ?`)
+      .get(launchId) as { state: string } | undefined;
+    return row ? (JSON.parse(row.state) as LaunchState) : null;
+  }
+
+  async save(state: LaunchState): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO launches (launch_id, state, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(launch_id) DO UPDATE SET
+           state = excluded.state, updated_at = excluded.updated_at`,
+      )
+      .run(state.launchId, JSON.stringify(state), Date.now());
   }
 
   close(): void {
