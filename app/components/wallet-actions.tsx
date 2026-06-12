@@ -49,6 +49,19 @@ export function WalletActions(props: { proposal: string }) {
 
   async function vote(approve: boolean) {
     if (!signer) return;
+    // Decentralized path: when an RPC is configured, build + sign + submit the
+    // vote ENTIRELY in the browser — no backend in the path. The API flow
+    // remains as a fallback (and for the e2e stub) when no RPC is set.
+    const rpc = process.env.NEXT_PUBLIC_RPC_URL;
+    if (rpc) {
+      const { Connection } = await import("@solana/web3.js");
+      const { castVoteClientFlow } = await import("../lib/governance-client");
+      await castVoteClientFlow(
+        { proposal: props.proposal, approve },
+        { signer, connection: new Connection(rpc, "confirmed"), onState: setFlow },
+      );
+      return;
+    }
     await castVoteFlow(
       { proposal: props.proposal, approve },
       { signer, onState: setFlow },

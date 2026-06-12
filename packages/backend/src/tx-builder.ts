@@ -1,194 +1,22 @@
 /**
- * Browser-signing seam (D-028): the backend builds UNSIGNED governance
- * transactions so the browser never carries chain deps — the wallet
- * (wallet-standard protocol) signs raw bytes and the backend submits.
+ * Browser-signing seam (D-028) — server side.
  *
- * Pure builders take every address + the blockhash and are unit-tested
- * against the spl-governance client as an oracle; RpcGovernanceTxSource
- * resolves chain context (blockhash, proposal -> realm/governance/mint)
- * and is exercised by the integration suite. Every built transaction has
- * the WALLET as fee payer and only required signer — there is no way to
- * smuggle a platform key into the signer set.
+ * The pure builders + online resolvers now live in the SDK (browser-safe), so
+ * the BROWSER can build deposit/vote transactions itself with no server in the
+ * path (a decentralized app). This module re-exports them and keeps the HTTP
+ * route seam (`GovernanceTxSource` / `RpcGovernanceTxSource`) for the optional
+ * read/build backend, delegating to the SDK resolvers.
  */
-import BN from "bn.js";
-import {
-  Connection,
-  PublicKey,
-  Transaction,
-  TransactionInstruction,
-} from "@solana/web3.js";
-import {
-  TOKEN_2022_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
-import {
-  Governance,
-  Vote,
-  VoteChoice,
-  VoteKind,
-  getGovernanceAccount,
-  getProposal,
-  getTokenOwnerRecordAddress,
-  withCastVote,
-  withDepositGoverningTokens,
-} from "@solana/spl-governance";
-import { SPL_GOVERNANCE_PROGRAM_ID } from "@daofun/sdk";
+import { Connection, PublicKey } from "@solana/web3.js";
+import { resolveCastVoteTx, resolveDepositTx } from "@daofun/sdk";
 
-const PROGRAM_VERSION = 3;
-
-/**
- * Deployed spl-governance v3.1.4 needs Token-2022 governing-token deposits to
- * (a) carry the Token-2022 program — the 0.3.28 JS client hardcodes the classic
- * Token program on the transfer — and (b) append the mint account ("Expected
- * mint account is required for Token-2022 deposits and withdrawals"). Pump
- * `create_v2` mints are ALWAYS Token-2022 (D-004), so without both adaptations a
- * browser-built deposit reverts on chain and the holder receives NO vote weight
- * — governance is unreachable through the product's own voting path (AUDIT F-7,
- * the deposit-side twin of F-1). This mirrors the patch proven on mainnet by
- * `scripts/mainnet-gate1-sovereign.ts`.
- */
-function adaptDepositForToken2022(
-  ixs: TransactionInstruction[],
-  mint: PublicKey,
-): TransactionInstruction[] {
-  // Retarget the classic Token program account to Token-2022 wherever it
-  // appears (the community mint and all governance PDAs are distinct keys, so
-  // only the literal program account is rewritten).
-  const retargeted = ixs.map(
-    (ix) =>
-      new TransactionInstruction({
-        programId: ix.programId,
-        data: ix.data,
-        keys: ix.keys.map((k) =>
-          k.pubkey.equals(TOKEN_PROGRAM_ID)
-            ? { ...k, pubkey: TOKEN_2022_PROGRAM_ID }
-            : k,
-        ),
-      }),
-  );
-  // Append the mint (read-only) to the DEPOSIT instruction — the last one
-  // withDepositGoverningTokens emits.
-  const last = retargeted[retargeted.length - 1]!;
-  retargeted[retargeted.length - 1] = new TransactionInstruction({
-    programId: last.programId,
-    data: last.data,
-    keys: [...last.keys, { pubkey: mint, isSigner: false, isWritable: false }],
-  });
-  return retargeted;
-}
-
-function toBase64Unsigned(
-  ixs: Transaction["instructions"],
-  wallet: PublicKey,
-  blockhash: string,
-): string {
-  const tx = new Transaction();
-  tx.add(...ixs);
-  tx.feePayer = wallet;
-  tx.recentBlockhash = blockhash;
-  return tx
-    .serialize({ requireAllSignatures: false, verifySignatures: false })
-    .toString("base64");
-}
-
-export interface DepositTxParams {
-  realm: PublicKey;
-  governingTokenMint: PublicKey;
-  wallet: PublicKey;
-  amount: bigint;
-  blockhash: string;
-  /** Token program owning the wallet's source ATA (Token-2022 for v2 mints). */
-  tokenProgram?: PublicKey;
-}
-
-export async function buildDepositGoverningTokensTx(
-  p: DepositTxParams,
-): Promise<{ txBase64: string; tokenOwnerRecord: string }> {
-  if (p.amount <= 0n) {
-    throw new Error("deposit: amount must be positive");
-  }
-  const source = p.tokenProgram
-    ? getAssociatedTokenAddressSync(p.governingTokenMint, p.wallet, false, p.tokenProgram)
-    : getAssociatedTokenAddressSync(p.governingTokenMint, p.wallet);
-  const ixs: Transaction["instructions"] = [];
-  const tokenOwnerRecord = await withDepositGoverningTokens(
-    ixs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    p.realm,
-    source,
-    p.governingTokenMint,
-    p.wallet,
-    p.wallet,
-    p.wallet,
-    new BN(p.amount.toString()),
-  );
-  // Token-2022 governing mints need the program-retarget + mint-append the
-  // deployed v3.1.4 fork requires (AUDIT F-7); the classic path is untouched.
-  const finalIxs =
-    p.tokenProgram && p.tokenProgram.equals(TOKEN_2022_PROGRAM_ID)
-      ? adaptDepositForToken2022(ixs, p.governingTokenMint)
-      : ixs;
-  return {
-    txBase64: toBase64Unsigned(finalIxs, p.wallet, p.blockhash),
-    tokenOwnerRecord: tokenOwnerRecord.toBase58(),
-  };
-}
-
-export interface CastVoteTxParams {
-  realm: PublicKey;
-  governance: PublicKey;
-  proposal: PublicKey;
-  /** The proposer's TokenOwnerRecord (from the proposal account). */
-  proposalOwnerRecord: PublicKey;
-  governingTokenMint: PublicKey;
-  wallet: PublicKey;
-  blockhash: string;
-  approve: boolean;
-}
-
-export async function buildCastVoteTx(
-  p: CastVoteTxParams,
-): Promise<{ txBase64: string }> {
-  const voterTor = await getTokenOwnerRecordAddress(
-    SPL_GOVERNANCE_PROGRAM_ID,
-    p.realm,
-    p.governingTokenMint,
-    p.wallet,
-  );
-  const vote = p.approve
-    ? new Vote({
-        voteType: VoteKind.Approve,
-        approveChoices: [new VoteChoice({ rank: 0, weightPercentage: 100 })],
-        deny: undefined,
-        veto: undefined,
-      })
-    : new Vote({
-        voteType: VoteKind.Deny,
-        approveChoices: undefined,
-        deny: true,
-        veto: undefined,
-      });
-  const ixs: Transaction["instructions"] = [];
-  await withCastVote(
-    ixs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    p.realm,
-    p.governance,
-    p.proposal,
-    p.proposalOwnerRecord,
-    voterTor,
-    p.wallet,
-    p.governingTokenMint,
-    vote,
-    p.wallet,
-  );
-  return { txBase64: toBase64Unsigned(ixs, p.wallet, p.blockhash) };
-}
-
-// ---------- HTTP-facing source (route seam) ----------
+export {
+  buildCastVoteTx,
+  buildDepositGoverningTokensTx,
+  resolveCastVoteTx,
+  resolveDepositTx,
+} from "@daofun/sdk";
+export type { CastVoteTxParams, DepositTxParams } from "@daofun/sdk";
 
 export interface GovernanceTxSource {
   depositTx(req: {
@@ -209,58 +37,22 @@ export interface GovernanceTxSource {
 export class RpcGovernanceTxSource implements GovernanceTxSource {
   constructor(private readonly connection: Connection) {}
 
-  private async blockhash(): Promise<string> {
-    return (await this.connection.getLatestBlockhash("confirmed")).blockhash;
-  }
-
-  async depositTx(req: {
+  depositTx(req: {
     realm: PublicKey;
     governingTokenMint: PublicKey;
     wallet: PublicKey;
     amount: bigint;
     tokenProgram?: PublicKey;
   }): Promise<{ txBase64: string; tokenOwnerRecord: string }> {
-    // Resolve the token program from the mint's on-chain OWNER rather than
-    // trusting the browser's hint: a wrong/missing program produces a deposit
-    // that reverts (Token-2022) or grants no weight (AUDIT F-7). The server
-    // submits the tx, so it owns this correctness.
-    let tokenProgram = req.tokenProgram;
-    try {
-      const info = await this.connection.getAccountInfo(req.governingTokenMint);
-      if (info) tokenProgram = info.owner;
-    } catch {
-      // fall back to the caller-supplied hint (or classic default)
-    }
-    return buildDepositGoverningTokensTx({
-      ...req,
-      ...(tokenProgram ? { tokenProgram } : {}),
-      blockhash: await this.blockhash(),
-    });
+    return resolveDepositTx(this.connection, req);
   }
 
-  async castVoteTx(req: {
+  castVoteTx(req: {
     proposal: PublicKey;
     wallet: PublicKey;
     approve: boolean;
   }): Promise<{ txBase64: string }> {
-    // realm/governance/mint/proposer record all come from CHAIN state —
-    // the browser supplies only (proposal, wallet, approve).
-    const proposal = await getProposal(this.connection, req.proposal);
-    const governance = await getGovernanceAccount(
-      this.connection,
-      proposal.account.governance,
-      Governance,
-    );
-    return buildCastVoteTx({
-      realm: governance.account.realm,
-      governance: proposal.account.governance,
-      proposal: req.proposal,
-      proposalOwnerRecord: proposal.account.tokenOwnerRecord,
-      governingTokenMint: proposal.account.governingTokenMint,
-      wallet: req.wallet,
-      blockhash: await this.blockhash(),
-      approve: req.approve,
-    });
+    return resolveCastVoteTx(this.connection, req);
   }
 
   async submit(signedTxBase64: string): Promise<{ signature: string }> {

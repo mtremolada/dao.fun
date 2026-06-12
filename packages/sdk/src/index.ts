@@ -6,6 +6,7 @@ export * from "./treasury";
 export * from "./matrix";
 export * from "./vsr";
 export * from "./governance";
+export * from "./governance-tx";
 export * from "./launch-plan";
 export * from "./execution-adapter";
 export * from "./actions";
