@@ -29,6 +29,21 @@ test("proposal view is fully chain-fed: badge verifies against the recomputed ha
   await expect(page.getByTestId("execute-button")).toBeEnabled();
 });
 
+test("AUDIT F-8: a proposal whose instruction set can't be fully re-read shows a danger flag, never a verified badge", async ({
+  page,
+}) => {
+  const INCOMPLETE = "Vote111111111111111111111111111111111111111";
+  await page.goto(`/proposal/${INCOMPLETE}`);
+
+  // The badge must NOT read "verified" even though an artifact was published.
+  const badge = page.getByTestId("hash-badge");
+  await expect(badge).not.toHaveAttribute("data-state", "verified");
+
+  // The chain anomaly is surfaced loudly (INV-10), even with the artifact loaded.
+  const anomalies = page.getByTestId("chain-anomalies");
+  await expect(anomalies).toContainText(/could not be fully read/i);
+});
+
 test("dashboard renders vault balance, sweep history, and vote power", async ({
   page,
 }) => {

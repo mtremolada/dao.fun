@@ -22,13 +22,18 @@ export default async function ProposalPage({
   const { id } = await params;
   const q = await searchParams;
 
-  let chain: ProposalChainState | null = null;
+  // The /chain/proposals route augments the reader state with the computed
+  // `anomalies` array (INV-10 red flags); surface them in the view.
+  let chain: (ProposalChainState & { anomalies?: string[] }) | null = null;
   if (!q.chainHash) {
     try {
       const res = await fetch(`${API}/chain/proposals/${id}`, {
         cache: "no-store",
       });
-      if (res.ok) chain = (await res.json()) as ProposalChainState;
+      if (res.ok)
+        chain = (await res.json()) as ProposalChainState & {
+          anomalies?: string[];
+        };
     } catch {
       // reader unavailable — fall through to query params / empty state
     }
@@ -56,6 +61,7 @@ export default async function ProposalPage({
             : (chain?.holdUpSeconds ?? 0)
         }
         proposalState={chain?.state ?? null}
+        anomalies={chain?.anomalies ?? []}
         veto={
           chain
             ? { vetoed: chain.vetoed, vetoVoteWeight: chain.vetoVoteWeight }

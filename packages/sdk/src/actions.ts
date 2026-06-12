@@ -636,6 +636,14 @@ export const SET_PARAM_WHITELIST: readonly SetParamId[] = [
 
 /** spl-governance program minimum (enforced on-chain too; D-014). */
 export const MIN_BASE_VOTING_TIME_S = 3600;
+/**
+ * On-chain GovernanceConfig stores baseVotingTime and minInstructionHoldUpTime
+ * as u32 SECONDS. Values past this would make the borsh u32 encoder throw a
+ * cryptic RangeError mid-build; bound them explicitly so setParam fails with a
+ * clear message and can never emit a malformed config (~136 years, far past any
+ * legitimate window).
+ */
+export const MAX_U32 = 4_294_967_295n;
 
 const GOVERNANCE_PROGRAM_VERSION = 3;
 
@@ -694,6 +702,11 @@ export function buildSetParamIxs(p: SetParamParams): SetParamResult {
           `setParam: holdUpSeconds must be >= ${floor} for ${p.mode}/${p.tier} (INV-3)`,
         );
       }
+      if (p.value > MAX_U32) {
+        throw new Error(
+          `setParam: holdUpSeconds must be <= ${MAX_U32} (on-chain u32 seconds)`,
+        );
+      }
       next.minInstructionHoldUpTime = Number(p.value);
       break;
     }
@@ -714,6 +727,11 @@ export function buildSetParamIxs(p: SetParamParams): SetParamResult {
       if (p.value < BigInt(MIN_BASE_VOTING_TIME_S)) {
         throw new Error(
           `setParam: baseVotingTime must be >= ${MIN_BASE_VOTING_TIME_S}s (program minimum, D-014)`,
+        );
+      }
+      if (p.value > MAX_U32) {
+        throw new Error(
+          `setParam: baseVotingTime must be <= ${MAX_U32} (on-chain u32 seconds)`,
         );
       }
       next.baseVotingTime = Number(p.value);

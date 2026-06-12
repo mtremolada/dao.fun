@@ -98,7 +98,12 @@ For ANY attacker budget and ANY reachable voting window
   `incomplete-instruction-set` red flag), reports the MIN hold-up, and flags any
   non-single-option shape — pinned by `audit-reader-recompute.test.ts` +
   `anomalies.test.ts`. The attacker precondition is unchanged (still must reach
-  quorum), but the badge no longer lies.
+  quorum), but the badge no longer lies. **Fail-safe + surfacing (F-9):** on an
+  incomplete read the reader returns `chainHash: null` so the badge fail-closes
+  to non-verified by construction, and the proposal view now actually RENDERS
+  the anomaly list (it was computed server-side but the page dropped it, and a
+  missing artifact hid even the artifact's own flags) — always visible, with
+  explicit "DANGER" copy for the incomplete/non-canonical cases.
 
 ### 2.2 Direct-leg privilege escalation
 

@@ -22,6 +22,13 @@ const HASH = "a".repeat(64);
 const CHAIN_PROPOSAL = new PublicKey(
   "So11111111111111111111111111111111111111112",
 );
+// AUDIT F-8: a proposal whose on-chain instruction set could NOT be fully
+// re-read (e.g. >cap transactions, or an adversarial truncation). The reader
+// returns chainHash=null so the badge can never read "verified", and the
+// `incomplete-instruction-set` anomaly carries the danger.
+const INCOMPLETE_PROPOSAL = new PublicKey(
+  "Vote111111111111111111111111111111111111111",
+);
 const REALM = new PublicKey("GRdkevbhSoJrnEtqadhvyuev81jSL99HYyhMCa3Tt8wR");
 const VAULT = new PublicKey("8Z4PfwCARrz3DbJQpwy9vhmYz3xvokn9tZN1vsHq1kj9");
 
@@ -34,6 +41,22 @@ const ARTIFACT = {
 
 const chain: ChainReader = {
   async getProposalState(proposal) {
+    if (proposal.equals(INCOMPLETE_PROPOSAL)) {
+      return {
+        proposal: proposal.toBase58(),
+        name: "tampered: instruction set exceeds the readable range",
+        state: "Voting",
+        votingCompletedAt: null,
+        holdUpSeconds: 72 * 3600,
+        // fail-safe: no trustworthy hash over a partial executed set
+        chainHash: null,
+        publishedArtifactHash: HASH,
+        instructionSetComplete: false,
+        singleOption: true,
+        vetoVoteWeight: "0",
+        vetoed: false,
+      };
+    }
     if (!proposal.equals(CHAIN_PROPOSAL)) return null;
     return {
       proposal: proposal.toBase58(),
@@ -43,6 +66,8 @@ const chain: ChainReader = {
       holdUpSeconds: 0,
       chainHash: HASH,
       publishedArtifactHash: HASH,
+      instructionSetComplete: true,
+      singleOption: true,
       vetoVoteWeight: "0",
       vetoed: false,
     };
@@ -106,6 +131,9 @@ async function main() {
   await artifactStore.put(PROPOSAL, HASH, ARTIFACT);
   // The chain-fed proposal resolves its artifact via the recomputed hash.
   await artifactStore.put(CHAIN_PROPOSAL, HASH, ARTIFACT);
+  // F-8: the tampered proposal DID publish an artifact, but the chain set
+  // could not be fully re-read — the badge must still refuse to verify.
+  await artifactStore.put(INCOMPLETE_PROPOSAL, HASH, ARTIFACT);
 
   const handler = createApiHandler({
     launchStore: new MemoryLaunchStore(),

@@ -21,6 +21,20 @@ const BADGE_COPY = {
   missing: "Artifact missing — nothing to verify against",
 } as const;
 
+// Human copy for the chain reader's INV-10 red flags (detectProposalAnomalies).
+const ANOMALY_COPY: Record<string, string> = {
+  "hash-mismatch":
+    "MISMATCH — on-chain instructions differ from the published artifact",
+  "missing-artifact-hash":
+    "No artifact hash published — the instructions cannot be verified",
+  "no-instructions": "Proposal carries no instructions",
+  "zero-hold-up": "ZERO hold-up — a passing vote can execute immediately",
+  "incomplete-instruction-set":
+    "DANGER — the on-chain instruction set could not be fully read; the badge does NOT cover everything that will execute",
+  "unexpected-proposal-shape":
+    "DANGER — non-standard proposal shape; instructions may execute outside the verified set",
+};
+
 export function ProposalView(props: {
   proposal: string;
   artifactHash: string | null;
@@ -29,6 +43,8 @@ export function ProposalView(props: {
   holdUpSeconds: number;
   /** Chain-fed extras (null when the reader is unavailable). */
   proposalState?: string | null;
+  /** INV-10 red flags from the chain reader (detectProposalAnomalies). */
+  anomalies?: string[];
   veto?: { vetoed: boolean; vetoVoteWeight: string } | null;
 }) {
   const [artifact, setArtifact] = useState<Artifact | null>(null);
@@ -76,6 +92,18 @@ export function ProposalView(props: {
           {BADGE_COPY[badge]}
         </span>
       </p>
+
+      {/* INV-10: chain anomalies are surfaced even when NO artifact loaded —
+          a proposer who omits the artifact must not be able to hide them. */}
+      {props.anomalies && props.anomalies.length > 0 && (
+        <ul className="errors" data-testid="chain-anomalies">
+          {props.anomalies.map((a) => (
+            <li key={a} data-anomaly={a}>
+              {ANOMALY_COPY[a] ?? a}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {props.proposalState && (
         <p data-testid="proposal-state">

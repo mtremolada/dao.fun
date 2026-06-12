@@ -25,7 +25,7 @@ proposer), a MEDIUM threat-model overstatement (F-2), and three
 low/informational items.
 
 **Status: all findings are now FIXED and proven on the real binaries**
-(F-1..F-8), with the fixes pinned by tests. The Token-2022 launch defect (F-1)
+(F-1..F-10), with the fixes pinned by tests. The Token-2022 launch defect (F-1)
 is corrected inside the sdk builder; its deposit-side twin (F-7) is corrected in
 the browser tx-builder — and a holder now deposits Token-2022 governing tokens
 and gains exactly that vote weight, proven end-to-end on the deployed binary.
@@ -36,9 +36,14 @@ protection model and demonstrated on the real binary.
 
 > A second, deeper adversarial pass (post-F-6) produced F-7 and F-8 — the
 > deposit-side completion of the Token-2022 thread and the execution-fidelity
-> hardening of the chain reader. Both are the kind of defect that only surfaces
-> when you stop trusting the green CI and ask "what does the SHIPPING config
-> actually do, and what can a malicious proposer make the UI show?"
+> hardening of the chain reader. A third, production-readiness pass added F-9
+> (the chain anomalies were computed but the UI silently dropped them — and a
+> missing artifact hid even the artifact's own flags) and F-10 (bound the
+> setParam u32 fields), plus a fail-safe that makes the INV-9 badge refuse to
+> verify whenever the executed set could not be fully re-read. All are the kind
+> of defect that only surfaces when you stop trusting the green CI and ask "what
+> does the SHIPPING config actually do, and what can a malicious proposer make
+> the UI show?"
 
 **Updated recommendation: GO for mainnet is unblocked from the audit's side**,
 contingent on the operator's standing GATE sign-offs and the standard
@@ -66,11 +71,12 @@ Baseline matches the documented "234 unit + 21 integration". The tsc errors
 were latent (type-only; vitest strips types via esbuild so tests still ran) and
 are fixed as part of this audit (F-6).
 
-After the audit: **259 unit** (+4 backend INV-9 recompute, +5 sdk setParam
+After the audit: **261 unit** (+4 backend INV-9 recompute, +5 sdk setParam
 preservation, +9 backend from the second pass: F-7 deposit shape ×2, F-8 reader
-recompute ×5, F-8 anomalies ×2) and **27 integration / 15 files** (+3 F-1 cases,
-+1 F-2, +1 INV-9 direct-leg, +1 F-7 Token-2022 deposit). All green; eslint + tsc
-clean.
+recompute ×5, F-8 anomalies ×2, +2 sdk F-10 u32 bounds) and **27 integration /
+15 files** (+3 F-1 cases, +1 F-2, +1 INV-9 direct-leg, +1 F-7 Token-2022
+deposit), plus **1 new e2e spec** (F-9 danger-flag, CI-run). All green; eslint +
+both tsc scopes (root + app) clean.
 
 ---
 
@@ -389,6 +395,63 @@ The discovery is extracted to a pure `collectProposalTransactions(expectedCount,
 fetchTx)` so the truncation/hole/over-cap behaviour is unit-tested without a
 network, against the same logic the RPC reader runs.
 
+**Fail-safe (pass 3).** Beyond flagging, `getProposalState` now returns
+`chainHash: null` whenever the read is incomplete. A hash over a partial set is
+untrustworthy, so refusing to publish one means NO downstream surface — the
+`hashBadge` "verified" state included — can ever render green over a prefix. The
+badge degrades to non-verified by construction, independent of whether the UI
+renders the anomaly list (which F-9 now also fixes).
+
+---
+
+### F-9 — MEDIUM — chain anomalies were computed but never shown to the user (INV-10 incomplete at the presentation layer)
+
+**Where:** `app/app/proposal/[id]/page.tsx`, `app/components/proposal-view.tsx`.
+
+**What.** The API computes `detectProposalAnomalies` and returns it on
+`/chain/proposals/:id` — but the proposal page **discarded the `anomalies`
+array** (it cast the response to `ProposalChainState`, which omits the field) and
+the `ProposalView` component had no way to render it. So the only red flags a
+user ever saw were the *artifact*'s own `redFlags` — and those render **inside**
+`{artifact && (...)}`, meaning a proposer who simply **omits the artifact**
+suppressed every red flag on the page, leaving just the hash badge. The whole
+INV-10 "inform the voter" control was computed server-side and dropped before
+it reached the screen. This made F-8's new flags (and the pre-existing
+`zero-hold-up` / `missing-artifact-hash`) invisible in practice.
+
+**Fix (applied).** The page now forwards the reader's `anomalies` to
+`ProposalView`, which renders them as a loud red-flag list (`data-testid=
+"chain-anomalies"`) that is **always visible when non-empty — even with no
+artifact loaded**, so omitting the artifact can no longer hide the flags. Each
+anomaly maps to plain-English danger copy (`incomplete-instruction-set` and
+`unexpected-proposal-shape` read as explicit "DANGER" lines). Combined with the
+F-8 fail-safe (`chainHash: null` on incomplete), an under-readable or
+non-canonical proposal now shows a non-verified badge **and** an explicit danger
+flag.
+
+**Proof.** `app/e2e/dashboard.spec.ts` adds a case: a stub proposal whose
+instruction set cannot be fully re-read shows a non-`verified` badge and a
+`chain-anomalies` "could not be fully read" danger line. *(Playwright browsers
+are not installable in the audit sandbox — the proxy CA blocks the download — so
+this spec is verified in CI alongside the existing 12 e2e specs; the backend
+completeness logic it depends on is unit-pinned by `audit-reader-recompute.test.ts`,
+and the app typechecks clean.)*
+
+---
+
+### F-10 — INFO — `setParam` did not bound its u32 fields
+
+**Where:** `packages/sdk/src/actions.ts` — `buildSetParamIxs` (`holdUpSeconds`,
+`baseVotingTime`).
+
+**What.** The on-chain `GovernanceConfig` stores `minInstructionHoldUpTime` and
+`baseVotingTime` as **u32 seconds**, but the menu only floored them. A value past
+`u32::MAX` (~136 years) would make the borsh u32 encoder throw a cryptic
+`RangeError` mid-build (no silent truncation today — so not a live vulnerability
+— but a brittle, unclear failure, and a hazard if an encoder ever changed to
+wrap). **Fixed** with explicit `<= MAX_U32` checks that fail with a clear
+message; pinned in `audit-setparam-preservation.test.ts`.
+
 ---
 
 ## Safe verdicts, now backed by regression tests
@@ -431,7 +494,7 @@ now has a test so the verdict cannot rot silently.
 | INV-7 | No human-held unilateral key in custody; sole member = native treasury | **Holds** | `treasury.ts` (configAuthority null, single member); `launch-steps.ts` assert; gate1 on real binary |
 | INV-8 | Vault inflow per sweep == gross accrued; no skim at this layer | **Holds** | `keeper.ts` gross delta; action-amm/keeper integration (gross >= curve+amm) |
 | INV-9 | Executed instructions byte-identical to what voters saw; hash-keyed | **Holds** | gate1 chainHashOf; audit-inv9-recompute (all 4 shapes) + audit-inv9-directleg; **F-4** latent hardening; **F-8** — recompute now covers the FULL on-chain count (no 32-cap/gap truncation), `audit-reader-recompute.test.ts` |
-| INV-10 | Every proposal surfaces sim + decoded summary; undecodable flagged | **Holds** | `detectProposalAnomalies`; chain-reader unwrap; backend anomalies tests; **F-8** — `incomplete-instruction-set` + `unexpected-proposal-shape` red flags added |
+| INV-10 | Every proposal surfaces sim + decoded summary; undecodable flagged | **Holds** | `detectProposalAnomalies`; chain-reader unwrap; backend anomalies tests; **F-8** — `incomplete-instruction-set` + `unexpected-proposal-shape` red flags added; **F-9** — anomalies now actually RENDERED (page + `ProposalView`), always-visible even with no artifact |
 | INV-11 | Mode ratchets only toward decentralization (MVP governance-level; Stage 3 structural) | **Holds at documented level** | setParam ratchet-by-omission (now full-field regression); proposal-gate `ratchet` (Stage 3 WIP, reviewed); spec 12.2 caveat |
 
 ---
@@ -456,18 +519,29 @@ are fixed and proven on the deployed binaries: F-1 (the Token-2022 DAO stands
 up — both shipping modes) and F-7 (a Token-2022 holder deposits and gains exactly
 that vote weight). Together they close the full launch→govern path for the
 shipping configuration. F-8 hardens the INV-9/INV-10 chain reader so the
-"verified" badge cannot be truncated by an adversarial proposer. F-2 is
-re-documented and demonstrated; F-3/F-4/F-5/F-6 are fixed. The custody, fee,
+"verified" badge cannot be truncated by an adversarial proposer; **F-9** makes
+those red flags actually reach the screen (and the badge fail-closes on an
+unreadable set); **F-10** bounds the setParam u32 fields. F-2 is re-documented
+and demonstrated; F-3/F-4/F-5/F-6 are fixed. The custody, fee,
 execution-fidelity, action-menu, and distributor designs are sound and
 regression-covered on the real binaries.
 
 Remaining items the operator owns before a real launch (outside audit scope):
 - the standard mainnet transition (SPEC §10/§11): operator-supplied
   upgrade-authority/treasury, funding, mainnet smoke test;
+- **API authentication / rate-limiting on the MUTATING endpoints.** The repo
+  ships only a *read-only* server bootstrap (`scripts/serve-frontend-mainnet.ts`
+  — launches disabled, no tx/snapshot source), and `createApiHandler` takes its
+  deps by injection precisely so the production server (with the launcher keys,
+  the launch steps, and the tx source) is composed by the operator. That
+  composition MUST front the mutating routes (`POST /launches`, `/snapshots`,
+  `/chain/txs/*`) with auth + rate-limiting: an unauthenticated `/launches` would
+  let anyone spend the server's launcher wallet (treasury rent + prefund + fee
+  per call). This is a deployment-layer control, deliberately not hardcoded in
+  the handler — flagged here so it is not forgotten, not silently assumed safe.
 - **recommended** before advertising any lockup guarantee: a no-addin property
-  test (F-2) and/or a Token-2022 voter-weight plugin;
-- **recommended**: extend the Token-2022 mint-append to the browser
-  deposit/withdraw tx-builders (F-1 follow-up).
+  test (F-2) and/or a Token-2022 voter-weight plugin.
 
-Verification at audit close: **243 unit + 26 integration green** (real binaries,
-hermetic); **eslint clean; tsc clean**.
+Verification at audit close (pass 3): **261 unit + 27 integration green** (real
+binaries, hermetic) + 1 new CI-run e2e spec; **eslint clean; root + app tsc
+clean**.

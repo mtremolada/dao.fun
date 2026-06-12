@@ -141,4 +141,23 @@ describe("AUDIT setParam: every non-target config field is preserved (council ve
       assertOnlyChanged(before, newConfig, c.id);
     });
   }
+
+  // The u32 fields must reject out-of-range values with a CLEAR error rather
+  // than letting the borsh encoder throw a cryptic RangeError mid-build (or, in
+  // a future encoder, silently truncate to a tiny on-chain window).
+  for (const id of ["holdUpSeconds", "baseVotingTime"] as const) {
+    it(`rejects an out-of-u32 ${id} instead of emitting a malformed config`, () => {
+      expect(() =>
+        buildSetParamIxs({
+          governance,
+          currentConfig: councilConfig(),
+          mode: "council",
+          tier: "micro",
+          communitySupply: SUPPLY,
+          paramId: id,
+          value: 4_294_967_296n, // u32::MAX + 1
+        }),
+      ).toThrow(/u32/);
+    });
+  }
 });

@@ -308,7 +308,12 @@ export class RpcChainReader implements ChainReader {
         ? account.votingCompletedAt.toNumber()
         : null,
       holdUpSeconds: minHoldUpSeconds,
-      chainHash: hashWrappedInstructionSet(wrapped),
+      // AUDIT F-8 (fail-safe): if the executed set could not be fully re-read,
+      // a hash over the partial set is untrustworthy — refuse to publish one at
+      // all, so NO surface (the `hashBadge` "verified" state included) can ever
+      // render green over a prefix. The `incomplete-instruction-set` anomaly
+      // carries the reason.
+      chainHash: complete ? hashWrappedInstructionSet(wrapped) : null,
       publishedArtifactHash: HEX_64.test(description)
         ? description.toLowerCase()
         : null,
