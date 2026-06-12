@@ -6,7 +6,7 @@
  */
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
 import { PublicKey } from "@solana/web3.js";
-import { validateLaunchForm, type LaunchFormInput } from "@daofun/sdk";
+import { proRataShares, validateLaunchForm, type LaunchFormInput } from "@daofun/sdk";
 import {
   runLaunch,
   type LaunchStep,
@@ -14,6 +14,7 @@ import {
 } from "./launch-machine";
 import type { ArtifactStore } from "./artifacts";
 import type { ChainReader } from "./chain-reader";
+import type { HolderSnapshotSource } from "./holder-snapshot";
 
 export interface ApiDeps {
   launchStore: LaunchStore;
@@ -22,6 +23,8 @@ export interface ApiDeps {
   buildSteps: (launchId: string, form: LaunchFormInput) => LaunchStep[];
   /** RPC-backed in prod, fake in tests; /chain/* is 501 when absent. */
   chain?: ChainReader;
+  /** Holder snapshots for `distribute` inputs; /snapshots is 501 when absent. */
+  snapshot?: HolderSnapshotSource;
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -85,6 +88,50 @@ async function handle(
   if (req.method === "GET" && segments[0] === "launches" && segments.length === 2) {
     const state = await deps.launchStore.load(segments[1]!);
     return state ? json(res, 200, state) : json(res, 404, { error: "not found" });
+  }
+
+  if (req.method === "POST" && url.pathname === "/snapshots") {
+    if (!deps.snapshot) {
+      return json(res, 501, { error: "snapshot source not configured" });
+    }
+    let body: { mint?: string; totalLamports?: string; excludeOwners?: string[] };
+    try {
+      body = (await readBody(req)) as typeof body;
+    } catch {
+      return json(res, 400, { error: "invalid JSON body" });
+    }
+    let mint: PublicKey;
+    let totalLamports: bigint;
+    let excludeOwners: PublicKey[];
+    try {
+      mint = new PublicKey(body.mint ?? "");
+      totalLamports = BigInt(body.totalLamports ?? "");
+      if (totalLamports <= 0n) throw new Error("non-positive");
+      excludeOwners = (body.excludeOwners ?? []).map((o) => new PublicKey(o));
+    } catch {
+      return json(res, 400, {
+        error:
+          "mint and positive totalLamports are required (excludeOwners optional pubkeys)",
+      });
+    }
+    const snap = await deps.snapshot.snapshotHolders(mint);
+    let result;
+    try {
+      result = proRataShares({ holders: snap.holders, totalLamports, excludeOwners });
+    } catch (e) {
+      return json(res, 400, { error: (e as Error).message });
+    }
+    return json(res, 200, {
+      slot: snap.slot,
+      holderCount: snap.holders.length,
+      heldSupply: result.heldSupply.toString(),
+      allocatedLamports: result.allocatedLamports.toString(),
+      dustLamports: result.dustLamports.toString(),
+      shares: result.shares.map((s) => ({
+        claimant: s.claimant.toBase58(),
+        lamports: s.lamports.toString(),
+      })),
+    });
   }
 
   if (req.method === "GET" && segments[0] === "artifacts" && segments.length === 3) {

@@ -4,3 +4,4 @@ export * from "./launch-steps";
 export * from "./sqlite-store";
 export * from "./http-api";
 export * from "./chain-reader";
+export * from "./holder-snapshot";
