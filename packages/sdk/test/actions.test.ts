@@ -19,12 +19,19 @@ import {
 } from "@solana/spl-token";
 import { newBondingCurve } from "@pump-fun/pump-sdk";
 import {
+  GovernanceConfig,
+  VoteThreshold,
+  VoteThresholdType,
+  VoteTipping,
+} from "@solana/spl-governance";
+import {
   buildAmmBuybackIxs,
   buildBurnIxs,
   buildBuybackIxs,
   buildDistributeIxs,
   buildGrantIxs,
   buildProvideLiquidityIxs,
+  buildSetParamIxs,
 } from "../src/actions";
 import { MERKLE_DISTRIBUTOR_PROGRAM_ID } from "../src/constants";
 import { verifyClaimProof } from "../src/merkle-distributor";
@@ -616,5 +623,146 @@ describe("distribute (merkle claim distributor, spec 6.8 / D-024)", () => {
         shares: [shares[0]!, shares[0]!],
       }),
     ).toThrow(/duplicate/);
+  });
+});
+
+describe("setParam (whitelisted-param registry, spec 6.8 / D-025)", () => {
+  const governance = Keypair.generate().publicKey;
+  const SUPPLY = 200_000_000_000n;
+
+  function currentConfig() {
+    return new GovernanceConfig({
+      communityVoteThreshold: new VoteThreshold({
+        type: VoteThresholdType.YesVotePercentage,
+        value: 25,
+      }),
+      minCommunityTokensToCreateProposal: new BN("4000000000"),
+      minInstructionHoldUpTime: 72 * 3600,
+      baseVotingTime: 3 * 86400,
+      communityVoteTipping: VoteTipping.Disabled,
+      minCouncilTokensToCreateProposal: new BN(1),
+      councilVoteThreshold: new VoteThreshold({ type: VoteThresholdType.Disabled }),
+      councilVetoVoteThreshold: new VoteThreshold({
+        type: VoteThresholdType.YesVotePercentage,
+        value: 50,
+      }),
+      communityVetoVoteThreshold: new VoteThreshold({
+        type: VoteThresholdType.Disabled,
+      }),
+      councilVoteTipping: VoteTipping.Strict,
+      votingCoolOffTime: 0,
+      depositExemptProposalCount: 10,
+    });
+  }
+
+  it("builds ONE direct leg whose only account is the governance PDA as writable signer", () => {
+    const r = buildSetParamIxs({
+      governance,
+      currentConfig: currentConfig(),
+      mode: "council",
+      tier: "micro",
+      communitySupply: SUPPLY,
+      paramId: "holdUpSeconds",
+      value: BigInt(96 * 3600),
+    });
+    expect(r.directIxs).toHaveLength(1);
+    const ix = r.directIxs[0]!;
+    // no accounts outside the declared set — and the vault is NOWHERE
+    expect(ix.keys).toHaveLength(1);
+    expect(ix.keys[0]!.pubkey.equals(governance)).toBe(true);
+    expect(ix.keys[0]!.isSigner).toBe(true);
+    expect(ix.keys[0]!.isWritable).toBe(true);
+    expect(r.newConfig.minInstructionHoldUpTime).toBe(96 * 3600);
+  });
+
+  it("ratchet by omission: every non-target field is preserved verbatim", () => {
+    const cur = currentConfig();
+    const r = buildSetParamIxs({
+      governance,
+      currentConfig: cur,
+      mode: "council",
+      tier: "micro",
+      communitySupply: SUPPLY,
+      paramId: "quorumPercent",
+      value: 30n,
+    });
+    const next = r.newConfig;
+    expect(next.communityVoteThreshold.value).toBe(30);
+    // the veto surface (mode-structural) is untouchable through setParam
+    expect(next.councilVetoVoteThreshold.type).toBe(cur.councilVetoVoteThreshold.type);
+    expect(next.councilVetoVoteThreshold.value).toBe(cur.councilVetoVoteThreshold.value);
+    expect(next.communityVetoVoteThreshold.type).toBe(
+      cur.communityVetoVoteThreshold.type,
+    );
+    // the exit window (tipping Disabled) and anti-spam settings survive too
+    expect(next.communityVoteTipping).toBe(cur.communityVoteTipping);
+    expect(next.councilVoteTipping).toBe(cur.councilVoteTipping);
+    expect(next.votingCoolOffTime).toBe(cur.votingCoolOffTime);
+    expect(next.depositExemptProposalCount).toBe(cur.depositExemptProposalCount);
+    expect(next.minInstructionHoldUpTime).toBe(cur.minInstructionHoldUpTime);
+    expect(next.baseVotingTime).toBe(cur.baseVotingTime);
+    expect(
+      next.minCommunityTokensToCreateProposal.eq(
+        cur.minCommunityTokensToCreateProposal,
+      ),
+    ).toBe(true);
+  });
+
+  it("hold-up floors are mode-resolved: council=floor, cypherpunk=max(24h,floor), sovereign=0", () => {
+    const build = (mode: "council" | "cypherpunk" | "sovereign", tier: "micro" | "large", v: bigint) =>
+      buildSetParamIxs({
+        governance,
+        currentConfig: currentConfig(),
+        mode,
+        tier,
+        communitySupply: SUPPLY,
+        paramId: "holdUpSeconds",
+        value: v,
+      });
+    expect(() => build("council", "micro", BigInt(71 * 3600))).toThrow(/INV-3/);
+    expect(() => build("cypherpunk", "micro", BigInt(71 * 3600))).toThrow(/INV-3/);
+    // large tier floor is 24h; cypherpunk keeps max(24h, floor) == 24h
+    expect(build("council", "large", BigInt(24 * 3600)).newConfig.minInstructionHoldUpTime).toBe(24 * 3600);
+    expect(build("cypherpunk", "large", BigInt(24 * 3600)).newConfig.minInstructionHoldUpTime).toBe(24 * 3600);
+    // sovereign chose floor exemption at launch (double-confirmed)
+    expect(build("sovereign", "micro", 0n).newConfig.minInstructionHoldUpTime).toBe(0);
+  });
+
+  it("quorum and proposal-threshold floors bind; baseVotingTime has the program minimum", () => {
+    const build = (paramId: "quorumPercent" | "proposalThresholdTokens" | "baseVotingTime", v: bigint) =>
+      buildSetParamIxs({
+        governance,
+        currentConfig: currentConfig(),
+        mode: "cypherpunk",
+        tier: "micro",
+        communitySupply: SUPPLY,
+        paramId,
+        value: v,
+      });
+    expect(() => build("quorumPercent", 24n)).toThrow(/within \[25, 100\]/);
+    expect(() => build("quorumPercent", 101n)).toThrow(/within \[25, 100\]/);
+    expect(build("quorumPercent", 25n).newConfig.communityVoteThreshold.value).toBe(25);
+    // micro floor: 200 bps of 200e9 == 4e9
+    expect(() => build("proposalThresholdTokens", 3_999_999_999n)).toThrow(/bps of supply/);
+    expect(
+      build("proposalThresholdTokens", 5_000_000_000n).newConfig
+        .minCommunityTokensToCreateProposal.toString(),
+    ).toBe("5000000000");
+    expect(() => build("baseVotingTime", 3599n)).toThrow(/program minimum/);
+    expect(build("baseVotingTime", 86_400n).newConfig.baseVotingTime).toBe(86_400);
+  });
+
+  it("anything off the whitelist is refused at build time", () => {
+    expect(() =>
+      buildSetParamIxs({
+        governance,
+        currentConfig: currentConfig(),
+        mode: "council",
+        tier: "micro",
+        communitySupply: SUPPLY,
+        paramId: "councilVetoVoteThreshold" as never,
+        value: 1n,
+      }),
+    ).toThrow(/not a whitelisted param/);
   });
 });

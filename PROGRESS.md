@@ -65,7 +65,7 @@
       tests) and PROVEN end-to-end on the real binaries
       (tests/action-amm.integration.test.ts phase 4: real sweepVault core,
       keeper as only signer, vault credited, idempotent re-sweep).
-- [~] 13.6b action menu (6.8): grant + burn shipped tests-first (5 tests,
+- [x] 13.6b action menu (6.8): grant + burn shipped tests-first (5 tests,
       bounds + declared-account-set). buyback (curve venue) shipped
       tests-first (3 unit tests: vault-as-only-inner-signer, no ATA-create
       inside the proposal per the D-019 size ceiling, D-009 bounds) and
@@ -91,9 +91,20 @@
       + funds the distributor with the root hash-pinned, holders claim
       with OUR proofs against the REAL verifier, double-claims and
       tampered amounts refused, permissionless clawback returns the
-      remainder to the vault, books close exactly. Still blocked:
-      setParam (param registry, Stage 3) — the action menu is otherwise
-      COMPLETE.
+      remainder to the vault, books close exactly. setParam shipped
+      tests-first (5 unit tests) on the whitelisted-param registry
+      (D-025: quorum/hold-up/threshold/baseVotingTime within mode-resolved
+      tier floors; ratchet by omission — the veto surface is unreachable)
+      and PROVEN end-to-end on the real binary
+      (tests/action-setparam.integration.test.ts): direct-leg proposal
+      (governance PDA invoke_signed by ExecuteTransaction), 72h -> 96h by
+      vote, non-target config byte-identical, and the NEW floor binds
+      inserts and execution timing. The action menu is COMPLETE
+      (on-chain byte-enforcement of the menu arrives with Stage 3's
+      proposal-gate). distribute inputs: holder-snapshot service shipped
+      tests-first (D-026: sdk proRataShares + backend RPC/DAS sources +
+      POST /snapshots; loud top-20 fallback for the index-excluded public
+      RPC, verified live).
 - [x] 13.6c backend orchestrator (6.6): step machine (5 tests) + concrete
       launch steps (6 tests: exact fee, INV-1 creator plumbing, resume
       after token creation, INV-5/INV-7 halt-on-violation) + 12.3 artifact

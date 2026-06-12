@@ -52,6 +52,29 @@ export const TIER_FLOORS: Record<MarketCapTier, TierFloors> = {
 
 const CYPHERPUNK_MIN_HOLDUP = 24 * HOUR;
 
+/**
+ * Mode-resolved hold-up floor (the Section 5 resolution rule), shared by
+ * resolveGovernanceParams and the setParam floor checks: council = tier
+ * floor; cypherpunk = max(24h, tier floor); sovereign = 0 (exempt by
+ * explicit, double-confirmed choice).
+ */
+export function holdUpFloorSeconds(
+  mode: GovernanceMode,
+  tier: MarketCapTier,
+): number {
+  const floor = TIER_FLOORS[tier].holdUpFloorSeconds;
+  switch (mode) {
+    case "council":
+      return floor;
+    case "cypherpunk":
+      return Math.max(CYPHERPUNK_MIN_HOLDUP, floor);
+    case "sovereign":
+      return 0;
+    case "guarded":
+      throw new Error("guarded mode ships at Stage 3 (proposal-gate program)");
+  }
+}
+
 export interface ResolveParams {
   mode: GovernanceMode;
   tier: MarketCapTier;
@@ -68,11 +91,11 @@ export function resolveGovernanceParams(p: ResolveParams): GovernanceParams {
   let vetoEnabled: boolean;
   switch (p.mode) {
     case "council":
-      holdUpSeconds = floors.holdUpFloorSeconds;
+      holdUpSeconds = holdUpFloorSeconds("council", p.tier);
       vetoEnabled = true;
       break;
     case "cypherpunk":
-      holdUpSeconds = Math.max(CYPHERPUNK_MIN_HOLDUP, floors.holdUpFloorSeconds);
+      holdUpSeconds = holdUpFloorSeconds("cypherpunk", p.tier);
       vetoEnabled = false;
       break;
     case "sovereign":

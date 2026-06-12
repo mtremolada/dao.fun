@@ -494,6 +494,69 @@ Mechanics verified on the real binary (tests/action-distribute.integration.test.
 - Double-claim impossible (ClaimStatus PDA init), tampered amounts fail
   the proof — both asserted against the real binary.
 
+## D-025 — setParam ships on a whitelisted-param registry; ratchet by omission (2026-06-12)
+
+Spec 6.8 `setParam` ("whitelisted params only, within tier floors and
+ratchet direction") resolved and shipped, completing the action menu:
+
+- **Whitelist** (`SET_PARAM_WHITELIST`): `quorumPercent`,
+  `holdUpSeconds`, `proposalThresholdTokens`, `baseVotingTime`. Floors:
+  quorum within [tier floor, 100]; proposal threshold >= the tier's bps
+  of supply; hold-up >= the MODE-resolved floor (council = tier floor,
+  cypherpunk = max(24h, floor), sovereign = 0 — the exemption it chose,
+  double-confirmed, at launch); baseVotingTime >= 3600s (program min,
+  D-014). Exported `holdUpFloorSeconds(mode, tier)` from matrix.ts so
+  resolveGovernanceParams and setParam share one floor function.
+- **Ratchet direction is enforced by OMISSION** (the INV-11 reading):
+  `buildSetParamIxs` starts from the CURRENT on-chain GovernanceConfig
+  and changes ONLY the target field — the veto thresholds (mode surface:
+  a cypherpunk DAO cannot acquire a council veto, a council DAO cannot
+  drop its veto), vote tipping (the exit window), cool-off, and the
+  deposit exemption are not reachable through the menu at all.
+  Mode TRANSITIONS stay where the spec puts them: governance-level in
+  MVP (12.2 caveat), structural at Stage 3.
+- **Verify item resolved on the real binary**: `SetGovernanceConfig`'s
+  only account is the governance PDA as writable SIGNER, and the
+  deployed program's ExecuteTransaction invoke_signs for the governance
+  account itself. setParam therefore rides a DIRECT leg (D-022
+  `directIxs`) with no Squads wrapping; the vault is never touched.
+  `buildProposeIxs` now accepts direct-leg-only proposals (empty inner
+  set + non-empty directIxs).
+- Proven end-to-end (tests/action-setparam.integration.test.ts): a
+  cypherpunk DAO raised its own hold-up 72h -> 96h by vote; non-target
+  config byte-identical after; and the new floor BINDS — the program
+  refuses an insert carrying the stale 72h hold-up and refuses execution
+  at +72h, then executes at +96h (INV-3 under the voted config).
+
+## D-026 — Holder snapshots: RPC gPA with a loud top-20 fallback; DAS optional (2026-06-12)
+
+The `distribute` input service (spec 6.8: "backend snapshots holders at
+slot (RPC/DAS), builds tree") ships as sdk math + backend sources:
+
+- **Pure math in the sdk** (`proRataShares`): floor-division pro-rata,
+  Σ shares <= total (dust stays in the vault), owners aggregated across
+  token accounts (ClaimStatus is per-claimant), exclusion list for the
+  DAO's own accounts, zero shares dropped, deterministic order. All
+  bigint (INV-6).
+- **RpcHolderSnapshot**: getProgramAccounts on the token program,
+  memcmp(mint @ 0), 72-byte dataSlice (Token-2022 accounts vary in size
+  — no dataSize filter), `withContext` pins the slot. **Verified live:
+  the PUBLIC mainnet RPC excludes the token programs from secondary
+  indexes (-32010) and per-method rate-limits the call**, so the source
+  falls back to getTokenLargestAccounts + owner reads — exact for <= 19
+  token accounts and REFUSING at the top-20 cap (a possibly-truncated
+  holder set must never silently feed a distribution).
+- **DasHolderSnapshot** (Helius getTokenAccounts, cursor-paginated) is
+  the indexed path for real holder counts — optional and feature-flagged
+  per the env spec; JSON-number amounts beyond 2^53 are refused rather
+  than rounded (INV-6). `makeHolderSnapshotSource` picks DAS when a key
+  is configured, RPC otherwise (zero-signup default keeps working).
+- **Trust note (12.3)**: the snapshot is an off-chain INPUT. What the
+  DAO votes on is the merkle root pinned in the proposal (INV-9); voters
+  verify the published share list against the root, not the backend.
+- Wire-up: `POST /snapshots` (501 until a source is configured),
+  `scripts/snapshot-holders.ts` for live reads.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

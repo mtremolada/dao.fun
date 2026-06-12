@@ -8,9 +8,10 @@
  * MVP ships `grant`, `burn`, `buyback` (curve venue AND, post-graduation,
  * the token's own PumpSwap pool), `provideLiquidity` (PumpSwap pool) —
  * the pool-ix verify item resolved against @pump-fun/pump-swap-sdk's
- * offline builder (D-021) — and `distribute` (Jito merkle distributor,
- * immutable mainnet deployment, D-024). Still blocked: setParam on the
- * whitelisted-param registry (Stage 3).
+ * offline builder (D-021) — `distribute` (Jito merkle distributor,
+ * immutable mainnet deployment, D-024), and `setParam` on the
+ * whitelisted-param registry (D-025): the menu is COMPLETE. On-chain
+ * byte-enforcement of the menu still arrives with Stage 3's proposal-gate.
  */
 import {
   PublicKey,
@@ -39,7 +40,18 @@ import {
   type SwapSolanaState,
 } from "@pump-fun/pump-swap-sdk";
 import BN from "bn.js";
-import { PUMP_AMM_PROGRAM_ID } from "./constants";
+import {
+  GovernanceConfig,
+  VoteThreshold,
+  VoteThresholdType,
+  createSetGovernanceConfig,
+} from "@solana/spl-governance";
+import {
+  PUMP_AMM_PROGRAM_ID,
+  SPL_GOVERNANCE_PROGRAM_ID,
+} from "./constants";
+import { TIER_FLOORS, holdUpFloorSeconds } from "./matrix";
+import type { GovernanceMode, MarketCapTier } from "./types";
 import {
   buildClaimTree,
   buildNewDistributorIx,
@@ -584,5 +596,132 @@ export function buildDistributeIxs(p: DistributeParams): DistributeResult {
     clawbackReceiver,
     tree,
     totalLamports: total,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// setParam — whitelisted-param registry (spec 6.8 / D-025)
+// ---------------------------------------------------------------------------
+
+/**
+ * The ONLY governance-config fields a setParam proposal can touch. The
+ * ratchet (INV-11) is enforced at the menu level by OMISSION: the veto
+ * thresholds (mode surface — a cypherpunk DAO cannot acquire a council
+ * veto and a council DAO cannot drop its veto here), vote tipping (the
+ * exit window), cool-off, and the deposit exemption are preserved
+ * byte-identically from the current config. Numeric values must respect
+ * the tier floors (Section 5); only the hold-up floor is mode-resolved
+ * (sovereign chose floor-exemption at launch, double-confirmed).
+ */
+export type SetParamId =
+  | "quorumPercent"
+  | "holdUpSeconds"
+  | "proposalThresholdTokens"
+  | "baseVotingTime";
+
+export const SET_PARAM_WHITELIST: readonly SetParamId[] = [
+  "quorumPercent",
+  "holdUpSeconds",
+  "proposalThresholdTokens",
+  "baseVotingTime",
+];
+
+/** spl-governance program minimum (enforced on-chain too; D-014). */
+export const MIN_BASE_VOTING_TIME_S = 3600;
+
+const GOVERNANCE_PROGRAM_VERSION = 3;
+
+export interface SetParamParams {
+  governance: PublicKey;
+  /** Current on-chain GovernanceConfig (the chain reader supplies it). */
+  currentConfig: GovernanceConfig;
+  mode: GovernanceMode;
+  tier: MarketCapTier;
+  /** Community supply in base units — the proposal-threshold floor input. */
+  communitySupply: bigint;
+  paramId: SetParamId;
+  value: bigint;
+}
+
+export interface SetParamResult {
+  /**
+   * Direct legs for buildProposeIxs `directIxs` (D-022): the instruction's
+   * only account is the governance PDA as a writable SIGNER — the
+   * governance program invoke_signs for it at execution, so there is no
+   * Squads wrapping and the vault is never touched.
+   */
+  directIxs: TransactionInstruction[];
+  newConfig: GovernanceConfig;
+}
+
+export function buildSetParamIxs(p: SetParamParams): SetParamResult {
+  if (!SET_PARAM_WHITELIST.includes(p.paramId)) {
+    throw new Error(
+      `setParam: "${String(p.paramId)}" is not a whitelisted param (D-025)`,
+    );
+  }
+  const floors = TIER_FLOORS[p.tier];
+
+  // Start from the CURRENT config so every non-target field is preserved
+  // verbatim (the ratchet-by-omission guarantee).
+  const next = new GovernanceConfig({ ...p.currentConfig });
+
+  switch (p.paramId) {
+    case "quorumPercent": {
+      if (p.value < BigInt(floors.quorumPercent) || p.value > 100n) {
+        throw new Error(
+          `setParam: quorumPercent must be within [${floors.quorumPercent}, 100] for the ${p.tier} tier`,
+        );
+      }
+      next.communityVoteThreshold = new VoteThreshold({
+        type: VoteThresholdType.YesVotePercentage,
+        value: Number(p.value),
+      });
+      break;
+    }
+    case "holdUpSeconds": {
+      const floor = holdUpFloorSeconds(p.mode, p.tier);
+      if (p.value < BigInt(floor)) {
+        throw new Error(
+          `setParam: holdUpSeconds must be >= ${floor} for ${p.mode}/${p.tier} (INV-3)`,
+        );
+      }
+      next.minInstructionHoldUpTime = Number(p.value);
+      break;
+    }
+    case "proposalThresholdTokens": {
+      const raw =
+        (p.communitySupply * BigInt(floors.proposalThresholdSupplyBps)) /
+        10_000n;
+      const floor = raw > 0n ? raw : 1n;
+      if (p.value < floor) {
+        throw new Error(
+          `setParam: proposalThresholdTokens must be >= ${floor} (${floors.proposalThresholdSupplyBps} bps of supply) for the ${p.tier} tier`,
+        );
+      }
+      next.minCommunityTokensToCreateProposal = new BN(p.value.toString());
+      break;
+    }
+    case "baseVotingTime": {
+      if (p.value < BigInt(MIN_BASE_VOTING_TIME_S)) {
+        throw new Error(
+          `setParam: baseVotingTime must be >= ${MIN_BASE_VOTING_TIME_S}s (program minimum, D-014)`,
+        );
+      }
+      next.baseVotingTime = Number(p.value);
+      break;
+    }
+  }
+
+  return {
+    directIxs: [
+      createSetGovernanceConfig(
+        SPL_GOVERNANCE_PROGRAM_ID,
+        GOVERNANCE_PROGRAM_VERSION,
+        p.governance,
+        next,
+      ),
+    ],
+    newConfig: next,
   };
 }

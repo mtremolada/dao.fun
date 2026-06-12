@@ -87,27 +87,29 @@ export interface ProposeResult {
 export async function buildProposeIxs(
   p: ProposeParams,
 ): Promise<ProposeResult> {
-  // wrap() rejects an empty inner set; hash it first for the same error
-  // surface either way.
-  if (p.innerIxs.length === 0) {
+  const directIxs = p.directIxs ?? [];
+  // A proposal needs SOMETHING to execute; a direct-leg-only proposal is
+  // legitimate (e.g. setParam: a single governance-signed config change).
+  if (p.innerIxs.length === 0 && directIxs.length === 0) {
     throw new Error("buildProposeIxs: inner instruction set is empty");
   }
-  const directIxs = p.directIxs ?? [];
   // INV-9 covers the full effective set: the vault-signed inner set AND
-  // the direct treasury-signed legs, in execution order (== what unwrap()
-  // recovers from the on-chain ProposalTransactions).
+  // the direct treasury/governance-signed legs, in execution order (== what
+  // unwrap() recovers from the on-chain ProposalTransactions).
   const innerInstructionSetHash = computeInstructionSetHash([
     ...p.innerIxs,
     ...directIxs,
   ]);
   // Account-heavy inner sets overflow the InsertTransaction carrying the
   // plain VaultTransactionCreate — switch to the buffered Squads chain.
-  const plain = wrap(p.innerIxs, p.wrapCtx);
-  const buffered = plain[0]!.data.length > PLAIN_CREATE_DATA_BUDGET;
-  const wrapped = [
-    ...(buffered ? wrapBuffered(p.innerIxs, p.wrapCtx).ixs : plain),
-    ...directIxs,
-  ];
+  let chain: TransactionInstruction[] = [];
+  let buffered = false;
+  if (p.innerIxs.length > 0) {
+    const plain = wrap(p.innerIxs, p.wrapCtx);
+    buffered = plain[0]!.data.length > PLAIN_CREATE_DATA_BUDGET;
+    chain = buffered ? wrapBuffered(p.innerIxs, p.wrapCtx).ixs : plain;
+  }
+  const wrapped = [...chain, ...directIxs];
 
   const create: TransactionInstruction[] = [];
   const proposal = await withCreateProposal(
