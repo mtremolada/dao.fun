@@ -269,6 +269,33 @@ export async function prefundMissingWritables(
   if (transfers.length > 0) await send(ctx, transfers, []);
 }
 
+/**
+ * Like send(), but returns the compute units the transaction consumed
+ * (Stage 2 CU-budget suite, spec Section 8: "measured per executed
+ * governance tx; fail test if within 15% of limit").
+ */
+export async function sendMeasured(
+  ctx: ProgramTestContext,
+  ixs: TransactionInstruction[],
+  signers: Keypair[],
+  feePayer?: Keypair,
+): Promise<bigint> {
+  const [blockhash] = (await ctx.banksClient.getLatestBlockhash())!;
+  const payer = feePayer ?? ctx.payer;
+  const tx = new Transaction();
+  tx.add(...ixs);
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = payer.publicKey;
+  tx.sign(payer, ...signers.filter((s) => !s.publicKey.equals(payer.publicKey)));
+  const result = await ctx.banksClient.tryProcessTransaction(tx);
+  if (result.result !== null) {
+    throw new Error(
+      [result.result, ...(result.meta?.logMessages ?? [])].join("\n"),
+    );
+  }
+  return result.meta?.computeUnitsConsumed ?? 0n;
+}
+
 /** Sends expecting failure; returns error + program logs for assertions. */
 export async function sendExpectFail(
   ctx: ProgramTestContext,

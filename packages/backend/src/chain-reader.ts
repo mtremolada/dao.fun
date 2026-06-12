@@ -101,6 +101,32 @@ export function hashWrappedInstructionSet(
   return computeInstructionSetHash(effective);
 }
 
+/**
+ * Red-flag heuristics over chain-derived proposal state (spec 12.3 —
+ * inform, never block outside Guarded; GATE 2 observability). Pure so the
+ * UI, the API and any pager share one definition.
+ */
+export function detectProposalAnomalies(s: ProposalChainState): string[] {
+  const anomalies: string[] = [];
+  if (s.chainHash === null && s.publishedArtifactHash === null) {
+    anomalies.push("no-instructions");
+  }
+  if (
+    s.chainHash !== null &&
+    s.publishedArtifactHash !== null &&
+    s.chainHash !== s.publishedArtifactHash
+  ) {
+    anomalies.push("hash-mismatch"); // INV-9 red badge
+  }
+  if (s.chainHash !== null && s.publishedArtifactHash === null) {
+    anomalies.push("missing-artifact-hash"); // INV-10: flagged, never hidden
+  }
+  if (s.holdUpSeconds === 0) {
+    anomalies.push("zero-hold-up"); // sovereign out-of-warranty surface
+  }
+  return anomalies;
+}
+
 /** Vault balance delta from a transaction's pre/post balances. */
 export function vaultDelta(
   vault: PublicKey,

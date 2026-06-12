@@ -75,11 +75,16 @@ async function startApi(chain?: ChainReader) {
 }
 
 describe("GET /chain/proposals/:address", () => {
-  it("serves the chain-derived proposal state", async () => {
+  it("serves the chain-derived proposal state with anomaly flags (GATE 2 observability)", async () => {
     const base = await startApi(fakeReader());
     const res = await fetch(`${base}/chain/proposals/${knownProposal.toBase58()}`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(proposalState);
+    expect(await res.json()).toEqual({
+      ...proposalState,
+      // this fixture executes with hold-up 0 (the GATE 1 sovereign run) —
+      // exactly the surface the detector must flag
+      anomalies: ["zero-hold-up"],
+    });
   });
 
   it("unknown proposal is 404, invalid pubkey is 400", async () => {

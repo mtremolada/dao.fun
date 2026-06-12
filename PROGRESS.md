@@ -145,8 +145,8 @@
       (D-017, verified on chain state); canonical INV-9 hash moved to the
       sdk, backend re-exports. The bankrun matrix legs now drive proposals
       through this builder.
-- [x] 13.8 GATE 1 mode matrix — all technical legs PASS; awaiting
-      operator sign-off. (a) Sovereign leg PASS live on mainnet,
+- [x] 13.8 GATE 1 mode matrix — all technical legs PASS; operator
+      signed off 2026-06-11 (GATES.md). (a) Sovereign leg PASS live on mainnet,
       operator-funded (D-008): full lifecycle proposal -> vote -> finalize
       -> execute on a fresh DAO under production sovereign/micro params
       (only deviation: 1h baseVotingTime, the program minimum).
@@ -164,3 +164,28 @@
       council-mint-before-realm ordering, VSR registrar seed order.
       Phase-1 realm's proposal leg remains blocked at its pre-fix 0.102
       deposit (resumable; optional).
+
+## Stage 2
+
+- [x] 13.9 Property + fuzz + CU suites; Sec3 scan; observability;
+      red-team report -> GATE 2 (technical legs determined 2026-06-12,
+      evidence in GATES.md; operator sign-off pending):
+      - property suite (fast-check over the REAL resolution + VSR weight
+        code): flash-capture entry gate, Beanstalk impossibility, the
+        hit-and-run lockup-vs-notice dichotomy, sovereign-0 exclusivity.
+      - fuzz suite: u64-bound share math, merkle proof soundness, grant
+        bounds, wrap/unwrap roundtrip — FOUND and fixed the
+        privilege-normalization hash bug (D-027): buildProposeIxs now
+        hashes the round-tripped effective set, so the published INV-9
+        hash equals the chain recomputation BY CONSTRUCTION.
+      - CU suite on the real binaries: every executed governance tx
+        (custody chain, direct leg, distribute chain) <= 36.9% of the
+        400k limit — clears the spec's 85% ceiling with margin.
+      - Sec3: vacuous in MVP (zero custom on-chain programs; re-arms at
+        Stage 3); pnpm audit run, bn.js bumped 5.2.2 -> 5.2.3, residual
+        findings dispositioned (REDTEAM.md §5.4).
+      - observability: KeeperMonitor + runMonitoredTick (escalation on
+        repeated failure, bigint counters, balance gauges) and
+        detectProposalAnomalies surfaced on /chain/proposals.
+      - REDTEAM.md: no capture path on micro-tier in either MVP mode;
+        residual risks dispositioned with mitigations.

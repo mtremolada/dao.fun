@@ -13,7 +13,7 @@ import {
   type LaunchStore,
 } from "./launch-machine";
 import type { ArtifactStore } from "./artifacts";
-import type { ChainReader } from "./chain-reader";
+import { detectProposalAnomalies, type ChainReader } from "./chain-reader";
 import type { HolderSnapshotSource } from "./holder-snapshot";
 
 export interface ApiDeps {
@@ -160,7 +160,9 @@ async function handle(
         return json(res, 400, { error: "invalid proposal pubkey" });
       }
       const state = await deps.chain.getProposalState(proposal);
-      return state ? json(res, 200, state) : json(res, 404, { error: "not found" });
+      return state
+        ? json(res, 200, { ...state, anomalies: detectProposalAnomalies(state) })
+        : json(res, 404, { error: "not found" });
     }
 
     if (segments[1] === "dao" && segments.length === 3) {

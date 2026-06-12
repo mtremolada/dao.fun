@@ -557,6 +557,49 @@ slot (RPC/DAS), builds tree") ships as sdk math + backend sources:
 - Wire-up: `POST /snapshots` (501 until a source is configured),
   `scripts/snapshot-holders.ts` for live reads.
 
+## D-027 — Stage 2 suites; the INV-9 hash is now computed from the round-tripped effective set (2026-06-12)
+
+Stage 2 (Section 13 item 9) shipped: property + fuzz + CU suites,
+observability, dependency audit, REDTEAM.md. Evidence in GATES.md GATE 2.
+One finding changed fund-path code:
+
+- **Privilege-normalization hash bug (found by the fuzz suite).** The
+  Squads transaction message stores ONE privilege level per account —
+  signer/writable = the max across the whole inner set (the Solana
+  runtime's own per-transaction semantics). `unwrap()` therefore recovers
+  NORMALIZED flags. `buildProposeIxs` used to hash the RAW inner ixs, so
+  any inner set reusing an account with conflicting flags would publish
+  an artifact hash that could NEVER match the chain-side recomputation —
+  a permanent false-positive red badge (noise that trains users to
+  ignore the real INV-9 signal). Fix: the published hash is computed
+  from `unwrap(wrap(innerIxs))` + directIxs — publish-time and
+  chain-side hashes are equal BY CONSTRUCTION. Regression pinned in
+  fuzz-bounds.test.ts; all existing suites unaffected (non-conflicting
+  sets round-trip exactly).
+- **Property formulation note**: the naive "attacker is always locked
+  through the drain" is FALSE for extreme voting windows (fast-check
+  found the counterexample: a ~22-day window lets the minimum lockup
+  expire during voting). The true, machine-checked theorem is the
+  dichotomy: locked-through-drain OR drain >= saturation×quorum% of
+  public notice; at the shipped 3-day window the first arm always holds.
+- **CU numbers** (real binaries, 400k limit): worst executed governance
+  tx = 147,519 CU (distribute's newDistributor+fund+sync vault leg) —
+  36.9% of the limit; spec ceiling is 85%.
+- **Sec3 X-Ray**: not applicable in MVP — there is no custom on-chain
+  code to scan; recorded in GATES.md rather than silently skipped. The
+  obligation re-arms at Stage 3. `pnpm audit --prod` run instead for the
+  TS surface; bn.js bumped 5.2.2 -> 5.2.3 (infinite-loop advisory);
+  bigint-buffer (no patch exists; native path not loaded; fixed-width
+  inputs) and postcss/uuid (build-time / non-fund paths) dispositioned
+  in REDTEAM.md §5.4.
+- **Observability conventions**: KeeperMonitor escalates exactly at the
+  consecutive-failure threshold crossing (one alert per outage, reset on
+  recovery — including idle "nothing to sweep" ticks); all lamport
+  counters are bigint end-to-end. Proposal anomalies are computed
+  server-side by detectProposalAnomalies and shipped on
+  GET /chain/proposals/:id (`anomalies: [...]`) — a deliberate route
+  contract change.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

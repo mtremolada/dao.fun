@@ -27,7 +27,7 @@
     "@types/node": "^22.10.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "bn.js": "5.2.2",
+    "bn.js": "5.2.3",
     "eslint": "^9.0.0",
     "prettier": "^3.3.0",
     "solana-bankrun": "0.4.0",

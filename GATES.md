@@ -227,3 +227,85 @@ Operator sign-off (council/cypherpunk/VSR legs): **APPROVED** — Matt
 
 With these sign-offs, GATE 0a/0b/0c and GATE 1 are formally CLOSED
 (Definition of Done, spec Section 10): Stage 0 and Stage 1 are Done.
+
+## GATE 2 — Hardening (Stage 2) — technical legs determined 2026-06-12
+
+Acceptance criteria from the spec, leg by leg:
+
+### (a) "Clean Sec3 X-Ray on all custom code"
+
+**Determined: vacuously satisfied — and recorded, not hidden.** Sec3
+X-Ray audits Solana PROGRAMS (Rust). The MVP deliberately ships ZERO
+custom on-chain code: every on-chain component is an audited, deployed
+binary (spl-governance, Squads v4, VSR, pump stack, the IMMUTABLE Jito
+merkle distributor — D-024), pinned by ID in VERSIONS.md and by dumped
+fixtures in tests/. The obligation RE-ARMS at Stage 3 the moment
+launch-coordinator/proposal-gate exist (GATE 3 already requires the
+external audit). Supplementary, for the off-chain TS surface:
+`pnpm audit --prod` (2026-06-12) — bn.js infinite-loop advisory FIXED by
+bumping the pin 5.2.2 -> 5.2.3 (all 221 unit + 20 integration tests green
+after); residual findings dispositioned in REDTEAM.md §5.4
+(bigint-buffer: no patch exists ecosystem-wide, native path not loaded,
+fixed-width inputs; postcss/uuid: build-time / non-fund paths).
+
+### (b) "mode×tier property tests green (Section 5 obligation)"
+
+**PASS** — `packages/sdk/test/property-capture.test.ts` (fast-check
+4.5.3, 500+ randomized runs per property over the REAL
+resolveGovernanceParams and the VSR weight formula the GATE 1 leg
+verified on-chain):
+
+- unlocked weight == 0 for any amount (the flash-capture entry gate);
+- Beanstalk impossibility: positive time-to-drain in every shipped
+  combo, for every voting window a setParam vote could reach;
+- the hit-and-run dichotomy: for ANY budget, EITHER the attacker's
+  lockup outlives the drain (always, at the shipped 3-day window) OR the
+  drain itself took >= saturation×quorum% (>= 9 days, worst combo) of
+  public notice;
+- sovereign hold-up-0 reachable ONLY via the explicit double-confirmed
+  parameter (out-of-warranty by design, spec 12.2).
+
+Plus the fuzz suite `fuzz-bounds.test.ts` (u64-bound share math, merkle
+proof soundness under random share sets, grant bounds, wrap/unwrap
+roundtrip). The fuzz suite FOUND one real bug: Squads message-format
+privilege normalization made conflicting-flag inner sets publish an
+artifact hash that could never match the chain recomputation (permanent
+false red badge). Fixed in buildProposeIxs — the published hash is now
+computed from the round-tripped effective set, equal to the chain-side
+hash BY CONSTRUCTION (D-027; regression-pinned).
+
+CU budget (Section 8: "fail test if within 15% of limit") — **PASS**,
+`tests/cu-budget.integration.test.ts` against the real binaries, 400k CU
+limit per executed governance tx (the production setting): custody chain
+46,603 / 35,813 / 28,746 / 43,368; direct leg (setParam) 29,701;
+distribute chain 53,621 / 34,056 / 28,489 / 147,519. Worst case 36.9% of
+the limit — every tx clears the 85% ceiling with margin.
+
+### (c) "observability live (sweeps, balances, proposal anomalies)"
+
+**PASS** — keeper: `KeeperMonitor` + `runMonitoredTick`
+(packages/keeper/src/observability.ts; 5 tests): structured sweep
+events, bigint-exact swept-lamports counters, per-vault balance gauges,
+and consecutive-failure escalation firing exactly at the threshold
+crossing (spec 6.5 "alert on repeated failure"), reset on recovery,
+JSON-able snapshot() for scraping. Backend: `detectProposalAnomalies`
+(6 tests) — hash-mismatch (INV-9), missing-artifact-hash (INV-10),
+zero-hold-up, no-instructions — surfaced on GET /chain/proposals/:id so
+every UI consumer gets the flags computed server-side from chain state.
+
+### (d) "red-team finds no capture path on simulated micro-tier in both MVP modes"
+
+**PASS** — REDTEAM.md (2026-06-12): every attack either reproduced
+against the real binaries and refused (flash capture, veto bypass,
+bait-and-switch, claim forgery, raw vault theft, keeper escalation), or
+excluded by the machine-checked property suite (slow capture dichotomy),
+or dispositioned as a residual platform risk with mitigation (sovereign-0
+out-of-warranty; MVP governance-level ratchet until Stage 3;
+deployed-binary and RPC trust; dependency findings). No capture path
+stands on micro-tier council or cypherpunk.
+
+Suite state at determination: 221 package unit tests + 19 integration
+tests (real mainnet binaries, hermetic; 3 consecutive green runs);
+eslint + tsc clean.
+
+Operator sign-off (GATE 2): ______

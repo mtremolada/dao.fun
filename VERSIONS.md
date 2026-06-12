@@ -13,7 +13,8 @@ Pinned exactly in package.json files; lockfile (`pnpm-lock.yaml`) committed.
 | @solana/web3.js | 1.98.4 | v1.x required by the above SDKs |
 | @solana/spl-token | 0.4.14 | |
 | @coral-xyz/anchor | 0.30.1 | spec: Anchor 0.30+ pinned exact |
-| bn.js | 5.2.2 | |
+| bn.js | 5.2.3 | bumped from 5.2.2 (GATE 2 audit: infinite-loop advisory) |
+| fast-check | 4.5.3 | Stage 2 property + fuzz suites |
 | typescript | ^5.6 (resolved 5.9.3) | |
 | vitest | ^3.0 (resolved 3.2.6) | |
 | solana-bankrun | 0.4.0 | GATE 1 matrix suite: real mainnet binaries + clock warp |

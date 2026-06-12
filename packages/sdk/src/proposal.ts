@@ -26,7 +26,7 @@ import {
 } from "@solana/spl-governance";
 import { SPL_GOVERNANCE_PROGRAM_ID } from "./constants";
 import { computeInstructionSetHash } from "./artifact-hash";
-import { wrap, wrapBuffered, type WrapContext } from "./execution-adapter";
+import { unwrap, wrap, wrapBuffered, type WrapContext } from "./execution-adapter";
 
 const PROGRAM_VERSION = 3;
 /**
@@ -93,13 +93,6 @@ export async function buildProposeIxs(
   if (p.innerIxs.length === 0 && directIxs.length === 0) {
     throw new Error("buildProposeIxs: inner instruction set is empty");
   }
-  // INV-9 covers the full effective set: the vault-signed inner set AND
-  // the direct treasury/governance-signed legs, in execution order (== what
-  // unwrap() recovers from the on-chain ProposalTransactions).
-  const innerInstructionSetHash = computeInstructionSetHash([
-    ...p.innerIxs,
-    ...directIxs,
-  ]);
   // Account-heavy inner sets overflow the InsertTransaction carrying the
   // plain VaultTransactionCreate — switch to the buffered Squads chain.
   let chain: TransactionInstruction[] = [];
@@ -110,6 +103,18 @@ export async function buildProposeIxs(
     chain = buffered ? wrapBuffered(p.innerIxs, p.wrapCtx).ixs : plain;
   }
   const wrapped = [...chain, ...directIxs];
+  // INV-9 covers the full EFFECTIVE set: hash what unwrap() recovers from
+  // the chain, not the raw input. The Squads message format unifies an
+  // account's privileges message-wide (signer/writable = max across the
+  // inner set — runtime semantics), so hashing the raw inner ixs would
+  // permanently mismatch the chain-recomputed hash whenever the same
+  // account appears with conflicting flags (found by the Stage 2 fuzz
+  // suite, D-027). Hashing the round-tripped form makes publish-time and
+  // chain-side hashes identical BY CONSTRUCTION.
+  const innerInstructionSetHash = computeInstructionSetHash([
+    ...(chain.length > 0 ? unwrap(chain, p.wrapCtx) : []),
+    ...directIxs,
+  ]);
 
   const create: TransactionInstruction[] = [];
   const proposal = await withCreateProposal(
