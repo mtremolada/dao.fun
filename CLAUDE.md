@@ -3,87 +3,84 @@
 Spec-driven build per **SPEC.md** (v2.0 — the only authoritative spec).
 Doctrine: tests BEFORE code on anything touching funds/PDAs/governance;
 verify against the deployed binary before trusting any interface; record
-everything in **DECISIONS.md** (D-001..D-032 so far); gate evidence in
+everything in **DECISIONS.md** (D-001..D-033 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
-## ⚠️ PENDING OPERATOR DECISION — pick this up first (next session)
+## RESOLVED last session: Guarded mode = Option A, SHIPPED (D-033)
 
-**Topic: how Guarded mode (Stage 3, spec 6.9) gets its structural
-enforcement.** Full background in DECISIONS.md **D-032**; explained to
-the operator at the end of session `…sbqvy` (2026-06-12).
+The D-032 operator decision came back **"implement A end to end"** —
+done in session of 2026-06-12 (branch
+`claude/option-a-exploration-p6iybh`). The gate is now the realm's
+FRONT DOOR on guarded realms:
 
-The finding that forces the decision: the **deployed mainnet governance
-binary (`GovER5…`, v3.1.4) is a fork with NO required-signatory
-mechanism** — verified directly against the binary (no
-`process_add_required_signatory`, zero `RequiredSignatory` strings; it
-has a versioned-transaction suite the public master lacks, so the public
-solana-program-library source has DIVERGED from the deployment — do NOT
-build governance instructions from public-master enum indices, see
-D-031/D-032). The planned "gate PDA as required signatory blocks
-uncleared proposals from voting" path is therefore impossible.
+- Creation exclusivity VERIFIED on the deployed GovER5 binary first
+  (spike: u64::MAX community threshold refuses a full-supply
+  depositor + delegate; council TOR authors community-voted proposals;
+  gate seat H+1 vs minCouncil H+1 beats any human pooling; veto
+  percent adjusted for the 2H+1 supply; realm authority parks on a
+  non-signing PDA).
+- proposal-gate v2: guard_create_proposal / guard_insert_transaction
+  (validation engine on the EXACT forwarded bytes; governance-program
+  legs hard-refused while guarded) / guard_sign_off / guard_cancel /
+  deposit_council / release_realm_authority. CPI layouts pinned from
+  the 0.3.28 client (binary-proven by GATE 1) and re-proven by use.
+- SDK: gate.ts builders + guardedVetoPercent (strict-both-sides
+  property-tested), buildCreateDaoIxs guarded ceremony (new gateSetup
+  group; realm authority -> gate PDA SetUnchecked), matrix guarded =
+  tier floor + veto required; backend launch step sends gateSetup.
+- Voted exit proven: ratchet -> release_realm_authority -> arbitrary
+  inserts -> voted config restore -> direct creation again (MVP shape).
+- Known v1 limits (all in D-033): setParam unavailable while guarded;
+  realm-wide outstanding-proposal cap via the single gate seat;
+  buffered Squads chains refused; launch form keeps guarded
+  UNSELECTABLE until GATE 3 (external audit + devnet deploy) — that is
+  spec, not an oversight.
 
-The three options, as explained to the operator:
+Still pending from the operator: the **GATE 2 sign-off line** in
+GATES.md (all technical legs determined 2026-06-12). GATE 3 work
+remaining: launch-coordinator, per-instruction byte/floor menu
+validation, external audit + bounty.
 
-- **Option A — gate the front door (recommended starting point).** The
-  proposal-gate program holds the realm authority and gates
-  proposal-CREATION: only the gate's own record can author proposals,
-  and its create-proposal CPI runs the already-shipped D-030 validation
-  engine first (off-menu proposals never come to exist). Cheapest path,
-  reuses everything built. UNVERIFIED RISK: whether proposal-creation
-  can be made truly exclusive to the gate on THIS fork (no
-  whale/delegate loophole). Verifiable with a one-afternoon tests-first
-  spike.
-- **Option B — full custom/forked governance program.** Total control,
-  unambiguous guarantee; far more code, full external audit, abandons
-  the battle-tested deployed program. Only if A's spike fails.
-- **Option C — don't ship Guarded.** Council/Cypherpunk/Sovereign only
-  (the MVP scope anyway). Zero new risk; loses the headline
-  "treasury can't drain even on a winning vote" product.
+## Where the build stands
 
-**Recommendation given: run the cheap verification spike for A before
-committing to anything.** The operator will answer one of: "verify A" /
-"commit B" / "defer Guarded (C)". Nothing about this blocks the MVP —
-Council + Cypherpunk are complete and signed off.
-
-Also pending from the operator: the **GATE 2 sign-off line** in GATES.md
-(all technical legs determined 2026-06-12).
-
-## Where the build stands (end of session …sbqvy)
-
-- Branch: `claude/spec-driven-repo-reset-yqzenh` (push ONLY here; no PRs
-  unless asked). Suites: 234 unit + 21 integration (real mainnet
-  binaries in bankrun, hermetic) + 12 Playwright e2e; eslint+tsc clean.
-- Stage 0 + Stage 1: DONE and operator-signed (GATES.md). GATE 2
-  technical legs determined (property/fuzz/CU suites, observability,
-  REDTEAM.md, audit dispositions).
-- Action menu 6.8 COMPLETE (grant, burn, buyback curve+AMM,
-  provideLiquidity, distribute on the immutable Jito merkle distributor,
-  setParam). Holder-snapshot service (D-026), browser signing via
+- Branches: MVP work on `claude/spec-driven-repo-reset-yqzenh`;
+  Option A landed on `claude/option-a-exploration-p6iybh` (push ONLY to
+  the session's designated branch; no PRs unless asked).
+- Suites: 242 unit (sdk 145 / keeper 19 / backend 62 / app 16) + 23
+  root integration (real mainnet binaries in bankrun, hermetic — incl.
+  stage3-guarded end-to-end + the exclusivity spike) + 12 Playwright
+  e2e; eslint clean; **tsc clean repo-wide** (operator: "the bar is no
+  errors" — pre-existing action-amm literal-type errors fixed).
+- Stage 0 + Stage 1 DONE and operator-signed (GATES.md). Action menu
+  6.8 COMPLETE. Holder-snapshot service (D-026), browser signing via
   wallet-standard + server-built txs (D-028).
-- Stage 3 started: build pipeline proven (D-029 — cargo-build-sbf
-  4.0.0 / platform-tools v1.53 / anchor-lang 0.30.1; platform-tools must
-  be curl-fetched into ~/.cache/solana/v1.53/ because the proxy CA
-  breaks the built-in downloader). proposal-gate v1 SHIPPED (D-030):
-  on-chain validation engine (parses real ProposalTransactionV2,
-  unwraps the Squads message, whitelist-enforces outer+inner programs)
-  + structural one-way INV-11 ratchet. Both proven on real binaries.
+- Stage 3: build pipeline (D-029), proposal-gate v1 validation engine +
+  ratchet (D-030), fork findings (D-031/D-032), Option A front door
+  (D-033). Gate fixture rebuilt: tests/fixtures/proposal_gate.so.gz;
+  rebuild cmd in the stage3-guarded test header.
 
-## Operational gotchas that bit this session
+## Operational gotchas that bit previous sessions
 
+- Toolchain for programs/: Anza solana-cli 4.0.1 installer + curl-fetch
+  platform-tools v1.53 into `~/.cache/solana/v1.53/platform-tools/`
+  (the proxy CA breaks cargo-build-sbf's downloader, D-029). Add
+  `~/.local/share/solana/install/active_release/bin` to PATH.
 - Workspace packages resolve through `dist/` — run
   `pnpm --filter @daofun/sdk build` (and backend) before integration/e2e
   pick up source changes; the e2e stub server reuses stale servers
   unless killed.
 - `programs/target/` is gitignored: cargo-build-sbf drops a PRIVATE
-  program-id keypair there. Our program fixtures are committed gzipped
-  (`tests/fixtures/*.so.gz`) so CI needs no Rust toolchain; rebuild
-  command in each test header.
+  program-id keypair there. Program fixtures are committed gzipped
+  (`tests/fixtures/*.so.gz`) so CI needs no Rust toolchain.
+- The full parallel `pnpm test` can flake a heavy bankrun suite into a
+  300s timeout (seen once on action-buyback); re-run the file alone
+  before suspecting a real break.
 - Public RPC from this datacenter IP: token-program gPA is
-  index-excluded (-32010) AND per-method rate-limited (10/10 retries
-  failed) — use Helius/keyed RPC for live holder snapshots (D-026).
+  index-excluded (-32010) AND per-method rate-limited — use Helius/keyed
+  RPC for live holder snapshots (D-026).
 - bankrun dedups byte-identical txs — disambiguate with a varying
-  CU-limit instruction.
+  CU-limit instruction (gate proposals differ by random seed already).
 - Standing constraints: never commit/log private keys; mainnet keys are
   disposable gas-only (D-008); keep 0.01725 SOL in deployer
   `FMA5xzVDiEYptXfxNeS6PQtWRvrMyEy9FPLCFKMXcTds` (operator: frontend

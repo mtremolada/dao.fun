@@ -67,6 +67,43 @@ For ANY attacker budget and ANY reachable voting window
   governance-config interaction as a red flag and the artifact hash
   badge makes the payload public (INV-9/INV-10).
 
+### 1.4 Guarded mode (Option A front door, D-033) — capture surface
+
+**Verdict: the headline holds on the deployed binary — even a winning
+vote cannot leave the menu; every bypass attempted in the suite fails
+structurally** (`stage3-guarded.integration.test.ts` +
+`stage3-guarded-spike.integration.test.ts`).
+
+- **Author around the gate?** Community creation is welded
+  (u64::MAX — refused for a 100%-of-supply depositor AND their
+  delegate); council creation needs H+1 tokens, the gate holds H+1 of
+  2H+1, all H humans pooled stay below the bar; no mint authority
+  exists. Direct InsertTransaction into a gate-owned proposal needs the
+  gate PDA's countersignature — impossible.
+- **Vote the door open?** The gate hard-refuses ANY
+  governance-program leg while guarded (SetGovernanceConfig /
+  SetRealmConfig / SetRealmAuthority all live there), and the realm
+  authority is the gate PDA itself, which has no instruction that
+  signs realm mutations. The whitelist is immutable after init. The
+  only path out is the voted INV-11 ratchet — one-way, irreversible.
+- **Smuggle into the menu?** Validation runs at insert time on the
+  exact bytes forwarded (no validate/store gap): off-menu outer
+  programs, off-menu programs inside the Squads vault message, buffered
+  messages and ALTs are all refused (proven legs in the suite).
+- **Grief the requester?** Only the recorded requester can
+  insert/sign-off/cancel their proposal (ProposalMeta); the spam bar is
+  the tier threshold in community holdings.
+- **Residual, accepted with eyes open (D-033):** program-LEVEL
+  whitelist (a whitelisted program's own instruction surface is not yet
+  floor-checked — the GATE 3 byte-menu road); realm-wide
+  outstanding-proposal cap through the single gate seat (DoS-by-drafts
+  bounded: drafts cost the threshold holdings + rent, and cancel
+  releases); gate `initialize` front-running aborts a launch loudly but
+  custodies nothing (folds away with the Stage 3 single-tx
+  launch-coordinator); the gate program itself is NOT yet externally
+  audited — guarded stays unselectable in the launch form until GATE 3
+  by spec.
+
 ## 2. Execution-fidelity attacks
 
 ### 2.1 Bait-and-switch (voters see X, execution does Y)

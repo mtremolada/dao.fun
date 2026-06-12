@@ -836,6 +836,116 @@ wire create_proposal validation. Until then, Guarded mode stays Stage 3
 WIP and the MVP ships Council + Cypherpunk only (unchanged from the spec
 scope).
 
+## D-033 — Option A SHIPPED: Guarded mode = gate front door (creation exclusivity verified, then built end to end) (2026-06-12)
+
+Operator decision: "try option A" then "implement A end to end" (this
+session). Both halves done, tests-first throughout, everything on the
+real GovER5 binary in bankrun.
+
+**The spike (tests/stage3-guarded-spike.integration.test.ts) — the
+D-032 "UNVERIFIED RISK" is resolved, all five fork-semantics questions
+answered YES on the deployed binary:**
+
+1. `minCommunityTokensToCreateProposal = u64::MAX` refuses creation for
+   a whale who DEPOSITED the entire community supply — and for the
+   whale's governance delegate (same error code: it is the weight
+   check; no loophole). u64::MAX is unreachable rather than relying on
+   any "disabled" special-case: no real deposit or VSR weight (digit
+   shift 0, max 1x lockup multiplier) can reach it.
+2. A COUNCIL TokenOwnerRecord can author a proposal whose VOTING
+   population is the COMMUNITY mint; the community passes it; it
+   executes. This is the gate's creation seat.
+3. With the gate seat holding H+1 council tokens against
+   `minCouncilTokensToCreateProposal = H+1`, no human member (1 token)
+   can author — and even ALL H humans pooled stay below the bar, so
+   exclusivity is structural, not behavioral. Humans keep the veto.
+4. Council veto on a gate-authored community proposal works with the
+   threshold percent ADJUSTED for the gate seat's share of the 2H+1
+   council supply (1-of-2 humans at 20% < 30% does not tip; 2-of-2 at
+   40% does, under Strict council tipping).
+5. Realm authority parks on a NON-SIGNING PDA via
+   SetRealmAuthority(SetUnchecked); the old authority is locked out
+   (0x234 Invalid Authority for Realm).
+
+**The build (proposal-gate v2 + SDK; proven by
+tests/stage3-guarded.integration.test.ts end to end):**
+
+- **Ceremony (buildCreateDaoIxs, mode "guarded")**: council REQUIRED
+  (spec 12.2 veto column); council mint mints 1/human + H+1 to the gate
+  PDA's ATA, then null authority; realm-level
+  minCommunityWeightToCreateGovernance AND the governance's
+  minCommunityTokensToCreateProposal welded to u64::MAX; minCouncil =
+  H+1; councilVeto = `guardedVetoPercent(H, nominal)` (chosen STRICTLY
+  between the k*-1 and k* human-vote shares, so it is correct under
+  either >=/> comparison semantics — property-tested for H 1..20 x
+  nominal 1..100); realm authority -> gate PDA (SetUnchecked); new
+  `gateSetup` group: gate `initialize` (immutable config: mints,
+  requester threshold, mode, whitelist) + `deposit_council` (gate CPIs
+  DepositGoverningTokens signing as its own token owner — H+1 into its
+  TOR, Membership type: never withdrawable).
+- **Gate program v2 instructions** (all CPI layouts pinned from
+  @solana/spl-governance 0.3.28 — the client every GATE 1 suite proved
+  against this exact binary — and re-proven here by use):
+  `guard_create_proposal` (requester signer pays everything and must
+  hold >= the tier proposal threshold of community tokens in a token
+  account; pinned single-choice Approve + deny option; ProposalMeta PDA
+  records the requester), `guard_insert_transaction` (while guarded:
+  the D-030 validation engine runs on the EXACT borsh
+  Vec<InstructionData> bytes forwarded to the governance program — no
+  reserialization between validation and storage; refuses off-menu
+  outer programs, unwraps the Squads vaultTransactionCreate message and
+  refuses off-menu INNER programs, refuses buffered messages and ALTs,
+  and HARD-REFUSES any leg targeting the governance program itself —a
+  SetGovernanceConfig/SetRealmConfig leg is how a winning vote would
+  re-open the front door; the gate program itself is always admissible
+  so the voted ratchet can ride), `guard_sign_off`/`guard_cancel`
+  (requester-gated pass-throughs; the gate owns every proposal so these
+  are the only path), `release_realm_authority` (refused while guarded;
+  after a voted ratchet it permissionlessly hands the realm to its own
+  governance via SetChecked).
+- **The exit story (proven in one test run)**: voted ratchet leg
+  (direct leg, governance PDA signs through execution) -> gate mode
+  council; `release_realm_authority` -> realm authority == governance;
+  arbitrary (previously off-menu) inserts now pass the gate (12.2:
+  council admits "menu + arbitrary"); a voted SetGovernanceConfig
+  restores minCommunityTokensToCreateProposal and the whale creates
+  DIRECTLY — the realm converges on a standard MVP council DAO with a
+  vestigial gate. No exit-template machinery needed.
+
+**Honest limits / consequences (documented, not hidden):**
+
+- `setParam` is UNAVAILABLE while guarded (it is a SetGovernanceConfig
+  leg, which the gate hard-refuses). Re-admitting it safely needs
+  on-chain floor-validation of the config bytes — already on the GATE 3
+  "byte-enforced menu" road (D-030 honest limits). Available again
+  post-ratchet.
+- spl-governance caps outstanding proposals per owner TOR (~10); the
+  gate TOR owns ALL guarded proposals, so a guarded realm has a
+  realm-wide cap on simultaneously-active proposals. Cancel/finalize
+  releases slots (guard_cancel proven). Acceptable for the product;
+  revisit only if real DAOs hit it.
+- The requester check reads a TOKEN ACCOUNT balance (holdings), not
+  locked/VSR weight — deliberate: on VSR realms governance deposits sit
+  in the VSR vault so TOR deposits are 0, and creation-spam economics
+  only need skin, not lockup. Works uniformly on no-addin and VSR
+  realms (the gate's council TOR needs no voter-weight record because
+  the council token config has no addin).
+- Gate `initialize` is first-come per realm PDA. A front-runner who
+  initializes "our" gate between ceremony transactions makes the
+  ceremony's gateSetup FAIL LOUDLY (init collision) — launch aborts
+  visibly, nothing custodied; relaunch with a fresh mint. Folds away
+  entirely with the single-tx launch-coordinator (spec 6.9).
+- Buffered Squads chains (account-spanning messages) remain refused in
+  guarded mode — large inner sets must split across proposals.
+  buildGateProposeIxs throws instead of building the buffered wrap.
+
+Suites: stage3-guarded-spike (binary semantics evidence), stage3-guarded
+(end-to-end lifecycle incl. bypass attempts), stage3-gate (v1 engine +
+ratchet still green on the v2 artifact), packages/sdk/test/gate.test.ts
+(veto arithmetic property tests + wire-format round-trip). tsc is now
+clean repo-wide (pre-existing RawMint literal-type errors in action-amm
+fixed per operator instruction "the bar is no errors").
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

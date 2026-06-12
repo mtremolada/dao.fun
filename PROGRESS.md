@@ -213,5 +213,22 @@
       deployed GovER5 fork (v3.1.4) has NO required-signatory mechanism
       at all — the planned gate-sign-off path is abandoned. Guarded
       enforcement redesigns onto the realm-authority + proposal-creation
-      gating path (operator decision pending); the D-030 validation
-      engine + ratchet stand. MVP scope unchanged (Council + Cypherpunk).
+      gating path; the D-030 validation engine + ratchet stand.
+      RESOLVED + SHIPPED (D-033, operator: "implement A end to end"):
+      Option A verified on the binary (creation exclusivity spike — no
+      whale/delegate/council-member loophole) and built: proposal-gate
+      v2 is the realm's FRONT DOOR (guard_create_proposal /
+      guard_insert_transaction with byte-level validation of the
+      forwarded instruction set / guard_sign_off / guard_cancel /
+      deposit_council / release_realm_authority), SDK guarded ceremony
+      (welded thresholds, gate council seat H+1, adjusted veto percent,
+      realm authority -> gate PDA), voted exit ratchet converging on the
+      MVP shape — all proven end to end on the real binaries
+      (tests/stage3-guarded.integration.test.ts). Launch form keeps
+      guarded unselectable until GATE 3 (audit + devnet deploy) per
+      spec. Known v1 limits in D-033 (setParam unavailable while
+      guarded; realm-wide outstanding-proposal cap via the single gate
+      seat; buffered chains refused). MVP scope unchanged.
+      Still open for GATE 3: launch-coordinator (single-tx launch +
+      programmatic fee custody), per-instruction byte/floor validation
+      of menu actions, external audit + bounty.
