@@ -14,17 +14,31 @@ deploys).
 
 The MVP is technically strong: custody, fee collection, execution fidelity, the
 action-menu bounds, and the merkle distributor are all sound and now have
-regression tests on the real binaries. The audit found one HIGH-severity,
-mainnet-blocking defect — **the product's own launch API could not create a
-working DAO for the Token-2022 tokens it always launches** — plus a MEDIUM
-threat-model overstatement and three low/informational items.
+regression tests on the real binaries. The audit found **two HIGH-severity,
+mainnet-blocking defects**, both in the same blind spot — **the product's own
+API could not make the Token-2022 tokens it always launches actually
+governable**: F-1 (the launch API could not *create* a working DAO) and F-7
+(the browser API could not *deposit* governing tokens, so no holder could ever
+gain vote weight). It also found one MEDIUM execution-fidelity gap (F-8 — the
+chain reader's INV-9/INV-10 recompute could be truncated by an adversarial
+proposer), a MEDIUM threat-model overstatement (F-2), and three
+low/informational items.
 
 **Status: all findings are now FIXED and proven on the real binaries**
-(F-1..F-6), with the fixes pinned by tests. The HIGH defect (F-1) is corrected
-inside the sdk builder so no launch path can forget the Token-2022 adaptations,
-and both cypherpunk and council Token-2022 DAOs now stand up end-to-end on the
-deployed binaries. The MEDIUM (F-2) is re-documented (REDTEAM §6) with the real
+(F-1..F-8), with the fixes pinned by tests. The Token-2022 launch defect (F-1)
+is corrected inside the sdk builder; its deposit-side twin (F-7) is corrected in
+the browser tx-builder — and a holder now deposits Token-2022 governing tokens
+and gains exactly that vote weight, proven end-to-end on the deployed binary.
+The reader hardening (F-8) makes the INV-9 badge cover the FULL executed set by
+the proposal's authoritative on-chain count, never a truncated prefix. The
+MEDIUM threat-model item (F-2) is re-documented (REDTEAM §6) with the real
 protection model and demonstrated on the real binary.
+
+> A second, deeper adversarial pass (post-F-6) produced F-7 and F-8 — the
+> deposit-side completion of the Token-2022 thread and the execution-fidelity
+> hardening of the chain reader. Both are the kind of defect that only surfaces
+> when you stop trusting the green CI and ask "what does the SHIPPING config
+> actually do, and what can a malicious proposer make the UI show?"
 
 **Updated recommendation: GO for mainnet is unblocked from the audit's side**,
 contingent on the operator's standing GATE sign-offs and the standard
@@ -52,9 +66,11 @@ Baseline matches the documented "234 unit + 21 integration". The tsc errors
 were latent (type-only; vitest strips types via esbuild so tests still ran) and
 are fixed as part of this audit (F-6).
 
-After the audit: **243 unit** (+4 backend INV-9 recompute, +5 sdk setParam
-preservation) and **26 integration / 14 files** (+3 F-1 cases, +1 F-2, +1 INV-9
-direct-leg). All green; eslint + tsc clean.
+After the audit: **259 unit** (+4 backend INV-9 recompute, +5 sdk setParam
+preservation, +9 backend from the second pass: F-7 deposit shape ×2, F-8 reader
+recompute ×5, F-8 anomalies ×2) and **27 integration / 15 files** (+3 F-1 cases,
++1 F-2, +1 INV-9 direct-leg, +1 F-7 Token-2022 deposit). All green; eslint + tsc
+clean.
 
 ---
 
@@ -258,6 +274,123 @@ real binaries.
 
 ---
 
+## Second adversarial pass (post-F-6)
+
+### F-7 — HIGH — the browser deposit builder cannot deposit Token-2022 governing tokens (no holder can ever gain vote weight)
+
+**Where:** `packages/backend/src/tx-builder.ts` — `buildDepositGoverningTokensTx`
+(and `RpcGovernanceTxSource.depositTx`).
+
+**What.** F-1 made the Token-2022 DAO *stand up*. But a DAO whose holders cannot
+deposit their tokens to vote is just as non-functional. The browser-signing seam
+(D-028) builds the holder's deposit transaction. For a **Token-2022 governing
+mint** (every pump `create_v2` launch, D-004), the deployed spl-governance
+v3.1.4 fork requires the deposit to (a) carry the **Token-2022 program** — the
+0.3.28 JS client hardcodes the *classic* Token program on the transfer — and (b)
+**append the mint account** (the fork errors `"Expected mint account is required
+for Token-2022 deposits and withdrawals"`; it uses `transfer_checked`). The
+only place that applied both was the mainnet script
+(`scripts/mainnet-gate1-sovereign.ts:446` — `retargetTokenProgram` then
+`keys.push({ pubkey: MINT … })`).
+
+`buildDepositGoverningTokensTx` did **neither**. It computed the Token-2022
+*source ATA* when `tokenProgram` was passed, but emitted the classic-program,
+no-mint deposit verbatim. So a holder using the product's browser flow on the
+shipping (Token-2022) configuration would submit a deposit that **reverts on
+chain and grants ZERO vote weight** — there is no community-voting path through
+the product at all. The defect was masked because every governance integration
+test stands up its DAO with a **classic** community mint (a deliberate D-014
+simplification: `tests/helpers/bankrun-harness.ts` mints the community token
+under the classic program), so `wallet-vote.integration.test.ts` proved the seam
+only for a configuration the product never ships.
+
+**Blast radius.** Post-F-1 a Token-2022 DAO exists and accrues fees, but no
+holder can acquire vote weight via the product → no community proposal can ever
+reach quorum → the treasury is governable only by someone hand-rolling the
+mint-append outside the product. Combined with F-1 this was the difference
+between "the launchpad's headline feature works" and "it does not."
+
+**Proof (real binaries):** `tests/audit-f7-token2022-deposit.integration.test.ts`
+— in the production no-addin Token-2022 realm, the **pre-fix deposit shape**
+(Token-2022 source ATA, classic program, no mint) **reverts**; the **fixed
+builder's** deposit **succeeds** and the holder's `TokenOwnerRecord` records
+exactly the deposited amount as vote weight.
+
+**Fix (applied).** `buildDepositGoverningTokensTx` now applies the proven
+mainnet patch when `tokenProgram` is Token-2022: retarget the classic Token
+program account → Token-2022 and append the mint (read-only) to the deposit
+instruction. The classic path is byte-unchanged (regression-pinned). Belt and
+suspenders: `RpcGovernanceTxSource.depositTx` now resolves the token program
+from the **mint's on-chain owner**, so a browser cannot supply a wrong/missing
+program — the server, which submits the tx, owns that correctness. Unit-pinned
+in `tx-builder.test.ts` (Token-2022 deposit carries the mint + Token-2022
+program; classic appends no mint).
+
+*Note:* cast-vote needs no change (it moves no tokens — it spends the
+already-deposited weight). The MVP browser API exposes only deposit + cast-vote;
+withdraw is not a product surface.
+
+---
+
+### F-8 — MEDIUM — the chain reader's INV-9/INV-10 recompute can be truncated, so a malicious proposal can show a green "verified" badge while a hidden leg executes
+
+**Where:** `packages/backend/src/chain-reader.ts` — `RpcChainReader.getProposalState`.
+
+**What.** In MVP the action menu is **not** byte-enforced on chain (that is
+Stage 3's proposal-gate, D-030/D-032; REDTEAM §1.3). The **only** thing standing
+between a voter and an arbitrary malicious proposal is INV-9/INV-10: the UI
+shows the decoded instructions and a hash badge that compares the proposal's
+`descriptionLink` against the instruction set **re-read from chain**. The reader
+that performs that recompute had three ways to under-read an adversarial
+proposal — each of which lets a crafted `descriptionLink` read as **verified**
+while something the voter never saw executes:
+
+1. **Fixed 32-transaction cap.** The discovery loop ran `index` over a hardcoded
+   `[0, 32)` and never cross-checked the proposal's real transaction count. A
+   proposer who inserts **33+** `ProposalTransaction`s (contiguous, trivially
+   allowed) gets a recompute over only the first 32; the 33rd (a vault drain)
+   executes outside the hash. Set `descriptionLink` to the truncated hash →
+   green badge, no anomaly.
+2. **Break-on-gap.** The loop `break`-ed on the first unreadable index, so a hole
+   (a removed transaction) truncated the recompute early.
+3. **Option 0 only + MAX hold-up.** The reader inspected only option 0 (so
+   transactions under another option were invisible) and reported the **MAX**
+   hold-up across transactions — masking a **zero-hold-up** leg buried among
+   slow legs (defeating the `zero-hold-up` INV-3 flag *without even needing
+   >32 transactions*).
+
+**Severity rationale.** MEDIUM, not HIGH: the attacker must still **win the
+vote** (reach `quorumPercent` of supply — the same plutocratic precondition as
+any capture, F-2), and a sophisticated holder could recompute independently. But
+this is the linchpin MVP defense, and the whole point of the badge is that a
+holder should be able to trust it *without* re-deriving — so a badge that can be
+made to lie is a real execution-fidelity defect.
+
+**Proof / regression:** `packages/backend/test/audit-reader-recompute.test.ts`
+exercises the exact (now-extracted, pure) discovery/aggregation logic: a
+33-transaction proposal is read in full (the hidden 33rd instruction is in the
+recomputed hash, which differs from the truncated-32 hash); an over-ceiling
+count and an internal hole are both flagged incomplete (not silently truncated);
+a buried 0-second leg yields `minHoldUpSeconds == 0` so `zero-hold-up` fires.
+`anomalies.test.ts` pins the two new red flags end-to-end.
+
+**Fix (applied).** `getProposalState` now:
+- reads the **authoritative** transaction count from
+  `proposal.options[0].instructionsNextIndex` (never a fixed cap);
+- collects **every** transaction in that range without breaking on holes, and
+  reports `instructionSetComplete=false` if it could not (over a generous
+  DoS-bound read ceiling, or a hole) — surfaced as the `incomplete-instruction-set`
+  anomaly so the badge can never read "verified" over a prefix;
+- reports the **MIN** hold-up (soonest any leg can execute) instead of the max;
+- flags `singleOption=false` (`unexpected-proposal-shape`) for anything that is
+  not the launchpad's canonical single-option shape.
+
+The discovery is extracted to a pure `collectProposalTransactions(expectedCount,
+fetchTx)` so the truncation/hole/over-cap behaviour is unit-tested without a
+network, against the same logic the RPC reader runs.
+
+---
+
 ## Safe verdicts, now backed by regression tests
 
 These are load-bearing invariants the audit attacked and could not break; each
@@ -291,14 +424,14 @@ now has a test so the verdict cannot rot silently.
 |---|---|---|---|
 | INV-1 | pump `creator` == DAO Squads vault, never a user wallet | **Holds** | `pump-rail.test.ts` (creator arg, not signer); `launch-steps.ts` create-token uses vaultPda; gate0a/gate0b/0c on real binaries |
 | INV-2 | Fee collection needs no creator signature; keeper signs only as fee-payer | **Holds** | D-006; `keeper.ts` signer refusal; `keeper.test.ts`; GATE-0a live |
-| INV-3 | No proposal executes before its hold-up (except explicit sovereign-0) | **Holds** | gate1-matrix (72h refusal then execute); action-setparam (new floor binds) |
-| INV-4 | Fund-moving proposal needs weighted YES ≥ threshold, + council veto absence | **Holds, but weight is unlocked deposit in production** | gate1-matrix council/VSR legs; **F-2** — production weight has no lockup |
+| INV-3 | No proposal executes before its hold-up (except explicit sovereign-0) | **Holds** | gate1-matrix (72h refusal then execute); action-setparam (new floor binds); **F-8** — reader now reports MIN hold-up so a buried fast leg surfaces |
+| INV-4 | Fund-moving proposal needs weighted YES ≥ threshold, + council veto absence | **Holds, but weight is unlocked deposit in production** | gate1-matrix council/VSR legs; **F-2** — production weight has no lockup; **F-7** — Token-2022 deposit (the way weight is acquired) now works on the real binary |
 | INV-5 | Mint authority null after launch | **Holds** | `launch-steps.ts` assert; gate1 sovereign-p2 (mint+freeze null) |
 | INV-6 | Checked balance math; no silent overflow | **Holds** | bigint end-to-end; `fuzz-bounds.test.ts`; snapshot JSON>2^53 refusal (D-026) |
 | INV-7 | No human-held unilateral key in custody; sole member = native treasury | **Holds** | `treasury.ts` (configAuthority null, single member); `launch-steps.ts` assert; gate1 on real binary |
 | INV-8 | Vault inflow per sweep == gross accrued; no skim at this layer | **Holds** | `keeper.ts` gross delta; action-amm/keeper integration (gross >= curve+amm) |
-| INV-9 | Executed instructions byte-identical to what voters saw; hash-keyed | **Holds** | gate1 chainHashOf; **now also** audit-inv9-recompute (all 4 shapes) + audit-inv9-directleg; **F-4** latent hardening |
-| INV-10 | Every proposal surfaces sim + decoded summary; undecodable flagged | **Holds** | `detectProposalAnomalies`; chain-reader unwrap; backend anomalies tests |
+| INV-9 | Executed instructions byte-identical to what voters saw; hash-keyed | **Holds** | gate1 chainHashOf; audit-inv9-recompute (all 4 shapes) + audit-inv9-directleg; **F-4** latent hardening; **F-8** — recompute now covers the FULL on-chain count (no 32-cap/gap truncation), `audit-reader-recompute.test.ts` |
+| INV-10 | Every proposal surfaces sim + decoded summary; undecodable flagged | **Holds** | `detectProposalAnomalies`; chain-reader unwrap; backend anomalies tests; **F-8** — `incomplete-instruction-set` + `unexpected-proposal-shape` red flags added |
 | INV-11 | Mode ratchets only toward decentralization (MVP governance-level; Stage 3 structural) | **Holds at documented level** | setParam ratchet-by-omission (now full-field regression); proposal-gate `ratchet` (Stage 3 WIP, reviewed); spec 12.2 caveat |
 
 ---
@@ -318,11 +451,15 @@ already requires an external audit).
 
 ## Mainnet go/no-go
 
-**GO (audit-side), with the standard pre-mainnet checklist.** The HIGH blocker
-(F-1) is fixed inside the sdk builder and proven on the deployed binaries for
-both shipping modes; F-2 is re-documented and demonstrated; F-3/F-4/F-5/F-6 are
-fixed. The custody, fee, execution-fidelity, action-menu, and distributor
-designs are sound and regression-covered on the real binaries.
+**GO (audit-side), with the standard pre-mainnet checklist.** Both HIGH blockers
+are fixed and proven on the deployed binaries: F-1 (the Token-2022 DAO stands
+up — both shipping modes) and F-7 (a Token-2022 holder deposits and gains exactly
+that vote weight). Together they close the full launch→govern path for the
+shipping configuration. F-8 hardens the INV-9/INV-10 chain reader so the
+"verified" badge cannot be truncated by an adversarial proposer. F-2 is
+re-documented and demonstrated; F-3/F-4/F-5/F-6 are fixed. The custody, fee,
+execution-fidelity, action-menu, and distributor designs are sound and
+regression-covered on the real binaries.
 
 Remaining items the operator owns before a real launch (outside audit scope):
 - the standard mainnet transition (SPEC §10/§11): operator-supplied

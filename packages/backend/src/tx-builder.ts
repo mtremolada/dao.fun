@@ -11,8 +11,17 @@
  * smuggle a platform key into the signer set.
  */
 import BN from "bn.js";
-import { Connection, PublicKey, Transaction } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  Connection,
+  PublicKey,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
+import {
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import {
   Governance,
   Vote,
@@ -27,6 +36,47 @@ import {
 import { SPL_GOVERNANCE_PROGRAM_ID } from "@daofun/sdk";
 
 const PROGRAM_VERSION = 3;
+
+/**
+ * Deployed spl-governance v3.1.4 needs Token-2022 governing-token deposits to
+ * (a) carry the Token-2022 program — the 0.3.28 JS client hardcodes the classic
+ * Token program on the transfer — and (b) append the mint account ("Expected
+ * mint account is required for Token-2022 deposits and withdrawals"). Pump
+ * `create_v2` mints are ALWAYS Token-2022 (D-004), so without both adaptations a
+ * browser-built deposit reverts on chain and the holder receives NO vote weight
+ * — governance is unreachable through the product's own voting path (AUDIT F-7,
+ * the deposit-side twin of F-1). This mirrors the patch proven on mainnet by
+ * `scripts/mainnet-gate1-sovereign.ts`.
+ */
+function adaptDepositForToken2022(
+  ixs: TransactionInstruction[],
+  mint: PublicKey,
+): TransactionInstruction[] {
+  // Retarget the classic Token program account to Token-2022 wherever it
+  // appears (the community mint and all governance PDAs are distinct keys, so
+  // only the literal program account is rewritten).
+  const retargeted = ixs.map(
+    (ix) =>
+      new TransactionInstruction({
+        programId: ix.programId,
+        data: ix.data,
+        keys: ix.keys.map((k) =>
+          k.pubkey.equals(TOKEN_PROGRAM_ID)
+            ? { ...k, pubkey: TOKEN_2022_PROGRAM_ID }
+            : k,
+        ),
+      }),
+  );
+  // Append the mint (read-only) to the DEPOSIT instruction — the last one
+  // withDepositGoverningTokens emits.
+  const last = retargeted[retargeted.length - 1]!;
+  retargeted[retargeted.length - 1] = new TransactionInstruction({
+    programId: last.programId,
+    data: last.data,
+    keys: [...last.keys, { pubkey: mint, isSigner: false, isWritable: false }],
+  });
+  return retargeted;
+}
 
 function toBase64Unsigned(
   ixs: Transaction["instructions"],
@@ -74,8 +124,14 @@ export async function buildDepositGoverningTokensTx(
     p.wallet,
     new BN(p.amount.toString()),
   );
+  // Token-2022 governing mints need the program-retarget + mint-append the
+  // deployed v3.1.4 fork requires (AUDIT F-7); the classic path is untouched.
+  const finalIxs =
+    p.tokenProgram && p.tokenProgram.equals(TOKEN_2022_PROGRAM_ID)
+      ? adaptDepositForToken2022(ixs, p.governingTokenMint)
+      : ixs;
   return {
-    txBase64: toBase64Unsigned(ixs, p.wallet, p.blockhash),
+    txBase64: toBase64Unsigned(finalIxs, p.wallet, p.blockhash),
     tokenOwnerRecord: tokenOwnerRecord.toBase58(),
   };
 }
@@ -164,8 +220,20 @@ export class RpcGovernanceTxSource implements GovernanceTxSource {
     amount: bigint;
     tokenProgram?: PublicKey;
   }): Promise<{ txBase64: string; tokenOwnerRecord: string }> {
+    // Resolve the token program from the mint's on-chain OWNER rather than
+    // trusting the browser's hint: a wrong/missing program produces a deposit
+    // that reverts (Token-2022) or grants no weight (AUDIT F-7). The server
+    // submits the tx, so it owns this correctness.
+    let tokenProgram = req.tokenProgram;
+    try {
+      const info = await this.connection.getAccountInfo(req.governingTokenMint);
+      if (info) tokenProgram = info.owner;
+    } catch {
+      // fall back to the caller-supplied hint (or classic default)
+    }
     return buildDepositGoverningTokensTx({
       ...req,
+      ...(tokenProgram ? { tokenProgram } : {}),
       blockhash: await this.blockhash(),
     });
   }

@@ -20,6 +20,8 @@ function state(over: Partial<ProposalChainState>): ProposalChainState {
     holdUpSeconds: 72 * 3600,
     chainHash: "a".repeat(64),
     publishedArtifactHash: "a".repeat(64),
+    instructionSetComplete: true,
+    singleOption: true,
     vetoVoteWeight: "0",
     vetoed: false,
     ...over,
@@ -61,5 +63,17 @@ describe("detectProposalAnomalies", () => {
   it("a veto is state, not an anomaly (council mode working as designed)", () => {
     expect(detectProposalAnomalies(state({ vetoed: true, state: "Vetoed" })))
       .toEqual([]);
+  });
+
+  it("AUDIT F-8: an incompletely re-read instruction set is an INV-9 red flag", () => {
+    // The hash badge would otherwise show 'verified' over only a PREFIX of
+    // what executes (a >cap or holey transaction set).
+    const a = detectProposalAnomalies(state({ instructionSetComplete: false }));
+    expect(a).toContain("incomplete-instruction-set");
+  });
+
+  it("AUDIT F-8: a non-single-option proposal shape is flagged (INV-10)", () => {
+    const a = detectProposalAnomalies(state({ singleOption: false }));
+    expect(a).toContain("unexpected-proposal-shape");
   });
 });

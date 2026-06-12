@@ -85,6 +85,20 @@ For ANY attacker budget and ANY reachable voting window
 - Undecodable instructions render as "UNKNOWN — raw data" red flags;
   anomaly detection (`detectProposalAnomalies`) flags hash mismatch,
   missing artifact hash, and zero hold-up on the API every UI consumes.
+- **Audit F-8 (MEDIUM, now FIXED):** the chain reader that recomputes the
+  INV-9 hash could be made to UNDER-read an adversarial proposal — a fixed
+  32-`ProposalTransaction` cap, a break-on-gap scan, option-0-only reading, and
+  a MAX (not MIN) hold-up summary. A proposer could append a 33rd transaction (a
+  hidden drain) past the cap and publish the truncated hash → a GREEN "verified"
+  badge over a prefix of what executes, with no anomaly. Since MVP does not
+  byte-enforce the menu (Stage 3), this badge IS the defense, so a badge that
+  can lie is the real risk. Fixed in `getProposalState`: it now reads the
+  authoritative on-chain transaction count (`options[0].instructionsNextIndex`),
+  never silently truncates (an incomplete read becomes the
+  `incomplete-instruction-set` red flag), reports the MIN hold-up, and flags any
+  non-single-option shape — pinned by `audit-reader-recompute.test.ts` +
+  `anomalies.test.ts`. The attacker precondition is unchanged (still must reach
+  quorum), but the badge no longer lies.
 
 ### 2.2 Direct-leg privilege escalation
 
@@ -212,3 +226,14 @@ launch could not stand up a DAO at all. Fixed inside `buildCreateDaoIxs`
 (`communityTokenProgram`) and proven on the deployed binaries for cypherpunk
 and council — see audit/AUDIT-FINDINGS.md. Still recommended: a property test
 over this section's no-addin model before advertising any lockup guarantee.)
+
+(Audit F-7 (HIGH, now FIXED): the DEPOSIT-side twin of F-1. The browser
+deposit builder emitted the classic-Token-program, no-mint deposit the 0.3.28
+client produces, which the deployed v3.1.4 fork REJECTS for a Token-2022
+governing mint — so no holder could acquire vote weight through the product and
+no community proposal could ever reach quorum. Fixed in
+`buildDepositGoverningTokensTx` (retarget + mint-append, the proven mainnet
+patch) and proven on the real binary: a holder deposits Token-2022 governing
+tokens and the TokenOwnerRecord records exactly that weight
+(`tests/audit-f7-token2022-deposit.integration.test.ts`). Together F-1 + F-7
+close the full launch→deposit→vote path for the shipping configuration.)

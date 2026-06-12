@@ -15,7 +15,11 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import BN from "bn.js";
 import { Keypair, Transaction } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import {
   Vote,
   VoteChoice,
@@ -103,6 +107,47 @@ describe("buildDepositGoverningTokensTx", () => {
     expect(keys).toContain(
       getAssociatedTokenAddressSync(mint, wallet, false, tokenProgram).toBase58(),
     );
+  });
+
+  it("AUDIT F-7: a Token-2022 deposit retargets the program AND appends the mint", async () => {
+    // The deployed v3.1.4 fork rejects a classic-program/no-mint deposit for a
+    // Token-2022 governing mint; the browser builder must apply both patches.
+    const built = await buildDepositGoverningTokensTx({
+      realm,
+      governingTokenMint: mint,
+      wallet,
+      amount: 7n,
+      blockhash: BLOCKHASH,
+      tokenProgram: TOKEN_2022_PROGRAM_ID,
+    });
+    const tx = decoded(built.txBase64);
+    const depositIx = tx.instructions[tx.instructions.length - 1]!;
+    const keys = depositIx.keys.map((k) => k.pubkey.toBase58());
+    // (a) Token-2022 program present, classic Token program gone
+    expect(keys).toContain(TOKEN_2022_PROGRAM_ID.toBase58());
+    expect(keys).not.toContain(TOKEN_PROGRAM_ID.toBase58());
+    // (b) the mint is appended (read-only) for the Token-2022 transfer_checked
+    expect(keys).toContain(mint.toBase58());
+    const appended = depositIx.keys.find((k) => k.pubkey.equals(mint))!;
+    expect(appended.isSigner).toBe(false);
+    expect(appended.isWritable).toBe(false);
+  });
+
+  it("AUDIT F-7: the classic deposit path appends NO mint (behaviour preserved)", async () => {
+    const built = await buildDepositGoverningTokensTx({
+      realm,
+      governingTokenMint: mint,
+      wallet,
+      amount: 7n,
+      blockhash: BLOCKHASH,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    });
+    const tx = decoded(built.txBase64);
+    const depositIx = tx.instructions[tx.instructions.length - 1]!;
+    // classic path: the mint is NOT a standalone appended account
+    expect(
+      depositIx.keys.filter((k) => k.pubkey.equals(mint)),
+    ).toHaveLength(0);
   });
 });
 
