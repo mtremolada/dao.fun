@@ -147,6 +147,12 @@ not already do — and both are hash-pinned and hold-up-gated.
 - **Funds stranded in the distributor**: clawback is permissionless
   after the window and returns the remainder to the vault's WSOL ATA
   (proven on the real binary; books close exactly).
+- **Unclaimable allocation (Audit F-11, FIXED)**: a holder snapshot of a
+  graduated token is mostly the pool/curve/vault PDAs, which can never sign
+  `new_claim`. Allocating to them diluted real holders and locked SOL until
+  clawback. `proRataShares` now drops off-curve (PDA) owners by default — their
+  share is provably unclaimable — so real holders get their fair share of the
+  *claimable* supply and nothing is stranded (`snapshot.test.ts`).
 
 ## 5. Inherited / platform risks (residual, accepted with eyes open)
 

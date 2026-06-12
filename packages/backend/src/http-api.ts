@@ -130,6 +130,10 @@ async function handle(
       heldSupply: result.heldSupply.toString(),
       allocatedLamports: result.allocatedLamports.toString(),
       dustLamports: result.dustLamports.toString(),
+      // AUDIT F-11: token amount held by owners dropped as unclaimable
+      // (off-curve PDAs — pools, vault, curve). Non-zero is expected and
+      // healthy; it means that supply was correctly NOT allocated.
+      unclaimableHeld: result.unclaimableHeld.toString(),
       shares: result.shares.map((s) => ({
         claimant: s.claimant.toBase58(),
         lamports: s.lamports.toString(),

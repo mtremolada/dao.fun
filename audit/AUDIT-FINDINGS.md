@@ -25,7 +25,7 @@ proposer), a MEDIUM threat-model overstatement (F-2), and three
 low/informational items.
 
 **Status: all findings are now FIXED and proven on the real binaries**
-(F-1..F-10), with the fixes pinned by tests. The Token-2022 launch defect (F-1)
+(F-1..F-11), with the fixes pinned by tests. The Token-2022 launch defect (F-1)
 is corrected inside the sdk builder; its deposit-side twin (F-7) is corrected in
 the browser tx-builder — and a holder now deposits Token-2022 governing tokens
 and gains exactly that vote weight, proven end-to-end on the deployed binary.
@@ -71,12 +71,11 @@ Baseline matches the documented "234 unit + 21 integration". The tsc errors
 were latent (type-only; vitest strips types via esbuild so tests still ran) and
 are fixed as part of this audit (F-6).
 
-After the audit: **261 unit** (+4 backend INV-9 recompute, +5 sdk setParam
-preservation, +9 backend from the second pass: F-7 deposit shape ×2, F-8 reader
-recompute ×5, F-8 anomalies ×2, +2 sdk F-10 u32 bounds) and **27 integration /
-15 files** (+3 F-1 cases, +1 F-2, +1 INV-9 direct-leg, +1 F-7 Token-2022
-deposit), plus **1 new e2e spec** (F-9 danger-flag, CI-run). All green; eslint +
-both tsc scopes (root + app) clean.
+After the audit: **264 unit** (+4 backend INV-9 recompute, +5 sdk setParam
+preservation, +9 backend second pass, +2 sdk F-10 u32 bounds, +3 sdk F-11
+off-curve exclusion) and **27 integration / 15 files** (+3 F-1 cases, +1 F-2, +1
+INV-9 direct-leg, +1 F-7 Token-2022 deposit), plus **1 new e2e spec** (F-9
+danger-flag, CI-run). All green; eslint + both tsc scopes (root + app) clean.
 
 ---
 
@@ -451,6 +450,72 @@ and the app typechecks clean.)*
 — but a brittle, unclear failure, and a hazard if an encoder ever changed to
 wrap). **Fixed** with explicit `<= MAX_U32` checks that fail with a clear
 message; pinned in `audit-setparam-preservation.test.ts`.
+
+---
+
+### F-11 — MEDIUM — `distribute` allocated SOL to unclaimable program-owned accounts by default
+
+**Where:** `packages/sdk/src/snapshot.ts` — `proRataShares` (consumed by the
+`/snapshots` endpoint and the distribute flow).
+
+**What.** A holder snapshot (`getProgramAccounts` / DAS over the mint) returns
+**every** token account holding the token — including the **bonding curve**, the
+**AMM pool's base vault**, the **DAO's own Squads vault** (buyback'd tokens), and
+the distributor itself. Those owners are program PDAs, and the merkle
+distributor's `new_claim` requires the **claimant to sign** — which a PDA can
+never do permissionlessly. Yet `proRataShares` allocated to them pro-rata, and
+`excludeOwners` **defaulted to empty** (the snapshot endpoint only receives the
+`mint`, so it cannot know the DAO's vault/curve/pool addresses).
+
+Consequences, by default:
+- a graduated token holds most of its supply in the **pool vault** (a PDA), so
+  the bulk of the distributed SOL was allocated to an **unclaimable** account →
+  real circulating holders were **diluted** (paid their fraction of the *whole*
+  supply, not the *claimable* supply);
+- that unclaimable SOL sits **locked in the distributor** for the entire vesting
+  window before clawback can return it to the vault.
+
+Not a theft (clawback recovers the unclaimed remainder to the vault), but the
+feature was **economically broken by default** and a real footgun — a
+pre-/post-graduation distribute would mostly fund accounts that can never claim.
+
+**Fix (applied).** `proRataShares` now drops owners that are **off the ed25519
+curve** (program PDAs) by default — strictly correct here, because an off-curve
+claimant can *never* satisfy `new_claim`'s signature, so their share is provably
+unclaimable. Real holders are then allocated their fair share of the
+**claimable** supply (the denominator excludes the PDAs), nothing is stranded,
+and the result reports `unclaimableHeld` (surfaced on `/snapshots`) for operator
+sanity-checking. Explicit `excludeOwners` still applies on top; the drop is
+overridable (`dropUnclaimableOwners: false`). Pinned in `snapshot.test.ts` (PDA
+owner gets nothing, real holder gets the full distribution, all-PDA set refused).
+
+---
+
+## Triple-check pass (surfaces attacked and CLEARED)
+
+A master-level sweep of the paths where value leaves by something *other* than a
+vote — each examined and found sound, recorded here so the "no finding" is
+evidenced, not assumed:
+
+- **Merkle distributor (funds leave by cryptographic proof).** Domain-separated
+  hashing (`leaf = sha256([0]||…)`, `node = sha256([1]||min,max)`) blocks the
+  classic leaf/intermediate second-preimage forgery; proofs round-trip and a
+  wrong amount fails (`merkle-distributor.test.ts`), and the scheme is proven
+  against the IMMUTABLE real binary (`action-distribute.integration`:
+  double-claim, tampered-amount, and clawback all refused/handled). **Sound.**
+- **Token-2022 extensions (the assumption that plain transfers are safe).**
+  Verified, not assumed: D-004 + `gate0b-token2022.integration` prove on the
+  REAL pump program that `create_v2` initializes **no TransferFeeConfig**, and
+  pump **refuses** an externally pre-initialized (e.g. transfer-fee/hooked) mint
+  onto the curve. Buyback/AMM/deposit use plain transfers and pass against real
+  pump mints — no fee-skim, no hook failure on the shipped path. (Residual,
+  inherited: a future pump change to its mint extensions needs re-validation.)
+- **`proRataShares` math.** bigint throughout, floor division (Σ ≤ funded),
+  u64-exact, per-owner aggregation, deterministic — INV-6 holds. The one defect
+  was the unclaimable-owner allocation (F-11, fixed above).
+- **Keeper / custody.** INV-2 signer refusal, INV-6 shrink-halt, INV-8 gross-only
+  re-confirmed; Squads vault program-owned, native treasury sole member (INV-7).
+  No skim seam.
 
 ---
 
