@@ -72,6 +72,18 @@ export interface LaunchStepDeps {
   ): Promise<PublicKey>;
 }
 
+/**
+ * Token metadata for a launch — the half the governance `LaunchFormInput`
+ * does not carry. Supplied alongside the form on `POST /launches`.
+ */
+export interface TokenLaunchInput {
+  name: string;
+  symbol: string;
+  uri: string;
+  /** Optional initial dev-buy in lamports (string on the wire). */
+  devBuyLamports?: bigint | string;
+}
+
 export interface LaunchStepArgs {
   mint: PublicKey;
   createKey: PublicKey;
