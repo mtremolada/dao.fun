@@ -1,0 +1,11 @@
+# Stage 3 on-chain programs (spec 6.9). Anchor safety baseline applies to
+# every member: overflow-checks on, typed accounts, no CPI to
+# user-supplied programs, bump validation.
+[workspace]
+members = ["proposal-gate"]
+resolver = "2"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1

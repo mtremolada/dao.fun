@@ -15,3 +15,6 @@ next-env.d.ts
 
 # program binaries are committed gzipped; the harness inflates them
 tests/fixtures/*.so
+
+# Stage 3 program builds (the deploy keypair in target/deploy is a PRIVATE KEY)
+programs/target/

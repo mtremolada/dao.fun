@@ -1,0 +1,18 @@
+[package]
+name = "proposal-gate"
+version = "0.1.0"
+description = "Guarded-mode enforcement: realm authority that only signs off menu proposals (spec 6.9; Stage 3)"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "proposal_gate"
+
+[features]
+no-entrypoint = []
+no-idl = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.30.1"

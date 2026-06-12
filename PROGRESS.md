@@ -194,3 +194,16 @@
         detectProposalAnomalies surfaced on /chain/proposals.
       - REDTEAM.md: no capture path on micro-tier in either MVP mode;
         residual risks dispositioned with mitigations.
+
+## Stage 3
+
+- [~] 13.10 launch-coordinator + proposal-gate: BUILD PIPELINE PROVEN
+      (D-029) — programs/ workspace scaffolded (overflow-checks=on at the
+      workspace profile), proposal-gate skeleton compiles under
+      cargo build-sbf 4.0.0 / platform-tools v1.53 / anchor-lang 0.30.1,
+      and the artifact loads + executes in the bankrun harness
+      (tests/stage3-build.integration.test.ts: PDA init with exact
+      discriminator/layout/bump, re-init refused; fixture committed
+      gzipped so CI needs no Rust toolchain). NEXT: the proposal-gate
+      component contract (menu byte-validation, structural ratchet) and
+      launch-coordinator, tests first.

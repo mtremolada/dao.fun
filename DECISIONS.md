@@ -643,6 +643,35 @@ keeps the launch form at ~105 kB extends to wallet actions.
   must be rebuilt before the e2e stub server picks up new routes (the
   stale-dist failure mode hit twice this session).
 
+## D-029 — Stage 3 build pipeline proven; toolchain + key-handling conventions (2026-06-12)
+
+The Stage 3 program path (spec 6.9) is unblocked with evidence, ahead of
+writing the real gate/coordinator logic:
+
+- **Toolchain**: solana-cli 4.0.1 / cargo-build-sbf 4.0.0 (Anza stable
+  installer), platform-tools v1.53, anchor-lang 0.30.1 (the spec's pin).
+  Environment quirk: cargo-build-sbf's built-in downloader fails on the
+  egress proxy's CA (`invalid peer certificate`) — fetch
+  platform-tools-linux-x86_64.tar.bz2 with curl and extract into
+  `~/.cache/solana/v1.53/platform-tools/` instead.
+- **programs/ workspace** with `overflow-checks = true` at the workspace
+  profile level (the 6.9 safety baseline — applies to every member).
+  proposal-gate is a SCAFFOLD: one `initialize` creating the gate config
+  PDA, enough to pin the pipeline; the menu-validation and ratchet logic
+  land tests-first against the component contract.
+- **Proof** (tests/stage3-build.integration.test.ts): the compiled
+  artifact loads in the SAME bankrun harness as the deployed binaries;
+  the account comes out with the exact anchor discriminator/layout/bump
+  and re-initialization is refused. Our-program fixtures follow the
+  mainnet-dump convention: committed gzipped
+  (tests/fixtures/proposal_gate.so.gz) so CI needs no Rust toolchain;
+  rebuild command in the test header.
+- **Key handling**: `programs/target/` is gitignored — cargo build-sbf
+  drops a program-id KEYPAIR in target/deploy and it must never be
+  committed. The scaffold's declare_id came from a throwaway key;
+  the real program ID is regenerated at first devnet deploy (operator
+  upgrade-authority rules from Section 11 apply from that moment).
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
