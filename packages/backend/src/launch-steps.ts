@@ -149,10 +149,17 @@ export function buildLaunchSteps(
           // instructions so create-dao can actually execute (AUDIT F-1).
           communityTokenProgram: TOKEN_2022_PROGRAM_ID,
         });
-        const sigs = [await send(dao.groups.realmSetup, "create-dao:realm")];
+        // Council mint FIRST: withCreateRealm registers (and validates) the
+        // council mint, so it must already exist on chain (AUDIT F-12 — the
+        // groups were previously sent realm-before-council, which fails for a
+        // council launch; cypherpunk/sovereign have no council group so it
+        // was masked, and the offline unit test never caught the on-chain
+        // ordering). Order matches governance.ts groups + the GATE 1 leg.
+        const sigs: string[] = [];
         if (dao.groups.council.length > 0) {
           sigs.push(await send(dao.groups.council, "create-dao:council"));
         }
+        sigs.push(await send(dao.groups.realmSetup, "create-dao:realm"));
         sigs.push(await send(dao.groups.governanceSetup, "create-dao:governance"));
 
         if (!dao.nativeTreasury.equals(predicted.nativeTreasury)) {
