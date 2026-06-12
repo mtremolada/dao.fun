@@ -763,6 +763,79 @@ binary-verified — the bankrun suite must confirm the indices/layouts
 empirically before any of it is trusted (the 0.3.28 AddSignatory
 account-order mismatch is exactly the kind of drift that bites).
 
+**SUPERSEDED by D-032 (2026-06-12):** this plan was source-pinned from
+the public solana-program-library master, which has DIVERGED from the
+deployed GovER5 fork. Binary verification proved the deployed program
+has NO required-signatory mechanism at all (variant 29 != any such
+instruction; no processor; no strings). The required-signatory wiring
+above is ABANDONED. See D-032 for the finding and the realm-authority
+redesign path. The enum indices listed here are the PUBLIC MASTER's,
+NOT the deployed binary's — do not build against them.
+
+## D-032 — STOP/FINDING: the deployed governance binary is a FORK with NO required signatories; Guarded-mode sign-off must be redesigned (2026-06-12)
+
+The D-031 plan (gate sign-off via spl-governance REQUIRED SIGNATORIES)
+hit a hard stop when verified against the binary. `AddRequiredSignatory`
+with variant byte 29 returned "invalid instruction data" / "Unexpected
+variant tag", so I inventoried the actual deployed program
+(tests/fixtures/spl_governance.so — the live GovER5 dump, self-reports
+VERSION 3.1.4, the same binary GATE 1 ran against on mainnet):
+
+- **No required-signatory mechanism exists.** The processor file list in
+  the binary's string table has NO `process_add_required_signatory.rs`
+  and NO `process_remove_required_signatory.rs`; there are zero
+  `RequiredSignatory` / `required-signatory` strings anywhere in the
+  .so. The public solana-program-library `governance` master (which I
+  source-pinned D-031 from) has DIVERGED from the live GovER5
+  deployment.
+- **What the deployed fork DOES have** (full processor inventory):
+  create_proposal, add_signatory (plain), sign_off_proposal,
+  cast_vote, finalize_vote, relinquish_vote, insert_transaction,
+  remove_transaction, execute_transaction, cancel_proposal,
+  complete_proposal, flag_transaction_error, set_governance_config,
+  set_governance_delegate, set_realm_authority, set_realm_config,
+  create_token_owner_record, create_native_treasury,
+  deposit/withdraw_governing_tokens, revoke_governing_tokens,
+  update_program_metadata — PLUS a versioned-transaction suite the
+  mainline lacked at this point (CreateTransactionBuffer,
+  ExtendTransactionBuffer, CloseTransactionBuffer,
+  Insert/Execute/Remove VersionedTransaction[FromBuffer]) and
+  Deprecated CreateProgram/Mint/TokenGovernance variants. The borsh
+  enum ordering therefore does NOT match the public master — any
+  manually-built governance instruction beyond what the 0.3.28 client
+  emits MUST be byte-verified against THIS binary first (D-031's caveat,
+  now proven necessary).
+- **Consequence for Guarded mode (spec 6.9 / INV-11 structural):** the
+  "gate PDA as the governance's required signatory => every proposal
+  blocked until cleared" design is IMPOSSIBLE on the deployed program.
+  Plain `add_signatory` exists but is per-proposal and voluntary — it
+  cannot FORCE every proposal to carry the gate signatory, so it gives
+  no structural guarantee.
+- **Redesign path (operator decision — NOT improvised here):** Guarded
+  enforcement must move to a mechanism the fork actually supports. The
+  leading candidate: the gate program holds the REALM AUTHORITY and the
+  sole proposal-creation weight — in Guarded mode the
+  min-tokens-to-create-proposal is set (via set_governance_config, which
+  the gate signs as realm/governance authority) so that only the gate's
+  own TokenOwnerRecord can author proposals, and the gate's
+  create_proposal CPI runs the D-030 validation engine BEFORE creating.
+  This keeps the validation engine + clearance machinery (D-030) intact;
+  only the enforcement seam changes. Alternative: ship Guarded as a
+  custom full-governance fork (heavy; rejected unless the authority
+  path fails verification too).
+- **Unblocked, still valid:** proposal-gate v1 (D-030 — validation
+  engine + structural ratchet) stands; the ratchet uses only the
+  governance-as-signer pattern, which the fork supports. The spike test
+  was removed (it asserted the absent mechanism); nothing shipped on the
+  phantom instruction.
+
+NEXT (tests-first, after operator confirms the redesign direction):
+binary-verify that the gate can hold realm authority and gate
+proposal-creation weight via set_governance_config on THIS fork, then
+wire create_proposal validation. Until then, Guarded mode stays Stage 3
+WIP and the MVP ships Council + Cypherpunk only (unchanged from the spec
+scope).
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

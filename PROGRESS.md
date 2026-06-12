@@ -209,6 +209,9 @@
       AND smuggled inside the vault-signed inner set (buffered/ALT
       refused by design) — plus the structural INV-11 ratchet (one-way,
       governance-signed = vote-only; reverse leg refused in the same
-      proposal). NEXT: gate PDA as REQUIRED SIGNATORY (clearance =>
-      sign-off, uncleared proposals never reach voting), per-instruction
-      menu byte-validation, then launch-coordinator — tests first.
+      proposal). FINDING D-032 (binary verification, this is why we verify): the
+      deployed GovER5 fork (v3.1.4) has NO required-signatory mechanism
+      at all — the planned gate-sign-off path is abandoned. Guarded
+      enforcement redesigns onto the realm-authority + proposal-creation
+      gating path (operator decision pending); the D-030 validation
+      engine + ratchet stand. MVP scope unchanged (Council + Cypherpunk).

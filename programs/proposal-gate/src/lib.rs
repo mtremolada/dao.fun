@@ -9,10 +9,12 @@
 //! vault-signed set — targets a program on the gate's whitelist. Buffered
 //! Squads messages and address-table lookups are REFUSED (cannot be
 //! validated from a single account; guarded proposals must use the plain
-//! wrap). The sign-off wiring (gate PDA as the governance's required
-//! signatory, clearance => SignOffProposal CPI) is the next increment;
-//! full per-instruction byte-validation of the 6.8 menu tightens the
-//! whitelist after that.
+//! wrap). The sign-off ENFORCEMENT seam is being redesigned: the deployed
+//! GovER5 fork has NO required-signatory mechanism (D-032 — verified
+//! against the binary), so the planned "gate PDA as required signatory"
+//! path is abandoned. The leading replacement is the gate holding realm
+//! authority + gating proposal-creation weight (operator decision
+//! pending). The validation engine + clearances below are unaffected.
 //!
 //! Safety baseline (6.9): overflow-checks=on (workspace profile), typed
 //! accounts, NO CPI anywhere in v1, no user-signer forwarding, bump
