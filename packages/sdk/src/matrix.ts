@@ -71,7 +71,8 @@ export function holdUpFloorSeconds(
     case "sovereign":
       return 0;
     case "guarded":
-      throw new Error("guarded mode ships at Stage 3 (proposal-gate program)");
+      // Spec 12.2: tier floor at maximum strictness.
+      return floor;
   }
 }
 
@@ -112,7 +113,11 @@ export function resolveGovernanceParams(p: ResolveParams): GovernanceParams {
       vetoEnabled = false;
       break;
     case "guarded":
-      throw new Error("guarded mode ships at Stage 3 (proposal-gate program)");
+      // Spec 12.2: strictest hold-up, veto REQUIRED (the human council
+      // keeps the veto while the gate holds the creation seat — D-033).
+      holdUpSeconds = holdUpFloorSeconds("guarded", p.tier);
+      vetoEnabled = true;
+      break;
   }
 
   // Checked math (INV-6): bigint ops cannot overflow; guard against a zero

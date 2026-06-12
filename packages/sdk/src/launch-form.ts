@@ -48,7 +48,12 @@ export function validateLaunchForm(input: LaunchFormInput): LaunchFormResult {
   const errors: string[] = [];
 
   if (input.mode === "guarded") {
-    errors.push("Guarded mode ships at Stage 3 and cannot be selected yet.");
+    // The gate program + SDK ceremony are complete (D-033), but spec GATE 3
+    // forbids exposing any custom program before the external audit and
+    // devnet deploy — the form unlock is a GATE 3 deliverable.
+    errors.push(
+      "Guarded mode is built (Stage 3) but unlocks at GATE 3 (external audit + devnet deploy).",
+    );
     return { ok: false, errors };
   }
 
