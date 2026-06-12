@@ -13,8 +13,19 @@ import {
   type LaunchFormInput,
   type MarketCapTier,
 } from "@daofun/sdk/launch-form";
+import type { LaunchFlowState } from "../lib/launch";
+import {
+  connectWallet,
+  discoverWallets,
+  makeSigner,
+} from "../lib/wallet-standard";
 
 const TIERS: MarketCapTier[] = ["micro", "small", "mid", "large"];
+// Fully self-service when an RPC is configured: the user's wallet pays + signs
+// the whole launch in the browser. No backend, no server key (decentralized).
+const RPC = process.env.NEXT_PUBLIC_RPC_URL;
+const PROTOCOL_TREASURY = process.env.NEXT_PUBLIC_PROTOCOL_TREASURY;
+const LAUNCH_FEE = process.env.NEXT_PUBLIC_LAUNCH_FEE; // lamports; omit/0 = no fee
 
 interface LaunchState {
   launchId: string;
@@ -36,6 +47,11 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [submitting, setSubmitting] = useState(false);
   const [serverErrors, setServerErrors] = useState<string[]>([]);
   const [result, setResult] = useState<LaunchState | null>(null);
+  // token metadata (the governance form lacks it) + self-service launch state
+  const [name, setName] = useState("");
+  const [symbol, setSymbol] = useState("");
+  const [uri, setUri] = useState("");
+  const [selfServe, setSelfServe] = useState<LaunchFlowState | null>(null);
 
   const form = useMemo<LaunchFormInput>(() => {
     const overrides: NonNullable<LaunchFormInput["overrides"]> = {};
@@ -86,7 +102,62 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     );
   }
 
+  async function deploySelfService() {
+    if (!name || !symbol || !uri) {
+      setServerErrors(["Token name, symbol, and metadata URI are required."]);
+      return;
+    }
+    setSubmitting(true);
+    setServerErrors([]);
+    try {
+      const wallet = discoverWallets()[0];
+      if (!wallet) {
+        setServerErrors([
+          "No wallet found — install a Solana wallet extension.",
+        ]);
+        return;
+      }
+      const signer = makeSigner(wallet, await connectWallet(wallet));
+      const { launchFlow } = await import("../lib/launch");
+      await launchFlow(
+        {
+          rpcUrl: RPC!,
+          mode,
+          tier,
+          token: { name, symbol, uri },
+          ...(mode === "sovereign" && sovereignHoldUp !== ""
+            ? { sovereignHoldUpSeconds: Number(sovereignHoldUp) }
+            : {}),
+          ...(mode === "council"
+            ? {
+                council: {
+                  members: councilMembers
+                    .split("\n")
+                    .map((m) => m.trim())
+                    .filter(Boolean),
+                  vetoThresholdPercent: Number(vetoPercent),
+                },
+              }
+            : {}),
+          ...(PROTOCOL_TREASURY ? { protocolTreasury: PROTOCOL_TREASURY } : {}),
+          ...(LAUNCH_FEE ? { launchFeeLamports: BigInt(LAUNCH_FEE) } : {}),
+        },
+        { signer, onState: setSelfServe },
+      );
+    } catch (e) {
+      setServerErrors([(e as Error).message]);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function submit() {
+    // Decentralized: when an RPC is configured, the user's wallet does the
+    // whole launch in-browser. Otherwise fall back to the server orchestrator.
+    if (RPC) {
+      await deploySelfService();
+      return;
+    }
     setSubmitting(true);
     setServerErrors([]);
     try {
@@ -116,6 +187,28 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     );
   }
 
+  if (selfServe) {
+    return (
+      <div className="result" data-testid="self-serve-result">
+        <p>
+          <strong>{selfServe.phase}</strong>
+          {selfServe.step ? ` — ${selfServe.step}` : ""}
+        </p>
+        {selfServe.mint && (
+          <p className="muted" style={{ wordBreak: "break-all" }}>
+            mint {selfServe.mint}
+            <br />
+            realm {selfServe.realm}
+          </p>
+        )}
+        <p className="muted">
+          completed: {selfServe.completed.join(", ") || "—"}
+        </p>
+        {selfServe.error && <p className="errors">{selfServe.error}</p>}
+      </div>
+    );
+  }
+
   return (
     <form
       className="launch"
@@ -137,6 +230,32 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           </option>
         ))}
       </select>
+
+      {RPC && (
+        <>
+          <label htmlFor="token-name">Token name</label>
+          <input
+            id="token-name"
+            data-testid="token-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <label htmlFor="token-symbol">Token symbol</label>
+          <input
+            id="token-symbol"
+            data-testid="token-symbol"
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+          />
+          <label htmlFor="token-uri">Metadata URI (json: name/image/…)</label>
+          <input
+            id="token-uri"
+            data-testid="token-uri"
+            value={uri}
+            onChange={(e) => setUri(e.target.value)}
+          />
+        </>
+      )}
 
       {mode === "council" && (
         <>
@@ -252,7 +371,11 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         data-testid="launch-submit"
         disabled={!validated.ok || submitting}
       >
-        {submitting ? "Launching..." : "Launch"}
+        {submitting
+          ? "Launching..."
+          : RPC
+            ? "Deploy with your wallet"
+            : "Launch"}
       </button>
     </form>
   );

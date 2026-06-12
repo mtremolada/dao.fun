@@ -1,6 +1,9 @@
 import type { DaoDashboard } from "@daofun/backend";
+import { DashboardLive } from "../../../components/dashboard-live";
 
 const API = process.env.API_URL ?? "http://127.0.0.1:4404";
+// Decentralized path: read the dashboard + collect fees entirely in the browser.
+const RPC = process.env.NEXT_PUBLIC_RPC_URL;
 
 function sol(lamports: number): string {
   const sign = lamports > 0 ? "+" : lamports < 0 ? "-" : "";
@@ -32,6 +35,13 @@ export default async function DaoPage({
           Missing ?vault= — pass the DAO&apos;s Squads vault address.
         </p>
       </>
+    );
+  }
+
+  // Fully decentralized: read + collect entirely in the browser (no backend).
+  if (RPC) {
+    return (
+      <DashboardLive realm={realm} vault={q.vault} wallet={q.wallet} rpcUrl={RPC} />
     );
   }
 

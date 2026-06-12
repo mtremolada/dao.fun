@@ -248,3 +248,42 @@ patch) and proven on the real binary: a holder deposits Token-2022 governing
 tokens and the TokenOwnerRecord records exactly that weight
 (`tests/audit-f7-token2022-deposit.integration.test.ts`). Together F-1 + F-7
 close the full launch→deposit→vote path for the shipping configuration.)
+
+## 7. Decentralized self-serve model (no intermediary)
+
+The protocol now runs with NO trusted backend in any fund or trust path:
+launches, deposits, and votes are built, signed, and submitted by the user's
+own wallet in the browser (`buildLaunchPlan` + `launchFlow`,
+`*ClientFlow`); the proposal/dashboard reads recompute the INV-9 hash,
+anomalies, and decode the effects locally from chain (SDK `chain-reader` +
+`decode`); fee collection is permissionless (anyone can crank it, INV-2). The
+new threat surface and its handling:
+
+- **Permissionless launching = advisory floors.** A user (or a forked
+  frontend) can submit ANY governance config — the tier floors and the
+  standard custody structure are CLIENT-side. A weak or backdoored DAO only
+  harms ITS OWN token's buyers, who chose to buy it. This is inherent to a
+  permissionless launchpad (pump.fun itself launches any config). The defense
+  is not prevention but VERIFIABILITY: `verifyDao(connection, mint,
+  {multisigPda})` lets any buyer confirm, from chain alone, that a token's
+  governance is the genuine advance-derived structure — realm authority is its
+  own governance, governance governs the mint, mint/freeze authorities null
+  (INV-5), and the Squads multisig's sole member is the native treasury with
+  threshold 1 and no config authority (INV-7). Surface it behind a "Verify
+  this DAO" badge before any buy.
+- **No mid-launch backdoor via partial state.** A launch is several
+  non-atomic txs; INV-1 (creator == vault) is set IN the create instruction,
+  and the whole realm→governance→treasury chain is advance-derived from the
+  mint, so no tx ordering or interruption can yield a wrong-creator or
+  attacker-substituted chain. A failed launch is always pre-fee (F-3); recovery
+  is "restart with fresh ephemeral keys" (the browser generates them with the
+  platform CSPRNG; they hold no funds and no post-launch authority).
+- **Permissionless collect cannot redirect fees.** The collect destination is
+  fixed by the pump program to the creator vault (the DAO's); a clicker pays
+  only the tx fee (INV-2) and cannot route fees to themselves.
+- **RPC trust (inherited light-client residual, §5).** A browser recompute is
+  only as honest as the RPC feeding it account data. A malicious RPC could lie;
+  the mitigation is the same as any light client — use a trusted/own RPC, or
+  cross-check across providers. The INV-9 hash is recomputed in the USER's
+  browser (a strict improvement over trusting a backend's claimed hash), but it
+  still reads through an RPC.

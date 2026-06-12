@@ -9,6 +9,7 @@ export * from "./governance";
 export * from "./governance-tx";
 export * from "./chain-reader";
 export * from "./decode";
+export * from "./verify";
 export * from "./launch-plan";
 export * from "./execution-adapter";
 export * from "./actions";
