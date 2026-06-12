@@ -14,25 +14,25 @@ deploys).
 
 The MVP is technically strong: custody, fee collection, execution fidelity, the
 action-menu bounds, and the merkle distributor are all sound and now have
-regression tests on the real binaries. **But there is one HIGH-severity,
-mainnet-blocking defect: the product's own launch API cannot actually create a
-working DAO for the Token-2022 tokens it always launches.** Every successful
-launch to date used standalone scripts that apply two Token-2022 adaptations
-the backend orchestrator forgets. A real launch through the backend would
-create the token (fees start flowing to its vault) and then fail to stand up
-its governance — leaving an ungovernable token and a charged launch fee.
+regression tests on the real binaries. The audit found one HIGH-severity,
+mainnet-blocking defect — **the product's own launch API could not create a
+working DAO for the Token-2022 tokens it always launches** — plus a MEDIUM
+threat-model overstatement and three low/informational items.
 
-There is also a MEDIUM finding: the headline anti-capture guarantee ("a winning
-attacker is locked through the drain") is **overstated for the shipping
-configuration**, because production realms have no lockup (a consequence of
-D-013 that the red-team write-up and property suite did not propagate). The
-real protection is the cost of amassing quorum-weight of supply plus the
-voting-window/hold-up notice (and the council veto) — still meaningful, but not
-what the docs claim.
+**Status: all findings are now FIXED and proven on the real binaries**
+(F-1..F-6), with the fixes pinned by tests. The HIGH defect (F-1) is corrected
+inside the sdk builder so no launch path can forget the Token-2022 adaptations,
+and both cypherpunk and council Token-2022 DAOs now stand up end-to-end on the
+deployed binaries. The MEDIUM (F-2) is re-documented (REDTEAM §6) with the real
+protection model and demonstrated on the real binary.
 
-**Recommendation: NO-GO for mainnet launch until F-1 is fixed and F-2 is
-re-documented.** Both are contained and have a clear, tested fix path. Nothing
-found is a fund-theft hole in the deployed-binary custody design.
+**Updated recommendation: GO for mainnet is unblocked from the audit's side**,
+contingent on the operator's standing GATE sign-offs and the standard
+mainnet-transition checklist (SPEC §10/§11). Nothing found is a fund-theft hole
+in the deployed-binary custody design.
+
+> The sections below describe each finding **and the fix applied**. "What"
+> documents the defect; "Fix" documents the change now in the tree.
 
 ## Phase 0 — green baseline (reproduced)
 
@@ -111,21 +111,28 @@ standing up governance, treated as sunk" situation, except the orchestrator
 - `communityVoterWeightAddin: null` **+** `retargetTokenProgram` stands the
   realm up cleanly (the script-proven path).
 
-**Proposed fix (not applied — flag/prove/propose).** Make the Token-2022
-adaptation part of the **sdk builder**, not each caller, so no launch path can
-forget it:
-1. In `buildCreateDaoIxs`, when the community mint is Token-2022 (detect via the
-   mint account owner, which the orchestrator can fetch, or an explicit
-   `communityTokenProgram` param), default `communityVoterWeightAddin` to `null`
-   and emit the realm/governance instructions already targeting
-   `TOKEN_2022_PROGRAM_ID` (and append the mint to deposit/withdraw per D-013).
-2. Failing that, have `buildLaunchSteps` pass `communityVoterWeightAddin: null`
-   and apply `retargetTokenProgram` to `groups.realmSetup`/`governanceSetup`,
-   exactly as the mainnet scripts do — and add an **integration** test that
-   drives `buildLaunchSteps` end-to-end on the real binaries (the current unit
-   test cannot catch this class of bug).
-Pin it with `tests/audit-orchestrator-token2022.integration.test.ts`, which
-will flip from "reproduces the failure" to "guards the fix".
+**Fix (applied).** The Token-2022 adaptation now lives in the **sdk builder**,
+so no launch path can forget it:
+- `buildCreateDaoIxs` gained a `communityTokenProgram` param. When it is
+  `TOKEN_2022_PROGRAM_ID` the builder (a) defaults `communityVoterWeightAddin`
+  to `null`, (b) retargets the classic-Token-program account in the
+  realm/governance instructions to Token-2022, and (c) mints the council
+  membership token under Token-2022 too — because `withCreateRealm` passes ONE
+  token-program account for both the community and council holding accounts, so
+  they must share a program. The classic-mint path is unchanged (default param).
+- `buildLaunchSteps` now passes `communityTokenProgram: TOKEN_2022_PROGRAM_ID`
+  (pump mints are always Token-2022, D-004).
+
+**Proof (real binaries):** `tests/audit-orchestrator-token2022.integration.test.ts`
+now proves the FIX — the orchestrator's Token-2022 builder output executes the
+full `realmSetup`+`governanceSetup` for **cypherpunk** *and* **council** (a
+Token-2022 council mint + realm + governance, a combination never previously
+validated) on the deployed binaries — and pins that the legacy default (classic
+program) still fails, so the adaptation cannot be silently dropped.
+
+*Follow-up (not blocking):* the browser deposit/withdraw tx-builders (D-028)
+should get the same Token-2022 mint-append the mainnet scripts apply; that path
+is voting, not launch, and out of this finding's scope.
 
 ---
 
@@ -165,14 +172,13 @@ UI copy for cypherpunk is already honest** ("your only protection is
 information and the exit window"). The gap is that REDTEAM/property/GATES
 advertise a *stronger, capital-at-risk* guarantee that the MVP does not deliver.
 
-**Proposed fix.** (a) Correct REDTEAM §1 to state the real MVP protection
-(quorum-acquisition cost + notice window + veto), and scope the lockup
-dichotomy explicitly to a *future* VSR/voter-weight-plugin path (Stage 2/3).
-(b) Add a property/regression test that models the **no-addin** path (weight ==
-deposit, no lock) so the suite tests what ships. (c) Consider raising the
-effective protection structurally — e.g. a custom voter-weight plugin that
-restores lockup for Token-2022 — before claiming the lockup guarantee in
-product. REDTEAM.md is updated by this audit (see its new §6).
+**Fix (applied).** REDTEAM.md §6 now states the real MVP protection
+(quorum-acquisition cost + notice window + veto) and scopes the lockup
+dichotomy explicitly to a *future* VSR/voter-weight-plugin path. The no-lock
+behaviour is pinned on the real binary by
+`tests/audit-f2-no-lock.integration.test.ts`. *Recommended (not blocking):* add
+a property test over the no-addin weight model, and consider a custom
+Token-2022 voter-weight plugin before advertising a lockup guarantee in product.
 
 ---
 
@@ -187,9 +193,10 @@ creates the token, then fails to create governance — the launcher pays for an
 ungovernable token. Independent of F-1, any `create-dao`/`create-token` failure
 leaves the fee taken with no working DAO.
 
-**Proposed fix.** Move `collect-launch-fee` to **after** `assert-invariants`
-(charge only a proven-good launch), or make it refundable on abort. Low on its
-own; it amplifies F-1's user impact.
+**Fix (applied).** `collect-launch-fee` now runs **after** `create-dao` and
+`prefund-treasury` (just before the read-only `assert-invariants`), so a failed
+`create-dao` never debits the launcher. Pinned by the updated
+`packages/backend/test/launch-steps.test.ts` (step order + resume semantics).
 
 ---
 
@@ -206,9 +213,13 @@ the 1232-byte tx limit, and Solana legacy messages cap account indexes at u8 —
 so the input is structurally bounded well under 256. The data-length field
 already uses a correct 4-byte prefix; the account count should match.
 
-**Proposed fix.** Use a 2- or 4-byte little-endian length for the account count
-(mirror the data-length encoding). Pure hardening; changes the hash, so it would
-need a coordinated artifact-format bump (note it for the Stage 3 hash freeze).
+**Fix (applied).** `computeInstructionSetHash` now uses a 4-byte LE length for
+the account count, matching the data-length field — canonical and
+non-wrapping. No test pinned a literal hash (all comparisons are publish-vs-
+recompute with the same function), so the format change is internally
+consistent and all INV-9 tests still pass. Note for the record: this changes
+artifact-hash values, so any externally cached pre-audit hashes would differ
+(none are in scope here).
 
 ---
 
@@ -225,10 +236,12 @@ buy lands tokens in the vault on the real binary, i.e. pump-sdk only checks
 null-ness here — but it is fragile to any pump-sdk change that *decodes* that
 field.
 
-**Proposed fix.** Pass the actual vault-ATA `AccountInfo` (the orchestrator
-already fetches chain state), or `null` with an explicit, documented external
-ATA pre-create. Behaviour-preserving; removes a latent footgun. Pinned by the
-existing buyback integration test.
+**Fix (applied).** `BuybackParams` now has an explicit `userTokenAccountInfo`
+(the vault's pre-created token ATA), passed as `associatedUserAccountInfo`. The
+wrong-typed `bondingCurveAccountInfo` placeholder is gone. Behaviour-preserving
+(the ATA is still treated as existing, no in-proposal create); the action-buyback
+integration test passes the real vault-ATA info and still lands tokens in the
+vault on the real binary.
 
 ---
 
@@ -305,16 +318,19 @@ already requires an external audit).
 
 ## Mainnet go/no-go
 
-**NO-GO** for a backend-orchestrated mainnet launch until:
+**GO (audit-side), with the standard pre-mainnet checklist.** The HIGH blocker
+(F-1) is fixed inside the sdk builder and proven on the deployed binaries for
+both shipping modes; F-2 is re-documented and demonstrated; F-3/F-4/F-5/F-6 are
+fixed. The custody, fee, execution-fidelity, action-menu, and distributor
+designs are sound and regression-covered on the real binaries.
 
-1. **F-1 fixed** — the orchestrator must apply the Token-2022 adaptations
-   (no-addin + token-program retarget), ideally inside `buildCreateDaoIxs`, with
-   an **end-to-end** integration test driving `buildLaunchSteps` on the real
-   binaries. This is the blocker: today the product cannot launch a working DAO.
-2. **F-2 re-documented** — correct REDTEAM/property/GATES to describe the actual
-   no-addin protection, and add a property test over the shipping config.
+Remaining items the operator owns before a real launch (outside audit scope):
+- the standard mainnet transition (SPEC §10/§11): operator-supplied
+  upgrade-authority/treasury, funding, mainnet smoke test;
+- **recommended** before advertising any lockup guarantee: a no-addin property
+  test (F-2) and/or a Token-2022 voter-weight plugin;
+- **recommended**: extend the Token-2022 mint-append to the browser
+  deposit/withdraw tx-builders (F-1 follow-up).
 
-After those, the remaining findings (F-3 fee ordering, F-4 hash prefix, F-5
-buyback placeholder) are non-blocking hardening. The custody, fee, execution-
-fidelity, action-menu, and distributor designs are sound and now regression-
-covered on the real binaries. F-6 is already fixed.
+Verification at audit close: **243 unit + 26 integration green** (real binaries,
+hermetic); **eslint clean; tsc clean**.

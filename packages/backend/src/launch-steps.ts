@@ -22,6 +22,7 @@ import {
   SystemProgram,
   TransactionInstruction,
 } from "@solana/web3.js";
+import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import {
   buildCreateDaoIxs,
   buildCreateTreasuryIx,
@@ -112,17 +113,6 @@ export function buildLaunchSteps(
       },
     },
     {
-      name: "collect-launch-fee",
-      async run() {
-        const ix = SystemProgram.transfer({
-          fromPubkey: args.launcher,
-          toPubkey: args.protocolTreasury,
-          lamports: args.launchFeeLamports,
-        });
-        return [await send([ix], "collect-launch-fee")];
-      },
-    },
-    {
       name: "create-token",
       async run() {
         const ixs = await deps.buildCreateTokenIxs(
@@ -142,6 +132,10 @@ export function buildLaunchSteps(
           mode: args.daoMode,
           params: args.governanceParams,
           ...(args.council ? { council: args.council } : {}),
+          // pump create_v2 mints are always Token-2022 (D-004); this makes the
+          // builder drop the VSR addin and retarget the realm/governance
+          // instructions so create-dao can actually execute (AUDIT F-1).
+          communityTokenProgram: TOKEN_2022_PROGRAM_ID,
         });
         const sigs = [await send(dao.groups.realmSetup, "create-dao:realm")];
         if (dao.groups.council.length > 0) {
@@ -166,6 +160,22 @@ export function buildLaunchSteps(
           lamports: TREASURY_EXECUTION_PREFUND_LAMPORTS,
         });
         return [await send([ix], "prefund-treasury")];
+      },
+    },
+    {
+      // AUDIT F-3: charge the launch fee only AFTER the DAO and its treasury
+      // exist, so a failed create-dao (e.g. a builder/RPC error) never debits
+      // the launcher for an ungovernable token. The fee step changes no
+      // governance state, so running it here keeps the dangerous partial
+      // states pre-fee.
+      name: "collect-launch-fee",
+      async run() {
+        const ix = SystemProgram.transfer({
+          fromPubkey: args.launcher,
+          toPubkey: args.protocolTreasury,
+          lamports: args.launchFeeLamports,
+        });
+        return [await send([ix], "collect-launch-fee")];
       },
     },
     {

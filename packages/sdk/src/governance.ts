@@ -19,6 +19,7 @@ import {
 } from "@solana/web3.js";
 import {
   MINT_SIZE,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
   createInitializeMint2Instruction,
@@ -89,11 +90,48 @@ export interface CreateDaoParams {
    */
   baselineVoteWeightScaledFactor?: bigint;
   /**
-   * Community voter-weight addin. Default: the VSR program. Pass null to
-   * build a realm with NO addin and no VSR instructions — the fallback for
-   * Token-2022 community mints, which the deployed VSR rejects (D-013).
+   * Community voter-weight addin. Default: VSR for a classic-SPL community
+   * mint, but automatically NULL for a Token-2022 community mint (the
+   * deployed VSR rejects Token-2022 — D-013). Pass a value to override.
    */
   communityVoterWeightAddin?: PublicKey | null;
+  /**
+   * SPL token program that owns the COMMUNITY mint. Defaults to the classic
+   * Token program; pass TOKEN_2022_PROGRAM_ID for a pump `create_v2` mint
+   * (always Token-2022 — D-004). When Token-2022, the builder (D-013):
+   *   - drops the VSR addin by default (VSR is classic-SPL only), and
+   *   - retargets the realm/governance instructions' token-program account
+   *     (the 0.3.28 `withCreateRealm` hardcodes the classic program for the
+   *     holding accounts), and
+   *   - mints the council membership token under Token-2022 too, because
+   *     `withCreateRealm` passes ONE token-program account for BOTH the
+   *     community and council holding accounts.
+   * Without this, the produced instructions cannot execute for a Token-2022
+   * community mint (AUDIT F-1).
+   */
+  communityTokenProgram?: PublicKey;
+}
+
+/**
+ * Replace the classic-Token-program account with `to` in every instruction.
+ * Used to retarget the realm/governance instructions to Token-2022 (D-013).
+ * The community mint and all PDAs are distinct keys, so only the literal
+ * program account is rewritten.
+ */
+function retargetTokenProgram(
+  ixs: TransactionInstruction[],
+  to: PublicKey,
+): TransactionInstruction[] {
+  return ixs.map(
+    (ix) =>
+      new TransactionInstruction({
+        programId: ix.programId,
+        data: ix.data,
+        keys: ix.keys.map((k) =>
+          k.pubkey.equals(TOKEN_PROGRAM_ID) ? { ...k, pubkey: to } : k,
+        ),
+      }),
+  );
 }
 
 export interface CreateDaoResult {
@@ -136,9 +174,15 @@ export async function buildCreateDaoIxs(
   const council: TransactionInstruction[] = [];
   const governanceSetup: TransactionInstruction[] = [];
   const name = realmNameForMint(p.mint);
+  const communityTokenProgram = p.communityTokenProgram ?? TOKEN_PROGRAM_ID;
+  const isToken2022 = communityTokenProgram.equals(TOKEN_2022_PROGRAM_ID);
+  // Token-2022 community mints cannot use the deployed VSR (D-013); default
+  // them to a no-addin realm unless the caller overrides explicitly.
   const voterWeightAddin =
     p.communityVoterWeightAddin === undefined
-      ? VSR_PROGRAM_ID
+      ? isToken2022
+        ? null
+        : VSR_PROGRAM_ID
       : p.communityVoterWeightAddin;
 
   // 1. Realm — name derives the PDA chain; council mint registered up front.
@@ -198,26 +242,49 @@ export async function buildCreateDaoIxs(
   //    authority exists — membership is fixed at launch (structural veto set).
   //    Executes BEFORE createRealm, which registers (and validates) the mint.
   if (p.mode === "council" && p.council) {
+    // The council mint shares the community mint's token program:
+    // withCreateRealm passes ONE token-program account for both holding
+    // accounts, so a Token-2022 community mint forces a Token-2022 council
+    // mint (AUDIT F-1). MINT_SIZE (no extensions) is identical for both.
     council.push(
       SystemProgram.createAccount({
         fromPubkey: p.payer,
         newAccountPubkey: p.council.mint,
         lamports: Number(p.council.mintRentLamports),
         space: MINT_SIZE,
-        programId: TOKEN_PROGRAM_ID,
+        programId: communityTokenProgram,
       }),
-      createInitializeMint2Instruction(p.council.mint, 0, p.payer, null),
+      createInitializeMint2Instruction(
+        p.council.mint,
+        0,
+        p.payer,
+        null,
+        communityTokenProgram,
+      ),
     );
     for (const member of p.council.members) {
-      const ata = getAssociatedTokenAddressSync(p.council.mint, member, true);
+      const ata = getAssociatedTokenAddressSync(
+        p.council.mint,
+        member,
+        true,
+        communityTokenProgram,
+      );
       council.push(
         createAssociatedTokenAccountIdempotentInstruction(
           p.payer,
           ata,
           member,
           p.council.mint,
+          communityTokenProgram,
         ),
-        createMintToInstruction(p.council.mint, ata, p.payer, 1),
+        createMintToInstruction(
+          p.council.mint,
+          ata,
+          p.payer,
+          1,
+          [],
+          communityTokenProgram,
+        ),
       );
     }
     council.push(
@@ -226,6 +293,8 @@ export async function buildCreateDaoIxs(
         p.payer,
         AuthorityType.MintTokens,
         null,
+        [],
+        communityTokenProgram,
       ),
     );
   }
@@ -298,9 +367,23 @@ export async function buildCreateDaoIxs(
     SetRealmAuthorityAction.SetChecked,
   );
 
+  // Token-2022: retarget the classic token-program account the spl-governance
+  // client hardcodes for the holding accounts (D-013). The council group
+  // already targets `communityTokenProgram` directly, so it is left as built.
+  const finalRealmSetup = isToken2022
+    ? retargetTokenProgram(realmSetup, communityTokenProgram)
+    : realmSetup;
+  const finalGovernanceSetup = isToken2022
+    ? retargetTokenProgram(governanceSetup, communityTokenProgram)
+    : governanceSetup;
+
   return {
-    ixs: [...council, ...realmSetup, ...governanceSetup],
-    groups: { council, realmSetup, governanceSetup },
+    ixs: [...council, ...finalRealmSetup, ...finalGovernanceSetup],
+    groups: {
+      council,
+      realmSetup: finalRealmSetup,
+      governanceSetup: finalGovernanceSetup,
+    },
     realm,
     governance,
     nativeTreasury,

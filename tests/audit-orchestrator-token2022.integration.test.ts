@@ -1,46 +1,31 @@
 /**
- * AUDIT F-1 (HIGH) — the production launch ORCHESTRATOR cannot stand up a DAO
- * for the Token-2022 mints the launchpad always creates.
+ * AUDIT F-1 (HIGH) — the launch orchestrator must stand up a DAO for the
+ * Token-2022 mints the launchpad always creates. This GUARDS THE FIX.
  *
- * `packages/backend/src/launch-steps.ts` (`buildLaunchSteps`, spec 6.6 — the
- * product's real launch API) runs its `create-dao` step by calling
- * `buildCreateDaoIxs({ mint, payer, mode, params, council? })` with NO
- * `communityVoterWeightAddin` and NO token-program retarget. That defaults to:
+ * Root cause (pre-fix): `packages/backend/src/launch-steps.ts`
+ * (`buildLaunchSteps`) called `buildCreateDaoIxs` with no
+ * `communityTokenProgram`, so it defaulted to the VSR addin and the CLASSIC
+ * Token program on the community holding account — both invalid for a
+ * Token-2022 mint (D-004/D-013/D-018). The create-dao step's realmSetup
+ * reverted on-chain.
  *
- *   (a) the VSR addin (governance.ts: undefined -> VSR_PROGRAM_ID), so
- *       `realmSetup` carries create_registrar / configure_voting_mint; and
- *   (b) the CLASSIC SPL Token program on the community-mint holding account
- *       (the 0.3.28 `withCreateRealm` hardcodes TOKEN_PROGRAM_ID).
+ * Fix: `buildCreateDaoIxs` now takes `communityTokenProgram`; for Token-2022 it
+ * drops the VSR addin, retargets the realm/governance token program, and mints
+ * the council token under Token-2022 (one token program for both holding
+ * accounts). `buildLaunchSteps` passes TOKEN_2022_PROGRAM_ID.
  *
- * But every pump `create_v2` mint is Token-2022 (D-004), and the deployed VSR
- * rejects Token-2022 (D-013/D-018). D-013 records that "production launch path
- * must use the no-addin realm"; the only launch code ever run against the real
- * binaries — scripts/mainnet-gate1-sovereign*.ts — applies BOTH adaptations
- * (`communityVoterWeightAddin: null` + `retargetTokenProgram`). The backend
- * orchestrator applies NEITHER, and its `create-dao` step is only unit-tested
- * offline, so the omission is never executed against a real binary.
- *
- * Consequence: a real launch via the backend creates the token first
- * (create-token: creator = vault, INV-1), then FAILS at create-dao — leaving a
- * live token whose governance chain can never be stood up through the product.
- *
- * This test reproduces the failure on the deployed binaries and pins the
- * script-proven adaptation as the fix.
+ * These tests run the FIXED builder output on the deployed binaries and prove
+ * the full create-dao sequence executes — and pin that the legacy default
+ * (classic program) still fails, so the adaptation cannot be silently dropped.
  */
 import { describe, expect, it } from "vitest";
-import {
-  Keypair,
-  PublicKey,
-  SystemProgram,
-  TransactionInstruction,
-} from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   MINT_SIZE,
   TOKEN_2022_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
   createInitializeMint2Instruction,
 } from "@solana/spl-token";
-import { start } from "solana-bankrun";
+import { start, type ProgramTestContext } from "solana-bankrun";
 import {
   SPL_GOVERNANCE_PROGRAM_ID,
   VSR_PROGRAM_ID,
@@ -55,27 +40,18 @@ import {
   sendExpectFail,
 } from "./helpers/bankrun-harness";
 
-// Mirror of scripts/mainnet-gate1-sovereign-p2.ts:retargetTokenProgram — the
-// Token-2022 adaptation the orchestrator is missing.
-function retargetTokenProgram(
-  ixs: TransactionInstruction[],
-): TransactionInstruction[] {
-  return ixs.map(
-    (ix) =>
-      new TransactionInstruction({
-        programId: ix.programId,
-        data: ix.data,
-        keys: ix.keys.map((k) =>
-          k.pubkey.equals(TOKEN_PROGRAM_ID)
-            ? { ...k, pubkey: TOKEN_2022_PROGRAM_ID }
-            : k,
-        ),
-      }),
+async function ctxWithGov(): Promise<ProgramTestContext> {
+  return start(
+    [
+      { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
+      { name: "vsr", programId: VSR_PROGRAM_ID },
+      { name: "token_2022", programId: TOKEN_2022_PROGRAM_ID },
+    ],
+    [],
   );
 }
 
-async function token2022Mint(ctx: Awaited<ReturnType<typeof start>>) {
-  const payer = ctx.payer;
+async function token2022Mint(ctx: ProgramTestContext): Promise<PublicKey> {
   const mint = Keypair.generate();
   const rent = await ctx.banksClient.getRent();
   const lamports = Number(await rent.minimumBalance(BigInt(MINT_SIZE)));
@@ -83,7 +59,7 @@ async function token2022Mint(ctx: Awaited<ReturnType<typeof start>>) {
     ctx,
     [
       SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
+        fromPubkey: ctx.payer.publicKey,
         newAccountPubkey: mint.publicKey,
         lamports,
         space: MINT_SIZE,
@@ -92,7 +68,7 @@ async function token2022Mint(ctx: Awaited<ReturnType<typeof start>>) {
       createInitializeMint2Instruction(
         mint.publicKey,
         6,
-        payer.publicKey,
+        ctx.payer.publicKey,
         null,
         TOKEN_2022_PROGRAM_ID,
       ),
@@ -102,18 +78,11 @@ async function token2022Mint(ctx: Awaited<ReturnType<typeof start>>) {
   return mint.publicKey;
 }
 
-describe("AUDIT F-1: launch orchestrator vs Token-2022 community mint (real binaries)", () => {
+describe("AUDIT F-1 (fixed): launch orchestrator stands up a Token-2022 DAO (real binaries)", () => {
   it(
-    "the orchestrator's exact buildCreateDaoIxs call produces a realmSetup that CANNOT execute for a Token-2022 mint",
+    "cypherpunk: the orchestrator's Token-2022 builder call executes realmSetup + governanceSetup",
     async () => {
-      const ctx = await start(
-        [
-          { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
-          { name: "vsr", programId: VSR_PROGRAM_ID },
-          { name: "token_2022", programId: TOKEN_2022_PROGRAM_ID },
-        ],
-        [],
-      );
+      const ctx = await ctxWithGov();
       const mint = await token2022Mint(ctx);
       const params = resolveGovernanceParams({
         mode: "cypherpunk",
@@ -121,106 +90,121 @@ describe("AUDIT F-1: launch orchestrator vs Token-2022 community mint (real bina
         communitySupply: SUPPLY,
       });
 
-      // EXACTLY what packages/backend/src/launch-steps.ts emits in create-dao:
-      // no communityVoterWeightAddin, no retarget.
-      const orchestrator = await buildCreateDaoIxs({
+      // Exactly what buildLaunchSteps now passes.
+      const dao = await buildCreateDaoIxs({
         mint,
         payer: ctx.payer.publicKey,
         mode: "cypherpunk",
         params,
         baseVotingTimeSeconds: BASE_VOTING_TIME_S,
+        communityTokenProgram: TOKEN_2022_PROGRAM_ID,
       });
 
-      // It defaults to the VSR addin: realmSetup is [createRealm,
-      // createRegistrar, configureVotingMint], not a lone createRealm.
-      expect(orchestrator.groups.realmSetup.length).toBeGreaterThan(1);
+      // VSR addin auto-dropped: realmSetup is a lone createRealm, no VSR ix.
+      expect(dao.groups.realmSetup.length).toBe(1);
       expect(
-        orchestrator.groups.realmSetup.some((ix) =>
-          ix.programId.equals(VSR_PROGRAM_ID),
-        ),
+        dao.groups.realmSetup.some((ix) => ix.programId.equals(VSR_PROGRAM_ID)),
+      ).toBe(false);
+
+      // The full DAO-creation sequence executes on the deployed binaries.
+      await send(ctx, dao.groups.realmSetup, []);
+      await send(ctx, dao.groups.governanceSetup, []);
+
+      const realmInfo = await ctx.banksClient.getAccount(dao.realm);
+      expect(realmInfo).not.toBeNull();
+      expect(
+        new PublicKey(realmInfo!.owner).equals(SPL_GOVERNANCE_PROGRAM_ID),
       ).toBe(true);
-
-      // Sending the orchestrator's realmSetup AS-IS fails on the real binaries.
-      const err = await sendExpectFail(ctx, orchestrator.groups.realmSetup, []);
-      expect(err).toMatch(
-        /AccountOwnedByWrongProgram|owned by a different program|InvalidProgramId|incorrect program id|insufficient account/i,
-      );
+      const govInfo = await ctx.banksClient.getAccount(dao.governance);
+      expect(govInfo).not.toBeNull();
+      const treasuryInfo = await ctx.banksClient.getAccount(dao.nativeTreasury);
+      expect(treasuryInfo).not.toBeNull();
     },
     TEST_TIMEOUT,
   );
 
   it(
-    "even with the VSR addin dropped, the un-retargeted createRealm still fails (the second missing adaptation)",
+    "council: a Token-2022 council mint + realm + governance sequence executes",
     async () => {
-      const ctx = await start(
-        [
-          { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
-          { name: "vsr", programId: VSR_PROGRAM_ID },
-          { name: "token_2022", programId: TOKEN_2022_PROGRAM_ID },
-        ],
-        [],
-      );
+      const ctx = await ctxWithGov();
       const mint = await token2022Mint(ctx);
+      const councilMember = Keypair.generate();
+      const councilMint = Keypair.generate();
+      const rent = await ctx.banksClient.getRent();
+      const mintRent = await rent.minimumBalance(BigInt(MINT_SIZE));
+      await send(ctx, [
+        SystemProgram.transfer({
+          fromPubkey: ctx.payer.publicKey,
+          toPubkey: councilMember.publicKey,
+          lamports: 1_000_000_000,
+        }),
+      ], []);
+
       const params = resolveGovernanceParams({
-        mode: "cypherpunk",
+        mode: "council",
         tier: "micro",
         communitySupply: SUPPLY,
       });
-
-      // Half the fix: drop the addin (D-013) but forget the token-program
-      // retarget the mainnet scripts apply. realmSetup is now just createRealm.
-      const noAddin = await buildCreateDaoIxs({
+      const dao = await buildCreateDaoIxs({
         mint,
         payer: ctx.payer.publicKey,
-        mode: "cypherpunk",
+        mode: "council",
         params,
+        council: {
+          mint: councilMint.publicKey,
+          members: [councilMember.publicKey],
+          vetoThresholdPercent: 50,
+          mintRentLamports: mintRent,
+        },
         baseVotingTimeSeconds: BASE_VOTING_TIME_S,
-        communityVoterWeightAddin: null,
-      });
-      expect(noAddin.groups.realmSetup.length).toBe(1); // createRealm only
-
-      const err = await sendExpectFail(ctx, noAddin.groups.realmSetup, []);
-      expect(err.length).toBeGreaterThan(0); // classic token program on a T22 mint
-    },
-    TEST_TIMEOUT,
-  );
-
-  it(
-    "the script-proven adaptation (null addin + retargetTokenProgram) DOES stand up the realm",
-    async () => {
-      const ctx = await start(
-        [
-          { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
-          { name: "vsr", programId: VSR_PROGRAM_ID },
-          { name: "token_2022", programId: TOKEN_2022_PROGRAM_ID },
-        ],
-        [],
-      );
-      const mint = await token2022Mint(ctx);
-      const params = resolveGovernanceParams({
-        mode: "cypherpunk",
-        tier: "micro",
-        communitySupply: SUPPLY,
+        communityTokenProgram: TOKEN_2022_PROGRAM_ID,
       });
 
-      const fixed = await buildCreateDaoIxs({
-        mint,
-        payer: ctx.payer.publicKey,
-        mode: "cypherpunk",
-        params,
-        baseVotingTimeSeconds: BASE_VOTING_TIME_S,
-        communityVoterWeightAddin: null, // D-013 (a)
-      });
-      // D-013 (b): retarget the classic token program to Token-2022.
-      await send(ctx, retargetTokenProgram(fixed.groups.realmSetup), []);
-
-      // The realm now exists at the advance-derived address, owned by
-      // spl-governance.
-      const info = await ctx.banksClient.getAccount(fixed.realm);
-      expect(info).not.toBeNull();
-      expect(new PublicKey(info!.owner).equals(SPL_GOVERNANCE_PROGRAM_ID)).toBe(
+      // The council mint is initialized under Token-2022 (same program as
+      // both holding accounts) — InitializeMint2 targets the token program.
+      expect(dao.groups.council[1]!.programId.equals(TOKEN_2022_PROGRAM_ID)).toBe(
         true,
       );
+
+      // council first (registers the mint), then realm, then governance.
+      await send(ctx, dao.groups.council, [councilMint]);
+      await send(ctx, dao.groups.realmSetup, []);
+      await send(ctx, dao.groups.governanceSetup, []);
+
+      const realmInfo = await ctx.banksClient.getAccount(dao.realm);
+      expect(realmInfo).not.toBeNull();
+      const govInfo = await ctx.banksClient.getAccount(dao.governance);
+      expect(govInfo).not.toBeNull();
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "regression guard: the legacy default (classic token program) still fails for a Token-2022 mint",
+    async () => {
+      const ctx = await ctxWithGov();
+      const mint = await token2022Mint(ctx);
+      const params = resolveGovernanceParams({
+        mode: "cypherpunk",
+        tier: "micro",
+        communitySupply: SUPPLY,
+      });
+
+      // The pre-fix call: no communityTokenProgram -> default classic + VSR.
+      const legacy = await buildCreateDaoIxs({
+        mint,
+        payer: ctx.payer.publicKey,
+        mode: "cypherpunk",
+        params,
+        baseVotingTimeSeconds: BASE_VOTING_TIME_S,
+      });
+      expect(legacy.groups.realmSetup.length).toBeGreaterThan(1); // VSR present
+      const err: string = await sendExpectFail(
+        ctx,
+        legacy.groups.realmSetup,
+        [],
+      );
+      expect(err.length).toBeGreaterThan(0);
     },
     TEST_TIMEOUT,
   );

@@ -206,8 +206,9 @@ a real voter-weight plugin (VSR upgrade or custom Token-2022 plugin) lands
 (Stage 2/3). Until then, the property suite tests a configuration the
 product does not ship; add a no-addin property test (AUDIT-FINDINGS F-2).
 
-(Audit also raised F-1 (HIGH): the backend orchestrator does not even apply
-the no-addin + token-program retarget that the no-addin path requires, so a
-backend launch cannot stand up a DAO at all — see audit/AUDIT-FINDINGS.md.
-Mainnet go/no-go there: NO-GO until F-1 is fixed and this section's model is
-propagated to the property suite.)
+(Audit F-1 (HIGH, now FIXED): the backend orchestrator did not apply the
+no-addin + token-program retarget the no-addin path requires, so a backend
+launch could not stand up a DAO at all. Fixed inside `buildCreateDaoIxs`
+(`communityTokenProgram`) and proven on the deployed binaries for cypherpunk
+and council — see audit/AUDIT-FINDINGS.md. Still recommended: a property test
+over this section's no-addin model before advertising any lockup guarantee.)

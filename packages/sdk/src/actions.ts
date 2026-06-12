@@ -117,6 +117,13 @@ export interface BuybackParams {
   global: Global;
   bondingCurveAccountInfo: AccountInfo<Buffer>;
   bondingCurve: BondingCurve;
+  /**
+   * The VAULT's token ATA account info — pre-created OUTSIDE the proposal
+   * (D-019 size ceiling). Passed to pump-sdk so it emits NO ATA-create
+   * instruction inside the proposal. Must be the vault's own ATA for `mint`
+   * (AUDIT F-5: previously a wrong-typed placeholder was passed here).
+   */
+  userTokenAccountInfo: AccountInfo<Buffer>;
   /** Buy slippage percent (pump-sdk convention); default 5. */
   slippagePercent?: number;
   rentFloorLamports?: bigint;
@@ -161,9 +168,10 @@ export async function buildBuybackIxs(
     global: p.global,
     bondingCurveAccountInfo: p.bondingCurveAccountInfo,
     bondingCurve: p.bondingCurve,
-    // non-null: the vault ATA exists (pre-created permissionlessly), so the
-    // sdk emits no ATA-create instruction inside the proposal.
-    associatedUserAccountInfo: p.bondingCurveAccountInfo,
+    // The vault's own token ATA (pre-created permissionlessly), so the sdk
+    // emits no ATA-create instruction inside the proposal (AUDIT F-5: this
+    // was previously the bonding-curve account, a wrong-typed placeholder).
+    associatedUserAccountInfo: p.userTokenAccountInfo,
     mint: p.mint,
     user: p.vault,
     amount: getBuyTokenAmountFromSolAmount({
