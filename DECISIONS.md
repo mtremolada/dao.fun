@@ -714,6 +714,55 @@ spl-governance + Squads + OUR cargo-build-sbf artifact):
   account tag ProposalTransactionV2 = 13 (lib 0.3.28). anchor 0.30
   does not re-export `pubkey!` — trusted ids are byte-array consts.
 
+## D-031 — Required-signatory mechanics pinned from program source (gate sign-off prerequisite) (2026-06-12)
+
+The next gate increment (clearance => sign-off; uncleared proposals never
+reach voting) rides spl-governance v3.1 REQUIRED SIGNATORIES. The
+installed client lib (0.3.28) PREDATES the feature entirely — no
+`withAddRequiredSignatory` exists — so the instructions must be built
+manually (the D-010 VSR pattern). Pinned from the program source
+(solana-labs/solana-program-library governance/program, master; the enum
+is append-only and the deployed binary self-reports VERSION 3.1.4):
+
+- `GovernanceInstruction` borsh enum order (variant index = position):
+  0 CreateRealm, 1 DepositGoverningTokens, 2 WithdrawGoverningTokens,
+  3 SetGovernanceDelegate, 4 CreateGovernance, 5 Legacy4,
+  6 CreateProposal, 7 AddSignatory, 8 Legacy1, 9 InsertTransaction,
+  10 RemoveTransaction, 11 CancelProposal, 12 SignOffProposal,
+  13 CastVote, 14 FinalizeVote, 15 RelinquishVote, 16 ExecuteTransaction,
+  17 Legacy2, 18 Legacy3, 19 SetGovernanceConfig, 20 Legacy5,
+  21 SetRealmAuthority, 22 SetRealmConfig, 23 CreateTokenOwnerRecord,
+  24 UpdateProgramMetadata, 25 CreateNativeTreasury,
+  26 RevokeGoverningTokens, 27 RefundProposalDeposit,
+  28 CompleteProposal, **29 AddRequiredSignatory { signatory: Pubkey }**,
+  **30 RemoveRequiredSignatory**, 31 SetTokenOwnerRecordLock,
+  32 RelinquishTokenOwnerRecordLocks, 33 SetRealmConfigItem.
+- `AddRequiredSignatory` accounts: [governance (writable, SIGNER) — i.e.
+  only via an executed proposal (a direct leg, like setParam/ratchet),
+  required_signatory (writable), payer (signer), system]. PDA seeds:
+  ["required-signatory", governance, signatory].
+- `AddSignatory` (v3.1 layout — DIFFERENT from the 0.3.28 wrapper!):
+  [governance, proposal (w), signatory_record (w), payer (s), system,
+  then EITHER (tokenOwnerRecord + governanceAuthority signer) OR
+  (the governance's RequiredSignatory account — the PERMISSIONLESS
+  path the gate cranker uses)]. SignatoryRecord PDA seeds:
+  ["governance", proposal, signatory].
+- `SignOffProposal` is enum variant 12, no args — what the gate program
+  will CPI with its signatory PDA as the signer, once per proposal,
+  after every transaction's Clearance exists.
+
+Planned wiring (next increment, tests first): gate signatory PDA =
+["signatory", realm]; launch ceremony (or a vote) executes
+AddRequiredSignatory(gate signatory) as a direct leg; per proposal the
+cranker calls AddSignatory (permissionless path), validates every
+ProposalTransaction (D-030 clearances), then gate `sign_off` checks
+clearances for transaction indices 0..n (n+1th PT account passed and
+required EMPTY — proves completeness without parsing ProposalV2) and
+CPIs SignOffProposal. ALL of this is source-pinned, NOT yet
+binary-verified — the bankrun suite must confirm the indices/layouts
+empirically before any of it is trusted (the 0.3.28 AddSignatory
+account-order mismatch is exactly the kind of drift that bites).
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
