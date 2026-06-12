@@ -15,6 +15,7 @@ import {
 import type { ArtifactStore } from "./artifacts";
 import { detectProposalAnomalies, type ChainReader } from "./chain-reader";
 import type { HolderSnapshotSource } from "./holder-snapshot";
+import type { GovernanceTxSource } from "./tx-builder";
 
 export interface ApiDeps {
   launchStore: LaunchStore;
@@ -25,6 +26,8 @@ export interface ApiDeps {
   chain?: ChainReader;
   /** Holder snapshots for `distribute` inputs; /snapshots is 501 when absent. */
   snapshot?: HolderSnapshotSource;
+  /** Unsigned-tx builder for browser signing (D-028); /chain/txs/* 501 when absent. */
+  txs?: GovernanceTxSource;
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -145,6 +148,65 @@ async function handle(
     return artifact
       ? json(res, 200, artifact)
       : json(res, 404, { error: "not found" });
+  }
+
+  // Browser-signing seam (D-028): unsigned-tx builders + raw submit.
+  if (req.method === "POST" && segments[0] === "chain" && segments[1] === "txs") {
+    if (!deps.txs) {
+      return json(res, 501, { error: "tx source not configured" });
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = (await readBody(req)) as Record<string, unknown>;
+    } catch {
+      return json(res, 400, { error: "invalid JSON body" });
+    }
+
+    if (segments[2] === "deposit" && segments.length === 3) {
+      let parsed;
+      try {
+        const amount = BigInt(String(body["amount"] ?? ""));
+        if (amount <= 0n) throw new Error("non-positive");
+        parsed = {
+          realm: new PublicKey(String(body["realm"] ?? "")),
+          governingTokenMint: new PublicKey(
+            String(body["governingTokenMint"] ?? ""),
+          ),
+          wallet: new PublicKey(String(body["wallet"] ?? "")),
+          amount,
+          ...(body["tokenProgram"]
+            ? { tokenProgram: new PublicKey(String(body["tokenProgram"])) }
+            : {}),
+        };
+      } catch {
+        return json(res, 400, {
+          error: "realm, governingTokenMint, wallet, positive amount required",
+        });
+      }
+      return json(res, 200, await deps.txs.depositTx(parsed));
+    }
+
+    if (segments[2] === "cast-vote" && segments.length === 3) {
+      let parsed;
+      try {
+        parsed = {
+          proposal: new PublicKey(String(body["proposal"] ?? "")),
+          wallet: new PublicKey(String(body["wallet"] ?? "")),
+          approve: Boolean(body["approve"]),
+        };
+      } catch {
+        return json(res, 400, { error: "proposal and wallet pubkeys required" });
+      }
+      return json(res, 200, await deps.txs.castVoteTx(parsed));
+    }
+
+    if (segments[2] === "submit" && segments.length === 3) {
+      const signed = body["signedTxBase64"];
+      if (typeof signed !== "string" || signed.length === 0) {
+        return json(res, 400, { error: "signedTxBase64 required" });
+      }
+      return json(res, 200, await deps.txs.submit(signed));
+    }
   }
 
   if (req.method === "GET" && segments[0] === "chain") {

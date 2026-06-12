@@ -132,9 +132,14 @@
       dashboard, 3 more e2e = 10 total) and verified LIVE read-only
       against the GATE 1 mainnet DAO: badge verified against the
       chain-recomputed hash, dashboard shows the real sweep history
-      (conventions in D-017). Wallet adapter deliberately deferred
-      (D-017: launch is backend-orchestrated; browser signing is
-      Stage 2).
+      (conventions in D-017). Browser signing SHIPPED (D-028, closing the
+      D-017 deferral): server-built unsigned txs (deposit + cast-vote,
+      oracle-pinned; wallet = fee payer and only signer) over a minimal
+      wallet-standard client — zero chain deps in the bundle; proven on
+      the real governance binary (wallet-vote.integration.test.ts: the
+      raw-bytes-signed vote counts exactly and finalizes the proposal)
+      and e2e with a fake wallet-standard wallet (signed-bytes
+      round-trip verified by the stub server, 12 e2e total).
 - [x] Stage 1 polish from the gate findings (tests-first): treasury
       `rentCollector = nativeTreasury` so Squads execution rent returns to
       the DAO (D-016; accepted by the real program in the bankrun suite);

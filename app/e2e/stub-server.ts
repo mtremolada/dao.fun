@@ -11,6 +11,7 @@ import {
   MemoryLaunchStore,
   createApiHandler,
   type ChainReader,
+  type GovernanceTxSource,
 } from "@daofun/backend";
 
 const PORT = 4404;
@@ -72,6 +73,34 @@ const chain: ChainReader = {
   },
 };
 
+// Browser-signing seam (D-028): the unsigned tx is a marker payload; the
+// fake wallet in wallet.spec.ts prepends "SIGNED:"; submit verifies the
+// round-trip so the e2e proves the BYTES flowed app -> wallet -> app.
+const UNSIGNED_MARKER = "UNSIGNED-VOTE-TX";
+const txs: GovernanceTxSource = {
+  async depositTx() {
+    return {
+      txBase64: Buffer.from("UNSIGNED-DEPOSIT-TX").toString("base64"),
+      tokenOwnerRecord: "stub-tor",
+    };
+  },
+  async castVoteTx(req) {
+    return {
+      txBase64: Buffer.from(
+        `${UNSIGNED_MARKER}:${req.proposal.toBase58()}:${req.approve ? "yes" : "no"}`,
+      ).toString("base64"),
+    };
+  },
+  async submit(signedTxBase64) {
+    const payload = Buffer.from(signedTxBase64, "base64").toString("utf8");
+    return {
+      signature: payload.startsWith(`SIGNED:${UNSIGNED_MARKER}:`)
+        ? "E2E-FAKE-SIGNATURE"
+        : `REJECTED:${payload}`,
+    };
+  },
+};
+
 async function main() {
   const artifactStore = new MemoryArtifactStore();
   await artifactStore.put(PROPOSAL, HASH, ARTIFACT);
@@ -82,6 +111,7 @@ async function main() {
     launchStore: new MemoryLaunchStore(),
     artifactStore,
     chain,
+    txs,
     buildSteps: () => [
       { name: "create-token", run: async () => ["stub-sig-create-token"] },
       { name: "create-treasury", run: async () => ["stub-sig-create-treasury"] },

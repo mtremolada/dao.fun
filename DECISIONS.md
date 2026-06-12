@@ -600,6 +600,49 @@ One finding changed fund-path code:
   GET /chain/proposals/:id (`anomalies: [...]`) — a deliberate route
   contract change.
 
+## D-028 — Browser signing ships as a server-built-transaction seam over wallet-standard (2026-06-12)
+
+The D-017 deferral ("browser signing is Stage 2") is closed. Design:
+the browser NEVER carries chain deps — the bundle-size discipline that
+keeps the launch form at ~105 kB extends to wallet actions.
+
+- **Backend builds, wallet signs, backend submits.** New
+  `packages/backend/src/tx-builder.ts`: pure unsigned-tx builders
+  (deposit governing tokens, cast vote approve/deny) oracle-pinned
+  against the spl-governance client; `RpcGovernanceTxSource` resolves
+  chain context (the browser sends only proposal + wallet + approve —
+  realm/governance/mint/proposer record are read from the proposal
+  account, never trusted from the client). Routes:
+  `POST /chain/txs/{deposit,cast-vote,submit}` (501 until configured).
+- **Every built tx has the WALLET as fee payer and only required
+  signer** — asserted in tests; there is no way to smuggle a platform
+  key into the signer set, and the user pays their own fees.
+- **Client side talks wallet-standard directly** (~100 lines,
+  app/lib/wallet-standard.ts): the injected-wallet registration
+  handshake plus "standard:connect" / "solana:signTransaction" — the
+  features operate on RAW BYTES, which is exactly why no web3.js is
+  needed in the page. Phantom/Solflare/Backpack all register through
+  this protocol. The flow state machine (build -> sign -> submit) is
+  pure with injected fetch + signer.
+- **Proven on the real binary**
+  (tests/wallet-vote.integration.test.ts): a holder's deposit and
+  approve-vote transactions — built by the backend builders,
+  deserialized from base64, signed by the holder alone, re-serialized,
+  submitted as raw bytes — are accepted by the deployed spl-governance
+  program; the recorded yes weight equals the deposit exactly and the
+  proposal finalizes Succeeded on that vote.
+- **E2E**: a fake wallet-standard wallet registered via the real
+  handshake; the stub server issues its signature ONLY if the submitted
+  payload is the unsigned tx it built, signed by the wallet — the bytes
+  round-trip app -> wallet -> app is what the test pins. A no-wallet
+  environment gets a clear error, not a crash.
+- Scope note: vote + deposit are the holder actions; `execute` stays
+  permissionless (keeper/anyone) and proposal AUTHORING stays
+  backend/sdk-side for now — both can ride the same seam later.
+- Ops note: workspace packages resolve through `dist/` — backend/sdk
+  must be rebuilt before the e2e stub server picks up new routes (the
+  stale-dist failure mode hit twice this session).
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

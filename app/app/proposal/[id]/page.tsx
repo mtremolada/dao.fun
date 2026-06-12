@@ -1,5 +1,6 @@
 import type { ProposalChainState } from "@daofun/backend";
 import { ProposalView } from "../../../components/proposal-view";
+import { WalletActions } from "../../../components/wallet-actions";
 
 // Server-side reads go straight to the backend (same target the /api
 // rewrite proxies to for the browser).
@@ -61,6 +62,7 @@ export default async function ProposalPage({
             : null
         }
       />
+      <WalletActions proposal={id} />
     </>
   );
 }
