@@ -46,12 +46,21 @@ export function ProposalView(props: {
   /** INV-10 red flags from the chain reader (detectProposalAnomalies). */
   anomalies?: string[];
   veto?: { vetoed: boolean; vetoVoteWeight: string } | null;
+  /**
+   * Decentralized client path: when provided, the decoded summary was computed
+   * IN THE BROWSER from chain (decodeProposalFromChain) — no backend artifact
+   * store. The badge then compares chainHash vs the published hash directly
+   * (both chain-derived). Undefined => the server/artifact-fetch path (e2e).
+   */
+  decodedSummary?: string | null;
 }) {
+  const clientMode = props.decodedSummary !== undefined;
   const [artifact, setArtifact] = useState<Artifact | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(clientMode);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
   useEffect(() => {
+    if (clientMode) return; // decoded in the browser; no artifact store fetch
     let cancelled = false;
     async function load() {
       if (props.artifactHash) {
@@ -68,7 +77,7 @@ export function ProposalView(props: {
     return () => {
       cancelled = true;
     };
-  }, [props.proposal, props.artifactHash]);
+  }, [props.proposal, props.artifactHash, clientMode]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
@@ -77,8 +86,11 @@ export function ProposalView(props: {
 
   if (!loaded) return <p className="muted">Loading artifact…</p>;
 
-  // INV-9 surface: missing artifact is as loud as a mismatch.
-  const badge = hashBadge(props.chainHash, artifact ? props.artifactHash : null);
+  // INV-9 surface: in client mode both hashes are chain-derived; in server mode
+  // a missing artifact is as loud as a mismatch.
+  const badge = clientMode
+    ? hashBadge(props.chainHash, props.artifactHash)
+    : hashBadge(props.chainHash, artifact ? props.artifactHash : null);
   const execute = executeButtonState(
     now,
     props.votingCompletedAt,
@@ -122,6 +134,15 @@ export function ProposalView(props: {
             </span>
           )}
         </p>
+      )}
+
+      {clientMode && props.decodedSummary && (
+        <>
+          <h2>Decoded summary (from chain)</h2>
+          <p data-testid="decoded-summary" style={{ whiteSpace: "pre-line" }}>
+            {props.decodedSummary}
+          </p>
+        </>
       )}
 
       {artifact && (

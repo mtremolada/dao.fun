@@ -1,10 +1,15 @@
 import type { ProposalChainState } from "@daofun/backend";
 import { ProposalView } from "../../../components/proposal-view";
+import { ProposalLive } from "../../../components/proposal-live";
 import { WalletActions } from "../../../components/wallet-actions";
 
 // Server-side reads go straight to the backend (same target the /api
 // rewrite proxies to for the browser).
 const API = process.env.API_URL ?? "http://127.0.0.1:4404";
+// Decentralized path: when an RPC is configured, read + recompute + decode the
+// proposal entirely in the browser (no backend). The server/API path remains
+// for the e2e stub and operator-hosted deployments.
+const RPC = process.env.NEXT_PUBLIC_RPC_URL;
 
 /**
  * Proposal view — spec 6.7. Chain-derived inputs (recomputed hash, voting
@@ -21,6 +26,21 @@ export default async function ProposalPage({
 }) {
   const { id } = await params;
   const q = await searchParams;
+
+  // Fully decentralized: read + recompute + decode in the browser, no backend.
+  // (Skip when the e2e passes explicit chain values via query params.)
+  if (RPC && !q.chainHash) {
+    return (
+      <>
+        <h1>Proposal</h1>
+        <p className="muted" style={{ wordBreak: "break-all" }}>
+          {id}
+        </p>
+        <ProposalLive id={id} rpcUrl={RPC} />
+        <WalletActions proposal={id} />
+      </>
+    );
+  }
 
   // The /chain/proposals route augments the reader state with the computed
   // `anomalies` array (INV-10 red flags); surface them in the view.
