@@ -672,6 +672,48 @@ writing the real gate/coordinator logic:
   the real program ID is regenerated at first devnet deploy (operator
   upgrade-authority rules from Section 11 apply from that moment).
 
+## D-030 — proposal-gate v1: on-chain validation engine + structural ratchet (2026-06-12)
+
+The first REAL Stage 3 logic, tests-first on real chain state
+(tests/stage3-gate.integration.test.ts; binaries: deployed
+spl-governance + Squads + OUR cargo-build-sbf artifact):
+
+- **Gate config** (PDA per realm, immutable after init — loosening the
+  whitelist is exactly what the gate exists to prevent): realm,
+  governance, mode level, program whitelist (max 16).
+- **`validate_transaction`** (permissionless crank): parses a
+  ProposalTransactionV2 account (owner + account-type tag checked, then
+  a fully bounds-checked byte reader — no borsh dependency on
+  spl-governance needed), requires every OUTER instruction's program on
+  the whitelist, and for Squads `vaultTransactionCreate` legs parses the
+  embedded TransactionMessage (3 header bytes, smallVec keys, compiled
+  instructions, ALT count) and requires every INNER program whitelisted
+  too — proven by refusing a proposal that smuggled a foreign program
+  inside the vault-signed message while clearing the plain custody
+  chain. Success mints a `Clearance` PDA keyed by the transaction.
+  REFUSED by design in v1: buffered Squads messages (span multiple
+  accounts — guarded proposals must use the plain wrap) and address
+  table lookups (would hide keys).
+- **`ratchet`** (INV-11 structural core): mode moves ONLY toward
+  decentralization (guarded 0 -> council 1 -> cypherpunk 2 ->
+  sovereign 3) and the required signer is the GOVERNANCE PDA — which
+  only ever signs through executed proposals, so a ratchet is always a
+  voted decision. Proven in one proposal: leg 1 (0 -> 2) executes, leg 2
+  (2 -> 1) is refused by the program after every governance timer
+  passed.
+- **Honest v1 limits** (the road to GATE 3's "byte-enforced menu"):
+  program-level whitelist, not yet per-instruction byte-validation
+  (e.g. a SetGovernanceConfig direct leg within the whitelist is not yet
+  floor-checked on-chain); clearances are not yet consumed by anything —
+  the next increment wires the gate PDA as the governance's REQUIRED
+  SIGNATORY so an uncleared proposal can never reach voting
+  (spl-gov v3.1 AddRequiredSignatory, to verify on the binary).
+- Squads discriminators pinned from @sqds/multisig 2.1.4
+  (vaultTransactionCreate [48,250,78,168,208,226,218,211];
+  transactionBufferCreate [245,201,113,108,37,63,29,89]); governance
+  account tag ProposalTransactionV2 = 13 (lib 0.3.28). anchor 0.30
+  does not re-export `pubkey!` — trusted ids are byte-array consts.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

@@ -198,12 +198,17 @@
 ## Stage 3
 
 - [~] 13.10 launch-coordinator + proposal-gate: BUILD PIPELINE PROVEN
-      (D-029) — programs/ workspace scaffolded (overflow-checks=on at the
-      workspace profile), proposal-gate skeleton compiles under
-      cargo build-sbf 4.0.0 / platform-tools v1.53 / anchor-lang 0.30.1,
-      and the artifact loads + executes in the bankrun harness
-      (tests/stage3-build.integration.test.ts: PDA init with exact
-      discriminator/layout/bump, re-init refused; fixture committed
-      gzipped so CI needs no Rust toolchain). NEXT: the proposal-gate
-      component contract (menu byte-validation, structural ratchet) and
-      launch-coordinator, tests first.
+      (D-029: cargo build-sbf 4.0.0 / platform-tools v1.53 / anchor-lang
+      0.30.1, overflow-checks=on at the workspace profile; fixtures
+      committed gzipped so CI needs no Rust toolchain). proposal-gate v1
+      SHIPPED (D-030, tests/stage3-gate.integration.test.ts on real
+      binaries + our artifact): on-chain validation engine — parses real
+      ProposalTransactionV2 accounts with a bounds-checked reader,
+      unwraps the Squads vaultTransactionCreate message on-chain, clears
+      menu proposals and REFUSES off-whitelist programs in outer legs
+      AND smuggled inside the vault-signed inner set (buffered/ALT
+      refused by design) — plus the structural INV-11 ratchet (one-way,
+      governance-signed = vote-only; reverse leg refused in the same
+      proposal). NEXT: gate PDA as REQUIRED SIGNATORY (clearance =>
+      sign-off, uncleared proposals never reach voting), per-instruction
+      menu byte-validation, then launch-coordinator — tests first.
