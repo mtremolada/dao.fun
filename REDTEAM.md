@@ -166,3 +166,48 @@ No capture path found on simulated micro-tier in either MVP mode that
 defeats (a) the zero-weight-unlocked entry gate, (b) the lockup-vs-drain
 dichotomy, and (c) the hold-up + veto/exit-window layer — each pinned by
 tests against the real binaries, not by this document.
+
+## 6. Audit correction (2026-06-12) — §1 overstates the SHIPPING configuration
+
+**The §1.1/§1.2 guarantees above assume VSR lockup weighting. The MVP does
+not ship that.** Every pump `create_v2` mint is Token-2022 (D-004); the
+deployed VSR rejects Token-2022 (D-013/D-018); production realms are
+therefore built with NO voter-weight addin (`communityVoterWeightAddin:
+null`). With no addin, **vote weight is the plain deposited token amount,
+with no lockup**. Consequences for the claims above:
+
+- **§1.1 "unlocked deposits carry ZERO vote weight (VSR baseline-0)"** —
+  TRUE only on the VSR leg (a classic-SPL test mint). FALSE for the
+  shipping Token-2022 no-addin path: an unlocked deposit carries FULL
+  weight. The flash-capture entry gate is the proposal threshold + the
+  voting window + the hold-up, NOT a zero-weight gate.
+- **§1.2 "EITHER the attacker's capital is still locked when the drain
+  executes …"** — FALSE for the shipping path. There is no lockup, so a
+  voter can deposit, vote a draining proposal to success, RELINQUISH and
+  WITHDRAW the full stake before the hold-up elapses, and let the drain
+  land — never at capital risk through execution. **Proven on the real
+  binary:** `tests/audit-f2-no-lock.integration.test.ts`.
+
+**What actually protects an MVP DAO (corrected model):**
+1. **Quorum-acquisition cost** — reaching `quorumPercent` of the max vote
+   weight (`FULL_SUPPLY_FRACTION` → 25% of supply at micro) requires
+   amassing and depositing that share of supply, which is economically
+   large and price-moving. This is a plutocratic-cost barrier, not a
+   capital-locked-through-execution barrier.
+2. **Notice window** — vote tipping is Disabled (full voting window
+   always) + the hold-up (≥72h micro / ≥24h cypherpunk): the drain is
+   public for the whole window before it can execute (INV-3, on-chain).
+3. **Council veto** (council mode) during the hold-up (INV-4, on-chain).
+
+This matches the cypherpunk UI copy ("your only protection is information
+and the exit window") but is WEAKER than the lockup dichotomy §1.2 claims.
+The lockup-vs-drain dichotomy and the zero-weight entry gate re-arm only if
+a real voter-weight plugin (VSR upgrade or custom Token-2022 plugin) lands
+(Stage 2/3). Until then, the property suite tests a configuration the
+product does not ship; add a no-addin property test (AUDIT-FINDINGS F-2).
+
+(Audit also raised F-1 (HIGH): the backend orchestrator does not even apply
+the no-addin + token-program retarget that the no-addin path requires, so a
+backend launch cannot stand up a DAO at all — see audit/AUDIT-FINDINGS.md.
+Mainnet go/no-go there: NO-GO until F-1 is fixed and this section's model is
+propagated to the property suite.)

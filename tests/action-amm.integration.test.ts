@@ -37,6 +37,8 @@ import {
   getAssociatedTokenAddressSync,
   unpackAccount,
   unpackMint,
+  type RawAccount,
+  type RawMint,
 } from "@solana/spl-token";
 import {
   GLOBAL_PDA,
@@ -116,7 +118,7 @@ async function tokenAmount(
 
 // pump-swap-sdk state takes the RAW borsh structs; adapt the decoded
 // spl-token shapes (only supply/decimals/amount are read by the math).
-function toRawMint(m: ReturnType<typeof unpackMint>) {
+function toRawMint(m: ReturnType<typeof unpackMint>): RawMint {
   return {
     mintAuthorityOption: m.mintAuthority ? 1 : 0,
     mintAuthority: m.mintAuthority ?? PublicKey.default,
@@ -128,7 +130,7 @@ function toRawMint(m: ReturnType<typeof unpackMint>) {
   };
 }
 
-function toRawAccount(a: ReturnType<typeof unpackAccount>) {
+function toRawAccount(a: ReturnType<typeof unpackAccount>): RawAccount {
   return {
     mint: a.mint,
     owner: a.owner,
