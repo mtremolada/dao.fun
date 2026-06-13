@@ -17,6 +17,7 @@ import {
   discoverWallets,
   makeSigner,
 } from "../lib/wallet-standard";
+import { getTxSource } from "../lib/rpc";
 
 const PHASE_COPY: Record<FlowState["phase"], string> = {
   building: "Building transaction…",
@@ -51,7 +52,7 @@ export function WalletActions(props: { proposal: string }) {
     if (!signer) return;
     await castVoteFlow(
       { proposal: props.proposal, approve },
-      { signer, onState: setFlow },
+      { signer, source: getTxSource(), onState: setFlow },
     );
   }
 

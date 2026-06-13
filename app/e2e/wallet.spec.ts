@@ -1,18 +1,19 @@
 /**
- * Browser-signing seam e2e (D-028): a fake wallet-standard wallet is
- * injected BEFORE the page loads (the same registration handshake real
- * wallets use); the user connects and votes; the signed BYTES round-trip
- * app -> wallet -> app is verified by the stub server, which only issues
- * the fake signature when the payload it receives is the unsigned tx the
- * builder produced, "signed" by the wallet.
+ * Browser-signing seam e2e (server-less, D-033): a fake wallet-standard
+ * wallet is injected via the same registration handshake real wallets use.
+ * The vote build/submit hits a live RPC (smoke-tested after deploy); here we
+ * pin the wallet discovery + connect surface, which needs no chain. The
+ * proposal override URL avoids any RPC read on load.
  */
 import { expect, test } from "@playwright/test";
 
-// the chain-fed proposal the stub server knows
 const PROPOSAL = "So11111111111111111111111111111111111111112";
 const WALLET_ADDRESS = "GRdkevbhSoJrnEtqadhvyuev81jSL99HYyhMCa3Tt8wR";
+const OVERRIDE = `/proposal?id=${PROPOSAL}&chainHash=${"a".repeat(64)}&artifactHash=${"a".repeat(64)}&votingCompletedAt=1000&holdUpSeconds=0`;
 
-test.beforeEach(async ({ page }) => {
+test("connect a wallet-standard wallet and see the connected address", async ({
+  page,
+}) => {
   await page.addInitScript(
     ({ address }) => {
       const account = { address };
@@ -29,19 +30,12 @@ test.beforeEach(async ({ page }) => {
           },
           "solana:signTransaction": {
             version: "1.0.0",
-            signTransaction: async (input: { transaction: Uint8Array }) => {
-              const prefix = new TextEncoder().encode("SIGNED:");
-              const signed = new Uint8Array(
-                prefix.length + input.transaction.length,
-              );
-              signed.set(prefix, 0);
-              signed.set(input.transaction, prefix.length);
-              return [{ signedTransaction: signed }];
-            },
+            signTransaction: async (input: { transaction: Uint8Array }) => [
+              { signedTransaction: input.transaction },
+            ],
           },
         },
       };
-      // wallet-standard registration handshake (what real wallets do)
       window.addEventListener("wallet-standard:app-ready", ((
         event: CustomEvent<{ register: (...ws: unknown[]) => void }>,
       ) => {
@@ -50,39 +44,16 @@ test.beforeEach(async ({ page }) => {
     },
     { address: WALLET_ADDRESS },
   );
-});
 
-test("connect a wallet-standard wallet and vote yes; the signed bytes round-trip", async ({
-  page,
-}) => {
-  await page.goto(`/proposal/${PROPOSAL}`);
-
+  await page.goto(OVERRIDE);
   await page.getByTestId("connect-wallet").click();
-  await expect(page.getByTestId("wallet-address")).toContainText(
-    WALLET_ADDRESS,
-  );
-
-  await page.getByTestId("vote-approve").click();
-  await expect(page.getByTestId("vote-status")).toHaveAttribute(
-    "data-phase",
-    "done",
-  );
-  // the stub only issues this when it received SIGNED:UNSIGNED-VOTE-TX:...
-  await expect(page.getByTestId("vote-signature")).toContainText(
-    "E2E-FAKE-SIGNATURE",
-  );
+  await expect(page.getByTestId("wallet-address")).toContainText(WALLET_ADDRESS);
 });
 
 test("without a wallet installed, connect explains instead of crashing", async ({
-  browser,
+  page,
 }) => {
-  // a fresh context WITHOUT the init script: no wallet registered
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.goto(`http://127.0.0.1:3210/proposal/${PROPOSAL}`);
+  await page.goto(OVERRIDE);
   await page.getByTestId("connect-wallet").click();
-  await expect(page.getByTestId("connect-error")).toContainText(
-    "No wallet found",
-  );
-  await context.close();
+  await expect(page.getByTestId("connect-error")).toContainText("No wallet found");
 });

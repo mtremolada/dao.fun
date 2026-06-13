@@ -8,7 +8,7 @@
  * sdk because both the proposer (descriptionLink, D-017) and the verifier
  * (artifact store, chain reader) must use the SAME function.
  */
-import { createHash } from "node:crypto";
+import { createHash } from "./sha256";
 import type { TransactionInstruction } from "@solana/web3.js";
 
 export function computeInstructionSetHash(

@@ -118,12 +118,12 @@ async function tokenAmount(
 // spl-token shapes (only supply/decimals/amount are read by the math).
 function toRawMint(m: ReturnType<typeof unpackMint>) {
   return {
-    mintAuthorityOption: m.mintAuthority ? 1 : 0,
+    mintAuthorityOption: (m.mintAuthority ? 1 : 0) as 0 | 1,
     mintAuthority: m.mintAuthority ?? PublicKey.default,
     supply: m.supply,
     decimals: m.decimals,
     isInitialized: m.isInitialized,
-    freezeAuthorityOption: m.freezeAuthority ? 1 : 0,
+    freezeAuthorityOption: (m.freezeAuthority ? 1 : 0) as 0 | 1,
     freezeAuthority: m.freezeAuthority ?? PublicKey.default,
   };
 }
@@ -133,13 +133,13 @@ function toRawAccount(a: ReturnType<typeof unpackAccount>) {
     mint: a.mint,
     owner: a.owner,
     amount: a.amount,
-    delegateOption: a.delegate ? 1 : 0,
+    delegateOption: (a.delegate ? 1 : 0) as 0 | 1,
     delegate: a.delegate ?? PublicKey.default,
     state: 1,
-    isNativeOption: a.isNative ? 1 : 0,
+    isNativeOption: (a.isNative ? 1 : 0) as 0 | 1,
     isNative: a.rentExemptReserve ?? 0n,
     delegatedAmount: a.delegatedAmount,
-    closeAuthorityOption: a.closeAuthority ? 1 : 0,
+    closeAuthorityOption: (a.closeAuthority ? 1 : 0) as 0 | 1,
     closeAuthority: a.closeAuthority ?? PublicKey.default,
   };
 }

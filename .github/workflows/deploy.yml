@@ -1,0 +1,44 @@
+name: Deploy (static export)
+
+# Builds the fully static, server-less front end (D-033) and uploads it as an
+# artifact. If a PINATA_JWT secret is present it also pins the build to IPFS
+# and prints the CID — the decentralized deploy. No secret is required for the
+# artifact path.
+on:
+  push:
+    branches: [main, claude/pensive-feynman-pvw5vy]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_RPC_URL: ${{ vars.NEXT_PUBLIC_RPC_URL || 'https://api.mainnet-beta.solana.com' }}
+      NEXT_PUBLIC_PROTOCOL_TREASURY: ${{ vars.NEXT_PUBLIC_PROTOCOL_TREASURY }}
+      NEXT_PUBLIC_LAUNCH_FEE: ${{ vars.NEXT_PUBLIC_LAUNCH_FEE || '0' }}
+      NEXT_PUBLIC_BASE_PATH: ${{ vars.NEXT_PUBLIC_BASE_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @daofun/sdk build
+      - run: pnpm --filter @daofun/app build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dao-fun-static
+          path: app/out
+
+      # Optional, fully-decentralized deploy: pin to IPFS when a token exists.
+      - name: Pin to IPFS (Pinata)
+        if: ${{ env.PINATA_JWT != '' }}
+        env:
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+        run: |
+          CID=$(npx --yes pinata-cli -a "$PINATA_JWT" upload app/out | tail -1)
+          echo "Pinned to IPFS: $CID"
+          echo "### Pinned to IPFS" >> "$GITHUB_STEP_SUMMARY"
+          echo "CID: \`$CID\` — gateway: https://$CID.ipfs.dweb.link/" >> "$GITHUB_STEP_SUMMARY"

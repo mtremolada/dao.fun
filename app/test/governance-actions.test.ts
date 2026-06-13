@@ -1,9 +1,12 @@
 /**
- * Browser-signing flow (D-028) — written before the component wiring.
- * The flow is build -> sign -> submit with injected fetch + signer; the
- * wallet-standard adapter moves raw bytes <-> base64. No chain deps.
+ * Browser-signing flow (D-033): build -> sign -> submit over an injected
+ * GovernanceTxSource (the SDK builds/submits client-side; no server). The
+ * source is faked here so the state machine is exercised offline; the
+ * wallet-standard adapter moves raw bytes <-> base64.
  */
 import { describe, expect, it } from "vitest";
+import { Keypair } from "@solana/web3.js";
+import type { GovernanceTxSource } from "@daofun/sdk/tx-builder";
 import { castVoteFlow, depositFlow, type FlowState } from "../lib/governance-actions";
 import {
   base64ToBytes,
@@ -14,21 +17,10 @@ import {
   type StandardWalletLike,
 } from "../lib/wallet-standard";
 
-const WALLET = "BrowserHo1der1111111111111111111111111111111";
-
-function fakeFetch(
-  routes: Record<string, { status: number; body: unknown } | ((body: unknown) => { status: number; body: unknown })>,
-  calls: { url: string; body: unknown }[],
-): typeof fetch {
-  return (async (url: unknown, init?: { body?: unknown }) => {
-    const body = JSON.parse(String(init?.body));
-    calls.push({ url: String(url), body });
-    const route = routes[String(url)];
-    if (!route) return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
-    const r = typeof route === "function" ? route(body) : route;
-    return new Response(JSON.stringify(r.body), { status: r.status });
-  }) as unknown as typeof fetch;
-}
+const WALLET = Keypair.generate().publicKey.toBase58();
+const PROPOSAL = Keypair.generate().publicKey.toBase58();
+const REALM = Keypair.generate().publicKey.toBase58();
+const MINT = Keypair.generate().publicKey.toBase58();
 
 const signer = {
   address: WALLET,
@@ -37,55 +29,79 @@ const signer = {
   },
 };
 
+interface Call {
+  method: "castVoteTx" | "depositTx" | "submit";
+  arg: unknown;
+}
+
+function makeSource(behavior?: Partial<GovernanceTxSource>): {
+  source: GovernanceTxSource;
+  calls: Call[];
+} {
+  const calls: Call[] = [];
+  const source: GovernanceTxSource = {
+    async castVoteTx(req) {
+      calls.push({ method: "castVoteTx", arg: req });
+      return behavior?.castVoteTx
+        ? behavior.castVoteTx(req)
+        : { txBase64: "dW5zaWduZWQ=" };
+    },
+    async depositTx(req) {
+      calls.push({ method: "depositTx", arg: req });
+      return behavior?.depositTx
+        ? behavior.depositTx(req)
+        : { txBase64: "AA==", tokenOwnerRecord: "tor" };
+    },
+    async submit(signed) {
+      calls.push({ method: "submit", arg: signed });
+      return behavior?.submit ? behavior.submit(signed) : { signature: "SIG42" };
+    },
+  };
+  return { source, calls };
+}
+
 describe("castVoteFlow", () => {
   it("build -> sign -> submit; phases in order; payloads exact", async () => {
-    const calls: { url: string; body: unknown }[] = [];
+    const { source, calls } = makeSource();
     const phases: string[] = [];
     const result = await castVoteFlow(
-      { proposal: "Prop111", approve: true },
-      {
-        signer,
-        fetchImpl: fakeFetch(
-          {
-            "/api/chain/txs/cast-vote": { status: 200, body: { txBase64: "dW5zaWduZWQ=" } },
-            "/api/chain/txs/submit": (body) => {
-              expect(body).toEqual({ signedTxBase64: "signed:dW5zaWduZWQ=" });
-              return { status: 200, body: { signature: "SIG42" } };
-            },
-          },
-          calls,
-        ),
-        onState: (s: FlowState) => phases.push(s.phase),
-      },
+      { proposal: PROPOSAL, approve: true },
+      { signer, source, onState: (s: FlowState) => phases.push(s.phase) },
     );
     expect(result).toEqual({ phase: "done", signature: "SIG42" });
     expect(phases).toEqual(["building", "signing", "submitting", "done"]);
-    expect(calls[0]!.body).toEqual({
-      proposal: "Prop111",
-      wallet: WALLET,
-      approve: true,
-    });
+
+    const build = calls[0]!.arg as {
+      proposal: { toBase58(): string };
+      wallet: { toBase58(): string };
+      approve: boolean;
+    };
+    expect(build.proposal.toBase58()).toBe(PROPOSAL);
+    expect(build.wallet.toBase58()).toBe(WALLET);
+    expect(build.approve).toBe(true);
+    // submit received the wallet-signed bytes of the built tx
+    expect(calls[1]).toEqual({ method: "submit", arg: "signed:dW5zaWduZWQ=" });
   });
 
-  it("API build errors surface as error state with the server message", async () => {
-    const result = await castVoteFlow(
-      { proposal: "P", approve: false },
-      {
-        signer,
-        fetchImpl: fakeFetch(
-          { "/api/chain/txs/cast-vote": { status: 400, body: { error: "bad proposal" } } },
-          [],
-        ),
+  it("builder errors surface as error state with the message", async () => {
+    const { source, calls } = makeSource({
+      castVoteTx: async () => {
+        throw new Error("bad proposal");
       },
+    });
+    const result = await castVoteFlow(
+      { proposal: PROPOSAL, approve: false },
+      { signer, source },
     );
     expect(result.phase).toBe("error");
     expect(result.error).toBe("bad proposal");
+    expect(calls.map((c) => c.method)).toEqual(["castVoteTx"]); // nothing submitted
   });
 
   it("a wallet rejection surfaces as error, nothing is submitted", async () => {
-    const calls: { url: string; body: unknown }[] = [];
+    const { source, calls } = makeSource();
     const result = await castVoteFlow(
-      { proposal: "P", approve: true },
+      { proposal: PROPOSAL, approve: true },
       {
         signer: {
           address: WALLET,
@@ -93,43 +109,32 @@ describe("castVoteFlow", () => {
             throw new Error("user rejected");
           },
         },
-        fetchImpl: fakeFetch(
-          { "/api/chain/txs/cast-vote": { status: 200, body: { txBase64: "AA==" } } },
-          calls,
-        ),
+        source,
       },
     );
     expect(result).toEqual({ phase: "error", error: "user rejected" });
-    expect(calls.map((c) => c.url)).toEqual(["/api/chain/txs/cast-vote"]);
+    expect(calls.map((c) => c.method)).toEqual(["castVoteTx"]);
   });
 });
 
 describe("depositFlow", () => {
-  it("posts the deposit request with the signer's wallet", async () => {
-    const calls: { url: string; body: unknown }[] = [];
+  it("builds the deposit with the signer's wallet and a bigint amount", async () => {
+    const { source, calls } = makeSource();
     const result = await depositFlow(
-      { realm: "R", governingTokenMint: "M", amount: "5000" },
-      {
-        signer,
-        fetchImpl: fakeFetch(
-          {
-            "/api/chain/txs/deposit": {
-              status: 200,
-              body: { txBase64: "AA==", tokenOwnerRecord: "tor" },
-            },
-            "/api/chain/txs/submit": { status: 200, body: { signature: "S" } },
-          },
-          calls,
-        ),
-      },
+      { realm: REALM, governingTokenMint: MINT, amount: "5000" },
+      { signer, source },
     );
     expect(result.phase).toBe("done");
-    expect(calls[0]!.body).toEqual({
-      realm: "R",
-      governingTokenMint: "M",
-      wallet: WALLET,
-      amount: "5000",
-    });
+    const build = calls[0]!.arg as {
+      realm: { toBase58(): string };
+      governingTokenMint: { toBase58(): string };
+      wallet: { toBase58(): string };
+      amount: bigint;
+    };
+    expect(build.realm.toBase58()).toBe(REALM);
+    expect(build.governingTokenMint.toBase58()).toBe(MINT);
+    expect(build.wallet.toBase58()).toBe(WALLET);
+    expect(build.amount).toBe(5000n);
   });
 });
 

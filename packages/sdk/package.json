@@ -13,6 +13,22 @@
     "./launch-form": {
       "types": "./src/launch-form.ts",
       "default": "./src/launch-form.ts"
+    },
+    "./chain-reader": {
+      "types": "./dist/chain-reader.d.ts",
+      "default": "./dist/chain-reader.js"
+    },
+    "./tx-builder": {
+      "types": "./dist/tx-builder.d.ts",
+      "default": "./dist/tx-builder.js"
+    },
+    "./launch-machine": {
+      "types": "./dist/launch-machine.d.ts",
+      "default": "./dist/launch-machine.js"
+    },
+    "./launch-steps": {
+      "types": "./dist/launch-steps.d.ts",
+      "default": "./dist/launch-steps.js"
     }
   },
   "scripts": {

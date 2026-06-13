@@ -1,25 +1,31 @@
 "use client";
 
 /**
- * Proposal view — spec 6.7: decoded summary, simulation result, red
- * flags, the INV-9 hash badge, and the INV-3 execute button gated on the
- * hold-up countdown. Badge and button state come from the shared
- * contract (hashBadge / executeButtonState), not component logic.
+ * Proposal view — spec 6.7, server-less (D-033). The trust surface is
+ * recomputed in the browser: the INV-9 hash badge compares the hash of the
+ * ACTUAL on-chain instructions (recomputed client-side) against the hash the
+ * proposer published, and the red flags come from detectProposalAnomalies
+ * over chain state. No server decode store is in the path; both hashes are
+ * shown raw so anyone can re-verify independently. Badge and execute-button
+ * state come from the shared contract, not component logic.
  */
 import { useEffect, useState } from "react";
 import { executeButtonState, hashBadge } from "@daofun/sdk/launch-form";
 
-interface Artifact {
-  decodedSummary: string;
-  simulation: { ok?: boolean } & Record<string, unknown>;
-  redFlags: string[];
-}
-
 const BADGE_COPY = {
   verified: "Verified against chain",
-  mismatch: "MISMATCH — on-chain instructions differ from the artifact",
-  missing: "Artifact missing — nothing to verify against",
+  mismatch: "MISMATCH — on-chain instructions differ from the published hash",
+  missing: "No published hash — nothing to verify against",
 } as const;
+
+const ANOMALY_COPY: Record<string, string> = {
+  "no-instructions": "This proposal carries no executable instructions.",
+  "hash-mismatch":
+    "On-chain instructions do NOT match the published artifact hash (INV-9).",
+  "missing-artifact-hash":
+    "Instructions exist but no artifact hash was published (INV-10).",
+  "zero-hold-up": "Hold-up is zero — funds can move the instant a vote passes.",
+};
 
 export function ProposalView(props: {
   proposal: string;
@@ -27,47 +33,24 @@ export function ProposalView(props: {
   chainHash: string;
   votingCompletedAt: number;
   holdUpSeconds: number;
-  /** Chain-fed extras (null when the reader is unavailable). */
   proposalState?: string | null;
   veto?: { vetoed: boolean; vetoVoteWeight: string } | null;
+  anomalies?: string[];
 }) {
-  const [artifact, setArtifact] = useState<Artifact | null>(null);
-  const [loaded, setLoaded] = useState(false);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      if (props.artifactHash) {
-        const res = await fetch(
-          `/api/artifacts/${props.proposal}/${props.artifactHash}`,
-        );
-        if (!cancelled && res.ok) {
-          setArtifact((await res.json()) as Artifact);
-        }
-      }
-      if (!cancelled) setLoaded(true);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [props.proposal, props.artifactHash]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(t);
   }, []);
 
-  if (!loaded) return <p className="muted">Loading artifact…</p>;
-
-  // INV-9 surface: missing artifact is as loud as a mismatch.
-  const badge = hashBadge(props.chainHash, artifact ? props.artifactHash : null);
+  const badge = hashBadge(props.chainHash, props.artifactHash);
   const execute = executeButtonState(
     now,
     props.votingCompletedAt,
     props.holdUpSeconds,
   );
+  const anomalies = props.anomalies ?? [];
 
   return (
     <>
@@ -96,32 +79,24 @@ export function ProposalView(props: {
         </p>
       )}
 
-      {artifact && (
-        <>
-          <h2>Decoded summary</h2>
-          <p data-testid="decoded-summary">{artifact.decodedSummary}</p>
+      <h2>Verify (INV-9)</h2>
+      <p className="muted" style={{ wordBreak: "break-all" }} data-testid="chain-hash">
+        recomputed from chain: {props.chainHash || "(no instructions)"}
+        <br />
+        published by proposer: {props.artifactHash ?? "(none)"}
+      </p>
 
-          <h2>Simulation</h2>
-          <p data-testid="simulation-result">
-            {artifact.simulation.ok ? "OK" : "FAILED"}{" "}
-            <span className="muted">
-              {JSON.stringify(artifact.simulation)}
-            </span>
-          </p>
-
-          <h2>Red flags</h2>
-          {artifact.redFlags.length === 0 ? (
-            <p className="muted" data-testid="red-flags">
-              none
-            </p>
-          ) : (
-            <ul className="errors" data-testid="red-flags">
-              {artifact.redFlags.map((flag) => (
-                <li key={flag}>{flag}</li>
-              ))}
-            </ul>
-          )}
-        </>
+      <h2>Red flags</h2>
+      {anomalies.length === 0 ? (
+        <p className="muted" data-testid="red-flags">
+          none
+        </p>
+      ) : (
+        <ul className="errors" data-testid="red-flags">
+          {anomalies.map((a) => (
+            <li key={a}>{ANOMALY_COPY[a] ?? a}</li>
+          ))}
+        </ul>
       )}
 
       <h2>Execution</h2>
@@ -130,13 +105,17 @@ export function ProposalView(props: {
           Hold-up remaining: {execute.remainingSeconds}s
         </p>
       )}
+      <p className="muted">
+        Execution after the hold-up is permissionless — anyone (a keeper, or
+        you) can submit it once the window elapses.
+      </p>
       <button
         className="button"
         type="button"
         data-testid="execute-button"
         disabled={!execute.enabled}
       >
-        Execute
+        {execute.enabled ? "Executable now" : "Locked (hold-up)"}
       </button>
     </>
   );

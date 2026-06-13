@@ -1,34 +1,52 @@
-# app — Next.js frontend (Stage 1, checklist 13.7)
+# app — Next.js frontend (fully decentralized, server-less — D-033)
+
+The front end is a **static export** (`output: "export"`): a directory of
+HTML/JS/CSS with **no backend and no key in any custody path**. Every action
+runs in the browser against an RPC the user chooses — launch, read, verify,
+vote, deposit. Deploy it to IPFS or any static host. See `../DEPLOY.md`.
 
 Contract: spec 6.7. The UI renders results from the SHARED launch-form
-contract (`@daofun/sdk/launch-form`) — the backend re-validates with the
-same functions, so client floors are convenience and server floors are
-the contract.
+contract (`@daofun/sdk/launch-form`), the same functions the on-chain
+builders enforce.
 
-- `app/` — app-router pages: mode selection (`/`), launch form
-  (`/launch?mode=`), proposal view (`/proposal/[id]`), DAO dashboard
-  (`/dao/[realm]?vault=&wallet=`).
-- `components/` — client components (form, proposal view).
-- `e2e/` — Playwright suite + a stub server that mounts the REAL
-  `createApiHandler` from `@daofun/backend` with in-memory stores,
-  stubbed launch steps, and a fake `ChainReader`.
-- `/api/*` is rewritten to the backend HTTP API (`API_URL` env,
-  default `http://127.0.0.1:4404`) — same-origin, no CORS.
-- The proposal view and dashboard are chain-fed via the backend's
-  `/chain/*` routes (`RpcChainReader`): the hash badge compares the
-  artifact against the hash recomputed from the ON-CHAIN unwrapped
-  instruction set (INV-9), and the dashboard reads vault balance, sweep
-  history, and deposited vote power. Query params override the chain
-  values on the proposal view for manual inspection (see D-017).
-- `scripts/serve-frontend-mainnet.ts` (repo root) runs the API read-only
-  against the GATE 1 mainnet DAO for a live demo.
+## Routes (all static, query-param driven)
+
+- `/` — governance mode selection.
+- `/launch?mode=council|cypherpunk|sovereign` — the **full launch ceremony
+  in the browser**: connect a wallet, the page generates the ephemeral
+  keypairs (mint / Squads createKey / council mint) locally and co-signs
+  every step with the wallet (`lib/client-launch.ts`), reusing the
+  real-binary-tested builders + the unit-tested step machine. No server.
+- `/proposal?id=<pubkey>` — proposal view read straight from chain
+  (`@daofun/sdk/chain-reader`). The INV-9 hash badge compares the hash
+  recomputed in-browser from the ON-CHAIN unwrapped instruction set against
+  the proposer's published hash; red flags come from
+  `detectProposalAnomalies`. Vote via the wallet (`lib/governance-actions.ts`).
+  Query params (`chainHash`, `artifactHash`, `votingCompletedAt`,
+  `holdUpSeconds`) override chain values for manual inspection.
+- `/dao?realm=<pubkey>&vault=<pubkey>&mint=<pubkey>&wallet=<pubkey>` —
+  dashboard: vault balance, sweep history, deposited vote power; deposit
+  community tokens for vote weight via the wallet (the `mint`'s owner
+  program is auto-detected for Token-2022). `vault` and `mint` are not
+  derivable from the realm, so they are passed explicitly (the DAO's share
+  link carries them).
+
+## RPC (bring your own)
+
+There is no shared backend. The default RPC is `NEXT_PUBLIC_RPC_URL` (build
+time); each user can override it in-app (persisted to localStorage) — the
+static host never sees a request. See `../.env.example` for the
+`NEXT_PUBLIC_*` build inputs.
+
+## Build & test
 
 ```sh
+pnpm --filter @daofun/sdk build      # required first (the app consumes dist)
+pnpm --filter @daofun/app build      # -> static export in app/out
 pnpm --filter @daofun/app test       # unit (vitest)
-pnpm --filter @daofun/app test:e2e   # Playwright (starts stub API + next dev)
-pnpm --filter @daofun/app dev        # dev server on :3210
+pnpm --filter @daofun/app test:e2e   # Playwright (see e2e/ — write flows need a chain/RPC)
 ```
 
-Wallet adapter is deliberately deferred (D-017): the launch ceremony is
-backend-orchestrated, so the MVP UI needs no browser signing; user-signed
-vote/execute from the browser is Stage 2 scope.
+The keyed `packages/backend` (and `e2e/stub-server.ts`,
+`scripts/serve-frontend-mainnet.ts`) are retained for the read-only demo and
+tests; they are **not** part of the decentralized deployment.

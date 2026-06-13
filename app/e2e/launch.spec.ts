@@ -1,9 +1,9 @@
 /**
- * Spec 6.7 e2e (written before the shell): mode selection + launch form
- * through the real UI against the real backend handler (stub steps).
- * Covers: guarded unselectable, sovereign double-confirm, sub-floor
- * override rejection, stricter-than-floor acceptance, full launch round
- * trip rendering the completed state.
+ * Spec 6.7 e2e (server-less, D-033): mode selection + the launch form's
+ * validation contract, rendered client-side from the SHARED launch-form
+ * functions (the same ones the on-chain builders enforce). The actual
+ * ceremony build/sign/submit runs against a live RPC + wallet and is
+ * smoke-tested after deploy; here we pin the floors/confirmations surface.
  */
 import { expect, test } from "@playwright/test";
 
@@ -22,46 +22,38 @@ test("mode page compares modes side by side; guarded is unselectable", async ({
   await expect(guarded.getByRole("link")).toHaveCount(0);
 });
 
-test("sovereign requires BOTH confirmations before launch enables", async ({
+test("sovereign requires BOTH confirmations before the form validates", async ({
   page,
 }) => {
   await page.goto("/launch?mode=sovereign");
-  const submit = page.getByTestId("launch-submit");
   await page.getByTestId("sovereign-holdup").fill("0");
-  await expect(submit).toBeDisabled();
+  await expect(page.getByTestId("form-errors")).toContainText(
+    /BOTH confirmations/i,
+  );
 
   await page.getByTestId("confirm-noVeto").check();
-  await expect(submit).toBeDisabled();
   await expect(page.getByTestId("form-errors")).toContainText(
     /BOTH confirmations/i,
   );
 
   await page.getByTestId("confirm-canDrainImmediately").check();
-  await expect(submit).toBeEnabled();
+  await expect(page.getByTestId("resolved-params")).toBeVisible();
 });
 
-test("sub-floor override rejected with the floor error; stricter accepted; launch completes", async ({
+test("sub-floor override rejected with the floor error; stricter accepted", async ({
   page,
 }) => {
   await page.goto("/launch?mode=cypherpunk");
-  const submit = page.getByTestId("launch-submit");
-  await expect(submit).toBeDisabled();
   await page.getByTestId("confirm-noVetoIrreversible").check();
-  await expect(submit).toBeEnabled();
+  await expect(page.getByTestId("resolved-params")).toBeVisible();
 
   // micro hold-up floor is 72h; 1h must be rejected client-side
   await page.getByTestId("override-holdup").fill("3600");
   await expect(page.getByTestId("form-errors")).toContainText(
     /below the micro tier floor/,
   );
-  await expect(submit).toBeDisabled();
 
   // stricter than the floor is allowed
   await page.getByTestId("override-holdup").fill(String(100 * 3600));
-  await expect(submit).toBeEnabled();
-
-  await submit.click();
-  const result = page.getByTestId("launch-result");
-  await expect(result).toContainText(/complete/i);
-  await expect(result).toContainText("stub-sig-create-dao");
+  await expect(page.getByTestId("resolved-params")).toBeVisible();
 });

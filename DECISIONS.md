@@ -862,3 +862,60 @@ scope).
   binary; ix layouts validated end-to-end by the bankrun VSR leg
   (createVoter / createDepositEntry / deposit / updateVoterWeightRecord);
   Token-2022 registrar rejection re-confirmed on clean evidence
+
+## D-033 — Frontend goes fully client-side & server-less; static/IPFS deploy supersedes the D-028 server seam (2026-06-13)
+
+**Operator directive (2026-06-13):** ship the launchpad as the *most
+resilient, permissionless, fully decentralized* deployment — a static front
+end that reads the chain and builds/signs/submits every transaction in the
+browser, with NO backend in any trust or custody path, deployed to IPFS.
+This SUPERSEDES D-028 (which kept "no chain deps in the client" by having
+the backend build + submit transactions). Decentralization is now the
+higher-order requirement; the server seam is removed from the deployment.
+
+**What changed:**
+- **Isomorphic SDK.** `node:crypto`'s `createHash("sha256")` was the only
+  thing keeping the SDK out of a browser bundle (4 files: artifact-hash,
+  vsr, merkle-distributor, execution-adapter). Replaced with a vendored,
+  dependency-free, synchronous SHA-256 (`packages/sdk/src/sha256.ts`).
+  Vendored — not a polyfill or a new dependency — because the hash is a
+  load-bearing invariant (INV-9 instruction-set hash, the Jito merkle tree,
+  Squads transaction-buffer pins, anchor discriminators). Pinned
+  byte-for-byte against `node:crypto` (`sha256.test.ts`) AND end-to-end
+  against the real on-chain programs (the 21-test integration suite still
+  passes — merkle proofs + discriminators would fail on any divergence).
+- **Reader + tx builders relocated to the SDK** (`chain-reader`,
+  `tx-builder`) with `dist` subpath exports; the backend keeps thin
+  re-export shims so its tests/HTTP layer are unchanged. The browser
+  constructs an `RpcChainReader` / `RpcGovernanceTxSource` over a
+  user-chosen RPC and reads/builds/submits directly.
+- **Launch ceremony runs in the browser.** `launch-machine` +
+  `launch-steps` relocated to the SDK; `app/lib/client-launch.ts` supplies
+  the RPC + wallet wiring (`RpcLaunchStepDeps`) the ceremony always
+  injected — ephemeral keypairs (mint / Squads createKey / council mint)
+  are generated locally and co-sign each step alongside the user's wallet.
+  It reuses the real-binary-tested builders + the unit-tested step machine
+  verbatim; the on-chain safety assertions (INV-5 mint-authority-null,
+  INV-7 sole-member, predicted-PDA match) are unchanged.
+- **App is `output: "export"` static.** Dynamic routes `/proposal/[id]`
+  and `/dao/[realm]` became query-param client pages (`/proposal?id=`,
+  `/dao?realm=&vault=&mint=&wallet=`) using `useSearchParams` under a
+  Suspense boundary; `next.config` stubs node-core modules and provides a
+  Buffer global. The `/api` rewrite (and the backend) are gone from the
+  deployment.
+
+**Verified:** vendored hash byte-exact (unit + real binaries); SDK 143 /
+backend 62 / app 18 / keeper 19 unit; 21 integration on real binaries;
+root tsc + eslint clean; `next build` produces a static export of all four
+routes (`app/out`).
+
+**Operator-accepted residual (explicit, 2026-06-13 — "no devnet, we are
+shipping this into production"):** this container has no browser, wallet, or
+live RPC, so the live wallet/RPC execution of vote, deposit, and the
+multi-step launch were not exercised end-to-end here. What IS verified: the
+transaction BUILDERS against real binaries, the orchestrator logic offline,
+and the static bundle. The launch ceremony had never been wired to a live
+chain before this (even the mainnet demo disabled launches), so its first
+live exercise is in production, per operator direction. The keyed backend
+(`packages/backend`) is retained for the read-only demo and tests but is
+not part of the decentralized deployment.

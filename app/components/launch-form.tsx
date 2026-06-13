@@ -1,10 +1,11 @@
 "use client";
 
 /**
- * Launch form — spec 6.7. Renders validateLaunchForm results live (the
- * same function the server re-validates with) and posts the raw form to
- * the backend; resolved params and errors all come from the shared
- * contract, never from component logic.
+ * Launch form — spec 6.7, server-less (D-033). Renders validateLaunchForm
+ * results live (the same function the on-chain builders enforce) and then
+ * runs the FULL launch ceremony in the browser: connect a wallet, generate
+ * the ephemeral keypairs locally, and build/sign/submit every step against
+ * the user's RPC. No server, no platform key.
  */
 import { useMemo, useState } from "react";
 import {
@@ -13,18 +14,29 @@ import {
   type LaunchFormInput,
   type MarketCapTier,
 } from "@daofun/sdk/launch-form";
+import type { LaunchResult } from "@daofun/sdk";
+import {
+  connectWallet,
+  discoverWallets,
+  makeSigner,
+} from "../lib/wallet-standard";
+import type { SignerLike } from "../lib/governance-actions";
+import { getConnection } from "../lib/rpc";
+import { runClientLaunch } from "../lib/client-launch";
 
 const TIERS: MarketCapTier[] = ["micro", "small", "mid", "large"];
 
-interface LaunchState {
-  launchId: string;
-  status: string;
-  completedSteps: Record<string, string[]>;
-  failedStep?: string;
+interface Progress {
+  label: string;
+  signature: string;
 }
 
 export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [tier, setTier] = useState<MarketCapTier>("micro");
+  const [name, setName] = useState("");
+  const [symbol, setSymbol] = useState("");
+  const [uri, setUri] = useState("");
+  const [devBuy, setDevBuy] = useState("");
   const [councilMembers, setCouncilMembers] = useState("");
   const [vetoPercent, setVetoPercent] = useState("60");
   const [sovereignHoldUp, setSovereignHoldUp] = useState("");
@@ -33,9 +45,13 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [confirmations, setConfirmations] = useState<
     LaunchFormInput["confirmations"]
   >({});
-  const [submitting, setSubmitting] = useState(false);
+
+  const [signer, setSigner] = useState<SignerLike | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<Progress[]>([]);
   const [serverErrors, setServerErrors] = useState<string[]>([]);
-  const [result, setResult] = useState<LaunchState | null>(null);
+  const [result, setResult] = useState<LaunchResult | null>(null);
 
   const form = useMemo<LaunchFormInput>(() => {
     const overrides: NonNullable<LaunchFormInput["overrides"]> = {};
@@ -71,6 +87,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   ]);
 
   const validated = useMemo(() => validateLaunchForm(form), [form]);
+  const metadataOk = name.trim() !== "" && symbol.trim() !== "" && uri.trim() !== "";
   const errors = [...validated.errors, ...serverErrors];
 
   function confirm(key: keyof LaunchFormInput["confirmations"]) {
@@ -86,33 +103,74 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     );
   }
 
-  async function submit() {
-    setSubmitting(true);
-    setServerErrors([]);
+  async function connect() {
     try {
-      const res = await fetch("/api/launches", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ launchId: crypto.randomUUID(), form }),
-      });
-      const body = (await res.json()) as LaunchState & { errors?: string[] };
-      if (body.errors) {
-        setServerErrors(body.errors);
-      } else {
-        setResult(body);
+      const wallets = discoverWallets();
+      if (wallets.length === 0) {
+        setConnectError("No wallet found — install a Solana wallet extension.");
+        return;
       }
+      const account = await connectWallet(wallets[0]!);
+      setSigner(makeSigner(wallets[0]!, account));
+      setConnectError(null);
+    } catch (e) {
+      setConnectError((e as Error).message);
+    }
+  }
+
+  async function launch() {
+    if (!signer || !validated.ok || !metadataOk) return;
+    setRunning(true);
+    setServerErrors([]);
+    setProgress([]);
+    setResult(null);
+    try {
+      const res = await runClientLaunch(
+        {
+          form,
+          metadata: { name: name.trim(), symbol: symbol.trim(), uri: uri.trim() },
+          ...(devBuy.trim() !== "" ? { devBuyLamports: BigInt(devBuy.trim()) } : {}),
+        },
+        {
+          connection: getConnection(),
+          walletAddress: signer.address,
+          signTransaction: (tx) => signer.signTransaction(tx),
+          onStep: (label, signature) =>
+            setProgress((p) => [...p, { label, signature }]),
+        },
+      );
+      setResult(res);
     } catch (e) {
       setServerErrors([(e as Error).message]);
     } finally {
-      setSubmitting(false);
+      setRunning(false);
     }
   }
 
   if (result) {
+    const realm = result.treasury.realm.toBase58();
+    const vault = result.treasury.vaultPda.toBase58();
+    const mint = result.mint.toBase58();
     return (
-      <pre className="result" data-testid="launch-result">
-        {JSON.stringify(result, null, 2)}
-      </pre>
+      <div className="result" data-testid="launch-result">
+        <h2>DAO launched ✓</h2>
+        <p className="muted" style={{ wordBreak: "break-all" }}>
+          mint {mint}
+          <br />
+          realm {realm}
+          <br />
+          vault {vault}
+        </p>
+        <p>
+          <a className="button" href={`/dao/?realm=${realm}&vault=${vault}&mint=${mint}`}>
+            Open the DAO dashboard
+          </a>
+        </p>
+        <p className="muted">
+          mint authority null: {String(result.mintAuthorityNull)} · predicted
+          PDAs matched: {String(result.predictedPdasMatched)}
+        </p>
+      </div>
     );
   }
 
@@ -121,9 +179,44 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
       className="launch"
       onSubmit={(e) => {
         e.preventDefault();
-        void submit();
+        void launch();
       }}
     >
+      <h2>Token</h2>
+      <label htmlFor="token-name">Name</label>
+      <input
+        id="token-name"
+        data-testid="token-name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <label htmlFor="token-symbol">Symbol</label>
+      <input
+        id="token-symbol"
+        data-testid="token-symbol"
+        value={symbol}
+        onChange={(e) => setSymbol(e.target.value)}
+      />
+      <label htmlFor="token-uri">
+        Metadata URI (the off-chain JSON; e.g. an IPFS link you pinned)
+      </label>
+      <input
+        id="token-uri"
+        data-testid="token-uri"
+        value={uri}
+        onChange={(e) => setUri(e.target.value)}
+      />
+      <label htmlFor="dev-buy">Optional dev-buy (lamports, 0 to skip)</label>
+      <input
+        id="dev-buy"
+        data-testid="dev-buy"
+        type="number"
+        min={0}
+        value={devBuy}
+        onChange={(e) => setDevBuy(e.target.value)}
+      />
+
+      <h2>Governance</h2>
       <label htmlFor="tier">Market-cap tier (sets the floors)</label>
       <select
         id="tier"
@@ -246,14 +339,47 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         </p>
       )}
 
-      <button
-        className="button"
-        type="submit"
-        data-testid="launch-submit"
-        disabled={!validated.ok || submitting}
-      >
-        {submitting ? "Launching..." : "Launch"}
-      </button>
+      {progress.length > 0 && (
+        <ol className="result" data-testid="launch-progress">
+          {progress.map((p) => (
+            <li key={p.label} style={{ wordBreak: "break-all" }}>
+              {p.label}: {p.signature}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {!signer ? (
+        <>
+          <button
+            className="button"
+            type="button"
+            data-testid="connect-wallet-launch"
+            onClick={() => void connect()}
+          >
+            Connect wallet to launch
+          </button>
+          {connectError && (
+            <p className="errors" data-testid="connect-error-launch">
+              {connectError}
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="muted" data-testid="wallet-address-launch">
+            Connected: {signer.address}
+          </p>
+          <button
+            className="button"
+            type="submit"
+            data-testid="launch-submit"
+            disabled={!validated.ok || !metadataOk || running}
+          >
+            {running ? "Launching…" : "Launch DAO"}
+          </button>
+        </>
+      )}
     </form>
   );
 }

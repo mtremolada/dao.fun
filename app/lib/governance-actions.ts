@@ -1,11 +1,17 @@
+"use client";
+
 /**
- * Browser governance actions (D-028) — the client half of the
- * browser-signing seam. The backend builds UNSIGNED transactions and
- * submits SIGNED bytes; this module only moves base64 between the API
- * and the wallet, so the client bundle carries no chain deps at all.
+ * Browser governance actions (D-033, supersedes the D-028 server seam).
  *
- * Pure state machine, injected fetch + signer — unit-tested offline.
+ * build -> sign -> submit, fully client-side: the SDK's GovernanceTxSource
+ * builds the UNSIGNED transaction against the user's RPC, the wallet
+ * (wallet-standard) signs raw bytes, and the SAME source submits. The wallet
+ * is the only signer and fee payer — no server, no platform key, anywhere in
+ * the path. The source is injected, so the state machine is unit-tested
+ * offline against a fake.
  */
+import { PublicKey } from "@solana/web3.js";
+import type { GovernanceTxSource } from "@daofun/sdk/tx-builder";
 
 export interface SignerLike {
   /** base58 wallet address. */
@@ -22,56 +28,32 @@ export interface FlowState {
   error?: string;
 }
 
-interface FlowOpts {
+export interface FlowOpts {
   signer: SignerLike;
-  fetchImpl?: typeof fetch;
-  apiBase?: string;
+  source: GovernanceTxSource;
   onState?: (s: FlowState) => void;
 }
 
-async function postJson(
-  fetchImpl: typeof fetch,
-  url: string,
-  body: unknown,
-): Promise<Record<string, unknown>> {
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = (await res.json()) as Record<string, unknown>;
-  if (!res.ok) {
-    throw new Error(String(payload["error"] ?? `HTTP ${res.status}`));
-  }
-  return payload;
-}
-
-/** build (unsigned tx from the API) -> sign (wallet) -> submit (API). */
+/** build (unsigned tx from the source) -> sign (wallet) -> submit (source). */
 async function runFlow(
-  buildUrl: string,
-  buildBody: Record<string, unknown>,
+  build: () => Promise<{ txBase64: string }>,
   opts: FlowOpts,
 ): Promise<FlowState> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const api = opts.apiBase ?? "/api";
   const step = (s: FlowState) => {
     opts.onState?.(s);
     return s;
   };
   try {
     step({ phase: "building" });
-    const built = await postJson(fetchImpl, `${api}${buildUrl}`, buildBody);
-    const txBase64 = String(built["txBase64"] ?? "");
-    if (!txBase64) throw new Error("API returned no transaction");
+    const { txBase64 } = await build();
+    if (!txBase64) throw new Error("builder returned no transaction");
 
     step({ phase: "signing" });
     const signed = await opts.signer.signTransaction(txBase64);
 
     step({ phase: "submitting" });
-    const submitted = await postJson(fetchImpl, `${api}/chain/txs/submit`, {
-      signedTxBase64: signed,
-    });
-    return step({ phase: "done", signature: String(submitted["signature"]) });
+    const { signature } = await opts.source.submit(signed);
+    return step({ phase: "done", signature });
   } catch (e) {
     return step({ phase: "error", error: (e as Error).message });
   }
@@ -82,24 +64,35 @@ export function castVoteFlow(
   opts: FlowOpts,
 ): Promise<FlowState> {
   return runFlow(
-    "/chain/txs/cast-vote",
-    { proposal: p.proposal, wallet: opts.signer.address, approve: p.approve },
+    () =>
+      opts.source.castVoteTx({
+        proposal: new PublicKey(p.proposal),
+        wallet: new PublicKey(opts.signer.address),
+        approve: p.approve,
+      }),
     opts,
   );
 }
 
 export function depositFlow(
-  p: { realm: string; governingTokenMint: string; amount: string },
+  p: {
+    realm: string;
+    governingTokenMint: string;
+    amount: string;
+    /** Owner program of the mint (Token vs Token-2022); auto-detected by the UI. */
+    tokenProgram?: string;
+  },
   opts: FlowOpts,
 ): Promise<FlowState> {
   return runFlow(
-    "/chain/txs/deposit",
-    {
-      realm: p.realm,
-      governingTokenMint: p.governingTokenMint,
-      wallet: opts.signer.address,
-      amount: p.amount,
-    },
+    () =>
+      opts.source.depositTx({
+        realm: new PublicKey(p.realm),
+        governingTokenMint: new PublicKey(p.governingTokenMint),
+        wallet: new PublicKey(opts.signer.address),
+        amount: BigInt(p.amount),
+        ...(p.tokenProgram ? { tokenProgram: new PublicKey(p.tokenProgram) } : {}),
+      }),
     opts,
   );
 }

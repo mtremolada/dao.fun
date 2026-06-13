@@ -3,11 +3,35 @@
 Spec-driven build per **SPEC.md** (v2.0 — the only authoritative spec).
 Doctrine: tests BEFORE code on anything touching funds/PDAs/governance;
 verify against the deployed binary before trusting any interface; record
-everything in **DECISIONS.md** (D-001..D-032 so far); gate evidence in
+everything in **DECISIONS.md** (D-001..D-033 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
-## ⚠️ PENDING OPERATOR DECISION — pick this up first (next session)
+## Shipped this session (…pvw5vy, 2026-06-13) — fully decentralized front end (D-033)
+
+Operator directive: ship the most resilient, permissionless, **server-less**
+deployment ("no devnet — shipping to production"). DONE and gate-green:
+- **Branch `claude/pensive-feynman-pvw5vy`** (push ONLY here; no PRs unless
+  asked).
+- SDK is now **isomorphic**: a vendored, byte-exact SHA-256
+  (`packages/sdk/src/sha256.ts`) replaces `node:crypto` (proven vs node AND
+  the real binaries). `chain-reader`, `tx-builder`, `launch-machine`,
+  `launch-steps` relocated to the SDK; backend keeps re-export shims.
+- App is **`output: "export"` static** (no backend): read / verify (INV-9
+  recomputed in-browser) / vote / deposit / **launch** all run client-side
+  over a user-chosen RPC. Routes are query-param pages (`/proposal?id=`,
+  `/dao?realm=&vault=&mint=`). The launch ceremony generates ephemeral
+  keypairs locally and co-signs with the wallet
+  (`app/lib/client-launch.ts`), reusing the real-binary-tested builders +
+  step machine. **SUPERSEDES D-028.**
+- Gate: 249 unit + 21 integration (real binaries) + root tsc/eslint clean +
+  `next build` static export of all four routes. Deploy artifact is the
+  IPFS-ready `app/out` (see **DEPLOY.md**).
+- Residual (operator-accepted): live wallet/RPC flows (vote/deposit/launch)
+  not exercisable in-container; builders + orchestrator + static bundle ARE
+  verified. See DECISIONS.md D-033.
+
+## ⚠️ PENDING OPERATOR DECISION — Guarded mode (separate track, unaffected)
 
 **Topic: how Guarded mode (Stage 3, spec 6.9) gets its structural
 enforcement.** Full background in DECISIONS.md **D-032**; explained to
