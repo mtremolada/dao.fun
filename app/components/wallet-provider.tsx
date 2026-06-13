@@ -28,6 +28,7 @@ import {
 } from "../lib/wallet-standard";
 import { makeWalletSender, type WalletSender } from "../lib/wallet-sender";
 import {
+  allowedDetected,
   clearLastWalletName,
   loadLastWalletName,
   pickEagerWallet,
@@ -40,6 +41,8 @@ export interface WalletContextValue {
   wallets: StandardWalletLike[];
   wallet: StandardWalletLike | null;
   account: WalletAccountLike | null;
+  /** Display name of the connected wallet (e.g. "Phantom" or "Ledger"). */
+  connectedName: string | null;
   /** Sender for the vote/deposit flows (wallet signs + broadcasts); null until connected. */
   sender: WalletSender | null;
   connecting: boolean;
@@ -49,6 +52,8 @@ export interface WalletContextValue {
   closeModal: () => void;
   /** Connect to a specific registered wallet by name (modal selection). */
   connect: (walletName: string) => Promise<void>;
+  /** Connect a Ledger hardware wallet over WebHID (Solana app). */
+  connectLedger: () => Promise<void>;
   disconnect: () => Promise<void>;
 }
 
@@ -66,19 +71,25 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallets, setWallets] = useState<StandardWalletLike[]>([]);
   const [wallet, setWallet] = useState<StandardWalletLike | null>(null);
   const [account, setAccount] = useState<WalletAccountLike | null>(null);
+  const [connectedName, setConnectedName] = useState<string | null>(null);
   const [sender, setSender] = useState<WalletSender | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const eagerTried = useRef(false);
+  const ledgerRef = useRef<{ disconnect: () => Promise<void> } | null>(null);
 
-  // Live wallet-standard discovery for the whole session.
-  useEffect(() => subscribeWallets(setWallets), []);
+  // Live wallet-standard discovery, restricted to the supported wallets.
+  useEffect(
+    () => subscribeWallets((ws) => setWallets(allowedDetected(ws))),
+    [],
+  );
 
   const applyConnection = useCallback(
     (w: StandardWalletLike, acc: WalletAccountLike) => {
       setWallet(w);
       setAccount(acc);
+      setConnectedName(w.name);
       setSender(makeWalletSender(w, acc));
       setError(null);
     },
@@ -88,6 +99,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const reset = useCallback(() => {
     setWallet(null);
     setAccount(null);
+    setConnectedName(null);
     setSender(null);
   }, []);
 
@@ -114,8 +126,38 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [wallets, applyConnection],
   );
 
+  const connectLedger = useCallback(async () => {
+    setConnecting(true);
+    setError(null);
+    try {
+      const { connectLedger: doConnect } = await import("../lib/ledger");
+      const res = await doConnect();
+      setWallet(null);
+      setAccount({ address: res.address });
+      setConnectedName("Ledger");
+      setSender(res.sender);
+      ledgerRef.current = { disconnect: res.disconnect };
+      // Hardware needs a fresh user gesture each session — do not persist for
+      // silent reconnect.
+      clearLastWalletName();
+      setModalOpen(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setConnecting(false);
+    }
+  }, []);
+
   const disconnect = useCallback(async () => {
     if (wallet) await disconnectWallet(wallet);
+    if (ledgerRef.current) {
+      try {
+        await ledgerRef.current.disconnect();
+      } catch {
+        /* transport already gone */
+      }
+      ledgerRef.current = null;
+    }
     clearLastWalletName();
     reset();
   }, [wallet, reset]);
@@ -162,6 +204,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       wallets,
       wallet,
       account,
+      connectedName,
       sender,
       connecting,
       error,
@@ -169,12 +212,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       openModal,
       closeModal,
       connect,
+      connectLedger,
       disconnect,
     }),
     [
       wallets,
       wallet,
       account,
+      connectedName,
       sender,
       connecting,
       error,
@@ -182,6 +227,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       openModal,
       closeModal,
       connect,
+      connectLedger,
       disconnect,
     ],
   );
