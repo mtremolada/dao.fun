@@ -16,5 +16,6 @@ export * from "./actions";
 export * from "./launch-form";
 export * from "./artifact-hash";
 export * from "./proposal";
+export * from "./gate";
 export * from "./merkle-distributor";
 export * from "./snapshot";

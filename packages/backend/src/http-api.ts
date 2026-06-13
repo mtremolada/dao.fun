@@ -7,7 +7,12 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { PublicKey } from "@solana/web3.js";
-import { proRataShares, validateLaunchForm, type LaunchFormInput } from "@daofun/sdk";
+import {
+  proRataShares,
+  validateLaunchForm,
+  validateTokenMetadata,
+  type LaunchFormInput,
+} from "@daofun/sdk";
 import {
   runLaunch,
   type LaunchStep,
@@ -43,6 +48,17 @@ export interface ApiDeps {
    * seam) are intentionally NOT gated.
    */
   authToken?: string;
+  /**
+   * Unlocks Guarded mode launches (D-034 operator override). Production
+   * sets this only after the proposal-gate program is verified live on
+   * the cluster this server points at. Default: locked.
+   */
+  guardedEnabled?: boolean;
+  /**
+   * Production launches must carry token metadata (name/symbol/uri for
+   * the pump create). Stub/e2e servers leave this off.
+   */
+  requireTokenMetadata?: boolean;
 }
 
 /** Constant-time bearer check; open (true) only when no token is configured. */
@@ -136,9 +152,17 @@ async function handle(
       return json(res, 400, { errors: ["launchId and form are required"] });
     }
     // Server floors are the contract — same functions as the UI.
-    const validated = validateLaunchForm(body.form);
+    const validated = validateLaunchForm(body.form, {
+      guardedEnabled: deps.guardedEnabled ?? false,
+    });
     if (!validated.ok) {
       return json(res, 400, { errors: validated.errors });
+    }
+    if (deps.requireTokenMetadata) {
+      const metaErrors = validateTokenMetadata(body.form.metadata);
+      if (metaErrors.length > 0) {
+        return json(res, 400, { errors: metaErrors });
+      }
     }
     const state = await runLaunch(
       body.launchId,

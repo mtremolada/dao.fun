@@ -42,6 +42,18 @@
       "types": "./src/governance.ts",
       "default": "./src/governance.ts"
     },
+    "./chain-reader": {
+      "types": "./src/chain-reader.ts",
+      "default": "./src/chain-reader.ts"
+    },
+    "./decode": {
+      "types": "./src/decode.ts",
+      "default": "./src/decode.ts"
+    },
+    "./verify": {
+      "types": "./src/verify.ts",
+      "default": "./src/verify.ts"
+    },
     "./rails/pumpfun": {
       "types": "./src/rails/pumpfun.ts",
       "default": "./src/rails/pumpfun.ts"

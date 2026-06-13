@@ -74,6 +74,8 @@ function initializeIx(
 ): TransactionInstruction {
   const vec = Buffer.alloc(4);
   vec.writeUInt32LE(whitelist.length);
+  const threshold = Buffer.alloc(8);
+  threshold.writeBigUInt64LE(1n);
   return new TransactionInstruction({
     programId: GATE_PROGRAM_ID,
     keys: [
@@ -85,6 +87,9 @@ function initializeIx(
       disc("initialize"),
       dao.realm.toBuffer(),
       dao.governance.toBuffer(),
+      dao.mint.toBuffer(), // community mint
+      (dao.councilMint ?? dao.mint).toBuffer(), // council mint (unused here)
+      threshold,
       Buffer.from([0]), // mode: guarded
       vec,
       ...whitelist.map((p) => p.toBuffer()),
@@ -127,8 +132,9 @@ function ratchetIx(
 
 async function gateMode(ctx: ProgramTestContext, dao: Dao): Promise<number> {
   const info = await ctx.banksClient.getAccount(gatePda(dao.realm));
-  // layout: 8 disc + realm 32 + governance 32 + mode u8 + bump u8 + vec
-  return Buffer.from(info!.data)[72]!;
+  // layout: 8 disc + realm 32 + governance 32 + community_mint 32 +
+  // council_mint 32 + proposal_threshold u64 + mode u8 + bump u8 + vec
+  return Buffer.from(info!.data)[144]!;
 }
 
 describe("Stage 3 proposal-gate v1: on-chain menu validation + structural ratchet (real binaries)", () => {

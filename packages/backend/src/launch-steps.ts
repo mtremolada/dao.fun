@@ -161,6 +161,11 @@ export function buildLaunchSteps(
         }
         sigs.push(await send(dao.groups.realmSetup, "create-dao:realm"));
         sigs.push(await send(dao.groups.governanceSetup, "create-dao:governance"));
+        // Guarded (D-033): gate initialize + council-seat deposit complete
+        // the ceremony AFTER the realm/governance exist.
+        if (dao.groups.gateSetup.length > 0) {
+          sigs.push(await send(dao.groups.gateSetup, "create-dao:gate"));
+        }
 
         if (!dao.nativeTreasury.equals(predicted.nativeTreasury)) {
           throw new Error(
