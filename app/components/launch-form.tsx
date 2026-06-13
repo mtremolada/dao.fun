@@ -7,6 +7,7 @@
  * connected wallet (no server). Real SOL is spent on Solana mainnet.
  */
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import {
   validateLaunchForm,
   type GovernanceMode,
@@ -184,7 +185,13 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         <pre className="result">
           {JSON.stringify(result, null, 2)}
         </pre>
-        <p>
+        <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <Link
+            className="button"
+            href={`/dao?realm=${result.realm}&vault=${result.vault}&ms=${result.multisig}`}
+          >
+            View &amp; verify your DAO
+          </Link>
           <a
             className="button"
             href={`https://pump.fun/coin/${result.mint}`}

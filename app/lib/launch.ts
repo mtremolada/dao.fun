@@ -64,6 +64,7 @@ export interface LaunchResult {
   realm: string;
   governance: string;
   vault: string;
+  multisig: string;
   nativeTreasury: string;
   signatures: string[];
 }
@@ -91,7 +92,7 @@ export async function runLaunch(
     input.mode === "council" ? Keypair.generate() : undefined;
 
   const predicted = deriveGovernanceChainFromMint(mint.publicKey);
-  const { vaultPda } = deriveTreasuryPdas(createKey.publicKey);
+  const { multisigPda, vaultPda } = deriveTreasuryPdas(createKey.publicKey);
   const params = realParams(input);
   const signatures: string[] = [];
 
@@ -187,6 +188,17 @@ export async function runLaunch(
       councilMint ? [councilMint] : [],
     );
   }
+  // AUDIT-D: the multi-tx launch reveals the mint — and thus the deterministic
+  // realm PDA — before the realm exists. If someone squatted that address in
+  // the window, abort LOUDLY rather than letting create-realm fail cryptically
+  // (the structural close is the Stage-3 atomic launch-coordinator).
+  const squatter = await connection.getAccountInfo(predicted.realm);
+  if (squatter) {
+    const msg =
+      "A realm already exists at this DAO's derived address — possible front-run/squat. Restart with a fresh launch; do NOT continue funding this one.";
+    onStep({ step: "Create realm", status: "error", error: msg });
+    throw new Error(msg);
+  }
   await send("Create realm", dao.groups.realmSetup, []);
   await send("Create governance", dao.groups.governanceSetup, []);
 
@@ -208,6 +220,7 @@ export async function runLaunch(
     realm: predicted.realm.toBase58(),
     governance: predicted.governance.toBase58(),
     vault: vaultPda.toBase58(),
+    multisig: multisigPda.toBase58(),
     nativeTreasury: predicted.nativeTreasury.toBase58(),
     signatures,
   };
