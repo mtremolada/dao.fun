@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * Connect popup — the supported set for now: Phantom and Solflare (browser,
- * wallet-standard) plus Ledger (hardware, Solana app over WebHID). Detected
- * browser wallets show first; missing ones get an install link; Ledger is
- * always offered. Backdrop click and Escape close it.
+ * Connect popup — the supported set is Phantom (browser, wallet-standard /
+ * injected provider; see wallet-registry ALLOWED_WALLET_NAMES). A detected
+ * Phantom shows first; if it is missing, an install link is offered instead.
+ * Backdrop click and Escape close it.
  */
 import { useEffect } from "react";
 import { useWallet } from "./wallet-provider";

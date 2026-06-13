@@ -93,6 +93,35 @@ function RangeField(props: {
   );
 }
 
+/** One labelled address with a copy-to-clipboard button (success card). */
+function CopyAddr({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    const p = navigator.clipboard?.writeText(value);
+    if (p)
+      void p.then(
+        () => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        },
+        () => {},
+      );
+  }
+  return (
+    <div className="addr-row">
+      <span className="k">{label}</span>
+      <span
+        style={{ display: "flex", gap: "0.5rem", alignItems: "center", minWidth: 0 }}
+      >
+        <span className="v">{value}</span>
+        <button type="button" className="button small secondary" onClick={copy}>
+          {copied ? "✓" : "Copy"}
+        </button>
+      </span>
+    </div>
+  );
+}
+
 export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const { sender, openModal } = useWallet();
 
@@ -255,27 +284,43 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
 
   if (result) {
     return (
-      <div data-testid="launch-result">
-        <p className="badge" data-state="verified">
-          DAO launched 🎉
+      <div className="success-card" data-testid="launch-result">
+        <span className="badge" data-state="verified">
+          ✓ DAO launched 🎉
+        </span>
+        <h2>Your DAO is live</h2>
+        <p className="muted">
+          Custody is the predicted vault PDA — no platform key can move these
+          funds. Save these addresses; the dashboard re-verifies them on-chain.
         </p>
-        <pre className="result">{JSON.stringify(result, null, 2)}</pre>
-        <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <div style={{ margin: "1.1rem 0" }}>
+          <CopyAddr label="Coin mint" value={result.mint} />
+          <CopyAddr label="Realm" value={result.realm} />
+          <CopyAddr label="Governance" value={result.governance} />
+          <CopyAddr label="Treasury vault" value={result.vault} />
+          <CopyAddr label="Multisig" value={result.multisig} />
+          <CopyAddr label="Native treasury" value={result.nativeTreasury} />
+        </div>
+        <div className="actions-row">
           <Link
             className="button"
             href={`/dao?realm=${result.realm}&vault=${result.vault}&ms=${result.multisig}`}
           >
-            View &amp; verify your DAO
+            View &amp; verify your DAO →
           </Link>
           <a
-            className="button"
+            className="button secondary"
             href={`https://pump.fun/coin/${result.mint}`}
             target="_blank"
             rel="noreferrer"
           >
-            View coin on pump.fun
+            View coin on pump.fun ↗
           </a>
-        </p>
+        </div>
+        <details style={{ marginTop: "1.2rem" }}>
+          <summary className="muted">Raw launch result (JSON)</summary>
+          <pre className="result">{JSON.stringify(result, null, 2)}</pre>
+        </details>
       </div>
     );
   }
@@ -288,10 +333,15 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         void launch();
       }}
     >
-      <p className="errors" style={{ paddingLeft: 0 }}>
-        ⚠ Real launch — this spends SOL on Solana mainnet and creates on-chain
-        accounts. Beta: try a small amount first.
-      </p>
+      <div className="notice">
+        <span className="ficon" aria-hidden="true">
+          ⚠
+        </span>
+        <span>
+          <b>Real launch.</b> This spends SOL on Solana mainnet and creates
+          on-chain accounts. Beta — try a small amount first.
+        </span>
+      </div>
 
       <h2>Token</h2>
       <label htmlFor="coin-name">Coin name</label>
@@ -323,16 +373,11 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
       />
       {imageUrl && (
         <img
+          className="img-preview"
           src={imageUrl}
           alt="preview"
           width={96}
           height={96}
-          style={{
-            objectFit: "cover",
-            borderRadius: 12,
-            border: "1px solid var(--border)",
-            marginTop: "0.5rem",
-          }}
         />
       )}
 

@@ -209,12 +209,11 @@ export function DaoScreen() {
       )}
 
       <h2>Vault balance</h2>
-      <p data-testid="vault-balance">
-        <strong>{dashboard.vaultBalanceLamports / 1e9} SOL</strong>{" "}
-        <span className="muted">
-          ({dashboard.vaultBalanceLamports} lamports)
-        </span>
-      </p>
+      <div className="stat" data-testid="vault-balance">
+        <div className="label">Treasury vault</div>
+        <div className="value">{dashboard.vaultBalanceLamports / 1e9} SOL</div>
+        <div className="sub">{dashboard.vaultBalanceLamports} lamports</div>
+      </div>
 
       <h2>Creator fees</h2>
       <p className="muted">
@@ -278,14 +277,11 @@ export function DaoScreen() {
 
       <h2>Vote power</h2>
       {dashboard.votePower ? (
-        <p data-testid="vote-power">
-          <span className="muted" style={{ wordBreak: "break-all" }}>
-            {dashboard.votePower.wallet}
-          </span>
-          <br />
-          deposited governing tokens (raw):{" "}
-          <strong>{dashboard.votePower.depositedTokens}</strong>
-        </p>
+        <div className="stat" data-testid="vote-power">
+          <div className="label">Deposited governing tokens (raw)</div>
+          <div className="value">{dashboard.votePower.depositedTokens}</div>
+          <div className="sub">{dashboard.votePower.wallet}</div>
+        </div>
       ) : (
         <p className="muted" data-testid="vote-power">
           pass ?wallet= to see a holder&apos;s deposited vote power
@@ -298,6 +294,7 @@ export function DaoScreen() {
         {dashboard.realmName} tokens here to be able to vote (withdrawable later).
       </p>
       <input
+        className="dao-input"
         type="number"
         min={0}
         step="0.000001"
@@ -305,15 +302,7 @@ export function DaoScreen() {
         data-testid="deposit-amount"
         value={depositAmt}
         onChange={(e) => setDepositAmt(e.target.value)}
-        style={{
-          maxWidth: "16rem",
-          background: "var(--bg)",
-          border: "1px solid var(--border)",
-          borderRadius: 6,
-          color: "var(--text)",
-          padding: "0.45rem",
-          marginRight: "0.5rem",
-        }}
+        style={{ maxWidth: "16rem", marginRight: "0.5rem" }}
       />
       <button
         className="button"

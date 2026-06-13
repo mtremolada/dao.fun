@@ -62,7 +62,7 @@ export function WalletActions(props: { proposal: string }) {
             Vote yes
           </button>{" "}
           <button
-            className="button"
+            className="button danger"
             type="button"
             data-testid="vote-deny"
             disabled={busy}
