@@ -24,7 +24,7 @@
  * keeps account resolution synchronous (Squads' accountsForTransactionExecute
  * only consults the network for ALTs).
  */
-import { createHash } from "node:crypto";
+import { createHash } from "./sha256";
 import {
   Connection,
   PublicKey,

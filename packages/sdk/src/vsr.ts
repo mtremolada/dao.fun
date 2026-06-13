@@ -7,7 +7,7 @@
  * IDL (src/idl/vsr.json, from @blockworks-foundation/voter-stake-registry-
  * client@0.2.3). See DECISIONS.md D-010.
  */
-import { createHash } from "node:crypto";
+import { createHash } from "./sha256";
 import {
   PublicKey,
   SYSVAR_INSTRUCTIONS_PUBKEY,
