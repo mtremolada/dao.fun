@@ -46,7 +46,21 @@ correctly with no extra config.
 > need a base path: rebuild with `NEXT_PUBLIC_BASE_PATH=/ipfs/<cid>` (or
 > `/<subdir>`). Subdomain gateways and a domain root need it empty.
 
-### Any static host (Vercel / Netlify / Cloudflare Pages / S3 / GitHub Pages)
+### GitHub Pages (live in-browser test — automated)
+
+`.github/workflows/pages.yml` builds the SAME source with
+`NEXT_PUBLIC_BASE_PATH=/<repo>` (so assets/links resolve under the project
+subpath) and deploys to GitHub Pages on every push to the working branch. It
+tries to auto-enable Pages; if your repo/org blocks that, enable it once:
+**Settings → Pages → Source: GitHub Actions**, then re-run the workflow. The
+live URL is `https://<owner>.github.io/<repo>/` (shown in the run summary).
+
+This is independent of the IPFS path above: `deploy.yml` builds with NO
+basePath for subdomain gateways, `pages.yml` builds WITH basePath for the
+subpath host — best of both worlds from one source tree. (Set
+`NEXT_PUBLIC_RPC_URL` etc. as repo **Variables** to configure either build.)
+
+### Any other static host (Vercel / Netlify / Cloudflare Pages / S3)
 
 Serve the `app/out` directory as static files. For a subpath host (e.g.
 GitHub Pages at `/<repo>`), set `NEXT_PUBLIC_BASE_PATH=/<repo>` before
