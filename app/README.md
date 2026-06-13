@@ -47,6 +47,6 @@ pnpm --filter @daofun/app test       # unit (vitest)
 pnpm --filter @daofun/app test:e2e   # Playwright (see e2e/ — write flows need a chain/RPC)
 ```
 
-The keyed `packages/backend` (and `e2e/stub-server.ts`,
-`scripts/serve-frontend-mainnet.ts`) are retained for the read-only demo and
-tests; they are **not** part of the decentralized deployment.
+The keyed `packages/backend` (and `scripts/serve-frontend-mainnet.ts`) are
+retained for the read-only demo and tests; the app has **no** dependency on
+it and it is **not** part of the decentralized deployment.
