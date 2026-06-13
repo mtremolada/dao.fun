@@ -7,7 +7,11 @@ name: Deploy to GitHub Pages
 # the default read endpoint (visitors can still override with ?rpc=).
 on:
   push:
-    branches: [main, master, claude/spec-driven-repo-reset-yqzenh]
+    branches:
+      - main
+      - master
+      - claude/spec-driven-repo-reset-yqzenh
+      - claude/zen-cori-t9td4x
   workflow_dispatch:
 
 permissions:

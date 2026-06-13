@@ -44,9 +44,20 @@ validation, external audit + bounty.
 
 ## Where the build stands
 
-- Branches: MVP work on `claude/spec-driven-repo-reset-yqzenh`;
-  Option A landed on `claude/option-a-exploration-p6iybh` (push ONLY to
-  the session's designated branch; no PRs unless asked).
+- **CONSOLIDATED + LIVE (D-034, 2026-06-13).** The three sibling branches
+  are merged onto `claude/zen-cori-t9td4x` (the current session branch;
+  push ONLY here; no PRs unless asked) and deployed to GitHub Pages at
+  `https://mtremolada.github.io/dao.fun/` (deploy-pages.yml now triggers
+  on this branch too). The static Phantom dapp does the whole loop
+  client-side: launch (Council/Cypherpunk/Sovereign) → verify (in-browser
+  INV-9 recompute + decode + verifyDao) → deposit/vote → permissionless
+  execute → permissionless collect-fees. Reads ride the user's RPC.
+  Guarded code is integrated + real-binary-tested but stays UNSELECTABLE
+  and the gate program is NOT on mainnet (unaudited — GATE 3).
+- Prior branches (now subsumed): MVP static pivot on
+  `claude/spec-driven-repo-reset-yqzenh`; Option A on
+  `claude/option-a-exploration-p6iybh`; decentralized read/verify +
+  audit passes on `claude/audit-execution-oaj5aa`.
 - Suites: 242 unit (sdk 145 / keeper 19 / backend 62 / app 16) + 23
   root integration (real mainnet binaries in bankrun, hermetic — incl.
   stage3-guarded end-to-end + the exclusivity spike) + 12 Playwright

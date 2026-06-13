@@ -946,6 +946,60 @@ ratchet still green on the v2 artifact), packages/sdk/test/gate.test.ts
 clean repo-wide (pre-existing RawMint literal-type errors in action-amm
 fixed per operator instruction "the bar is no errors").
 
+## D-034 — Consolidation onto the live static dapp + GitHub Pages go-live (2026-06-13)
+
+The work scattered across three sibling branches (all off `919c98a`) is
+merged onto the deployed static-dapp lineage and made live, per operator
+instruction ("ship everything we coded incl. the gate, make it live on
+Pages"; "no current DAOs active — just make sure it works"):
+
+- **From `audit-execution-oaj5aa`**: the browser-safe SDK
+  (`sha256.ts` replacing `node:crypto` across artifact-hash /
+  execution-adapter / merkle-distributor / vsr / gate, so the SDK bundles
+  for the static client), `chain-reader.ts` (RpcChainReader — the INV-9
+  recompute from the AUTHORITATIVE on-chain tx count, anomaly detection),
+  `decode.ts` (INV-10 effects decoder, rug-flagging MintTo/SetAuthority/
+  unknown), `verify.ts` (verifyDao buyer-trust primitive), plus
+  `governance-tx.ts` / `launch-plan.ts` / `snapshot.ts` and the audit
+  test suites + AUDIT-FINDINGS.md.
+- **From `option-a-exploration-p6iybh`**: Guarded mode end to end
+  (D-033) — proposal-gate v2, `gate.ts`, the guarded ceremony, prod
+  wiring, and the stage3-guarded suites.
+- **`governance.ts` was hand-synthesized** to carry BOTH lineages: the
+  Token-2022 retargeting (D-013/F-1 — the live app launches Token-2022
+  pump mints) AND the guarded ceremony (gate seat, welded front door,
+  realm authority → gate PDA). Verified on real binaries: gate1-matrix
+  (Token-2022 launches) and stage3-guarded (gate ceremony) BOTH green in
+  the same suite run (17 integration files / 31 tests).
+- **UI re-implemented on the static Phantom shell** (the old
+  server-architecture app files were dropped in the merge): proposal page
+  recomputes the INV-9 hash in-browser ("verified against chain" badge),
+  decodes effects, surfaces anomalies, and cranks permissionless
+  execution; dashboard verifies custody + config (verifyDao) and exposes
+  a permissionless collect-fees button; launch has a realm-squat guard
+  (AUDIT-D) and deep-links to the verify dashboard.
+
+**Deployment**: `claude/zen-cori-t9td4x` added to `deploy-pages.yml`
+triggers so a push publishes the static export to
+`https://mtremolada.github.io/dao.fun/`. Reads ride the user's
+RPC/wallet (public mainnet default + `?rpc=` override) — no server, no
+secret, per operator ("the users have RPCs in wallets when they
+connect").
+
+**SAFETY LINE held (not improvised):** Guarded ships as integrated,
+real-binary-tested CODE, but the custom `proposal-gate` program is NOT
+deployed to mainnet and Guarded stays UNSELECTABLE in the public UI.
+Putting strangers' treasuries through unaudited custom code violates the
+spec's hard rule (no mainnet custom program before GATE 3's external
+audit) and Section 11 (no agent-generated mainnet upgrade key). The
+mainnet gate-program deploy is the operator + audit step; everything that
+rides ONLY audited deployed programs (Council/Cypherpunk/Sovereign
+launch, deposit, vote, execute, collect, verify) is live now.
+
+Green at go-live: sdk 181 + backend 89 + app 23 unit; 17 integration
+files / 31 tests on real binaries; root + app tsc + eslint clean; static
+export builds.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
