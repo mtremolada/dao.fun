@@ -1,26 +1,26 @@
 "use client";
 
 /**
- * Launch form — spec 6.7. Renders validateLaunchForm results live (the
- * same function the server re-validates with) and posts the raw form to
- * the backend; resolved params and errors all come from the shared
- * contract, never from component logic.
+ * Launch form — spec 6.7, client-only. Renders validateLaunchForm results
+ * live (the shared contract that also guards on-chain) and, on submit,
+ * resolves the governance plan in-browser. No server: the resolved plan is
+ * what a wallet-driven launch would enact.
  */
 import { useMemo, useState } from "react";
 import {
   validateLaunchForm,
   type GovernanceMode,
+  type GovernanceParams,
   type LaunchFormInput,
   type MarketCapTier,
 } from "@daofun/sdk/launch-form";
 
 const TIERS: MarketCapTier[] = ["micro", "small", "mid", "large"];
 
-interface LaunchState {
-  launchId: string;
-  status: string;
-  completedSteps: Record<string, string[]>;
-  failedStep?: string;
+interface LaunchPlan {
+  mode: GovernanceMode;
+  tier: MarketCapTier;
+  params: GovernanceParams;
 }
 
 export function LaunchForm({ mode }: { mode: GovernanceMode }) {
@@ -33,9 +33,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [confirmations, setConfirmations] = useState<
     LaunchFormInput["confirmations"]
   >({});
-  const [submitting, setSubmitting] = useState(false);
-  const [serverErrors, setServerErrors] = useState<string[]>([]);
-  const [result, setResult] = useState<LaunchState | null>(null);
+  const [plan, setPlan] = useState<LaunchPlan | null>(null);
 
   const form = useMemo<LaunchFormInput>(() => {
     const overrides: NonNullable<LaunchFormInput["overrides"]> = {};
@@ -71,7 +69,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   ]);
 
   const validated = useMemo(() => validateLaunchForm(form), [form]);
-  const errors = [...validated.errors, ...serverErrors];
+  const errors = validated.errors;
 
   function confirm(key: keyof LaunchFormInput["confirmations"]) {
     return (
@@ -86,33 +84,46 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     );
   }
 
-  async function submit() {
-    setSubmitting(true);
-    setServerErrors([]);
-    try {
-      const res = await fetch("/api/launches", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ launchId: crypto.randomUUID(), form }),
-      });
-      const body = (await res.json()) as LaunchState & { errors?: string[] };
-      if (body.errors) {
-        setServerErrors(body.errors);
-      } else {
-        setResult(body);
-      }
-    } catch (e) {
-      setServerErrors([(e as Error).message]);
-    } finally {
-      setSubmitting(false);
+  function submit() {
+    if (validated.ok && validated.params) {
+      setPlan({ mode, tier, params: validated.params });
     }
   }
 
-  if (result) {
+  if (plan) {
     return (
-      <pre className="result" data-testid="launch-result">
-        {JSON.stringify(result, null, 2)}
-      </pre>
+      <>
+        <p className="muted">
+          Resolved governance plan — this is what a wallet-driven launch
+          enacts on-chain (no server involved).
+        </p>
+        <pre className="result" data-testid="launch-result">
+          {JSON.stringify(
+            {
+              mode: plan.mode,
+              tier: plan.tier,
+              params: {
+                quorumPercent: plan.params.quorumPercent,
+                holdUpSeconds: plan.params.holdUpSeconds,
+                proposalThresholdTokens:
+                  plan.params.proposalThresholdTokens.toString(),
+                lockupSaturationSeconds: plan.params.lockupSaturationSeconds,
+                vetoEnabled: plan.params.vetoEnabled,
+              },
+            },
+            null,
+            2,
+          )}
+        </pre>
+        <button
+          className="button"
+          type="button"
+          data-testid="launch-back"
+          onClick={() => setPlan(null)}
+        >
+          Edit
+        </button>
+      </>
     );
   }
 
@@ -121,7 +132,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
       className="launch"
       onSubmit={(e) => {
         e.preventDefault();
-        void submit();
+        submit();
       }}
     >
       <label htmlFor="tier">Market-cap tier (sets the floors)</label>
@@ -250,9 +261,9 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         className="button"
         type="submit"
         data-testid="launch-submit"
-        disabled={!validated.ok || submitting}
+        disabled={!validated.ok}
       >
-        {submitting ? "Launching..." : "Launch"}
+        Resolve launch plan
       </button>
     </form>
   );

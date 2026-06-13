@@ -30,6 +30,7 @@ import {
 } from "@solana/web3.js";
 import BN from "bn.js";
 import {
+  AccountState,
   NATIVE_MINT,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
@@ -37,6 +38,8 @@ import {
   getAssociatedTokenAddressSync,
   unpackAccount,
   unpackMint,
+  type RawAccount,
+  type RawMint,
 } from "@solana/spl-token";
 import {
   GLOBAL_PDA,
@@ -116,7 +119,7 @@ async function tokenAmount(
 
 // pump-swap-sdk state takes the RAW borsh structs; adapt the decoded
 // spl-token shapes (only supply/decimals/amount are read by the math).
-function toRawMint(m: ReturnType<typeof unpackMint>) {
+function toRawMint(m: ReturnType<typeof unpackMint>): RawMint {
   return {
     mintAuthorityOption: m.mintAuthority ? 1 : 0,
     mintAuthority: m.mintAuthority ?? PublicKey.default,
@@ -128,14 +131,14 @@ function toRawMint(m: ReturnType<typeof unpackMint>) {
   };
 }
 
-function toRawAccount(a: ReturnType<typeof unpackAccount>) {
+function toRawAccount(a: ReturnType<typeof unpackAccount>): RawAccount {
   return {
     mint: a.mint,
     owner: a.owner,
     amount: a.amount,
     delegateOption: a.delegate ? 1 : 0,
     delegate: a.delegate ?? PublicKey.default,
-    state: 1,
+    state: AccountState.Initialized,
     isNativeOption: a.isNative ? 1 : 0,
     isNative: a.rentExemptReserve ?? 0n,
     delegatedAmount: a.delegatedAmount,

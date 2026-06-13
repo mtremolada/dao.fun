@@ -30,6 +30,13 @@ export interface ApiDeps {
   txs?: GovernanceTxSource;
 }
 
+/**
+ * Cap request bodies so a hostile/buggy client cannot make the API buffer
+ * unbounded memory. Every legitimate payload here (launch forms, signed
+ * txs, pubkey lists) is a few KB at most; 256 KiB is generous headroom.
+ */
+const MAX_REQUEST_BODY_BYTES = 256 * 1024;
+
 function json(res: ServerResponse, status: number, body: unknown) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -41,7 +48,16 @@ function json(res: ServerResponse, status: number, body: unknown) {
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let total = 0;
+  for await (const chunk of req) {
+    total += (chunk as Buffer).length;
+    // Backstop for chunked encodings that omit content-length: stop reading
+    // the moment the cap is crossed instead of buffering the whole stream.
+    if (total > MAX_REQUEST_BODY_BYTES) {
+      throw new Error("request body too large");
+    }
+    chunks.push(chunk as Buffer);
+  }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
@@ -60,6 +76,13 @@ async function handle(
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const segments = url.pathname.split("/").filter(Boolean);
+
+  // Reject oversized payloads up front (the common, content-length-bearing
+  // case) before any body is read; readBody enforces the same cap for
+  // chunked requests that omit the header.
+  if (Number(req.headers["content-length"] ?? 0) > MAX_REQUEST_BODY_BYTES) {
+    return json(res, 413, { error: "request body too large" });
+  }
 
   if (req.method === "GET" && url.pathname === "/health") {
     return json(res, 200, { ok: true });

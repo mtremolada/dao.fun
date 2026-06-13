@@ -1,0 +1,69 @@
+name: Deploy to GitHub Pages
+
+# Builds the static export of the Next.js app (app/out) and publishes it to
+# GitHub Pages. The site is fully client-side — it reads chain state over the
+# visitor's RPC and sends transactions through their connected wallet, so no
+# server or secret is needed. Set repo variable NEXT_PUBLIC_RPC_URL to change
+# the default read endpoint (visitors can still override with ?rpc=).
+on:
+  push:
+    branches: [main, master, claude/spec-driven-repo-reset-yqzenh]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deploy at a time; let a new push supersede an old run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - run: pnpm install --frozen-lockfile
+
+      # The app consumes @daofun/sdk; build it so type/dist resolution is ready.
+      - run: pnpm --filter @daofun/sdk build
+
+      - name: Build static site
+        working-directory: app
+        env:
+          STATIC_EXPORT: "1"
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          NEXT_PUBLIC_RPC_URL: ${{ vars.NEXT_PUBLIC_RPC_URL }}
+        run: pnpm exec next build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

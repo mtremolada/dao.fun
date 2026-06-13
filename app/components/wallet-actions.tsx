@@ -1,86 +1,56 @@
 "use client";
 
 /**
- * Wallet voting actions (D-028): connect a wallet-standard wallet, then
- * vote on the proposal through the browser-signing seam — the backend
- * builds the unsigned tx, the wallet signs raw bytes, the backend
- * submits. No chain deps in the bundle.
+ * Proposal voting — fully client-side. Uses the app-wide connected wallet
+ * (top-right connect step): the vote tx is built in the browser over the
+ * user's RPC and the wallet signs + broadcasts it through its own RPC. No
+ * server. When no wallet is connected, the panel opens the connect modal.
  */
 import { useState } from "react";
-import {
-  castVoteFlow,
-  type FlowState,
-  type SignerLike,
-} from "../lib/governance-actions";
-import {
-  connectWallet,
-  discoverWallets,
-  makeSigner,
-} from "../lib/wallet-standard";
+import { castVoteFlow, type FlowState } from "../lib/governance-actions";
+import { getConnection } from "../lib/solana";
+import { useWallet } from "./wallet-provider";
 
 const PHASE_COPY: Record<FlowState["phase"], string> = {
   building: "Building transaction…",
-  signing: "Waiting for the wallet signature…",
-  submitting: "Submitting…",
+  sending: "Confirm in your wallet…",
   done: "Vote submitted",
   error: "Vote failed",
 };
 
 export function WalletActions(props: { proposal: string }) {
-  const [signer, setSigner] = useState<SignerLike | null>(null);
+  const { sender, account, openModal } = useWallet();
   const [flow, setFlow] = useState<FlowState | null>(null);
-  const [connectError, setConnectError] = useState<string | null>(null);
-
-  async function connect() {
-    try {
-      const wallets = discoverWallets();
-      if (wallets.length === 0) {
-        setConnectError("No wallet found — install a Solana wallet extension.");
-        return;
-      }
-      const wallet = wallets[0]!;
-      const account = await connectWallet(wallet);
-      setSigner(makeSigner(wallet, account));
-      setConnectError(null);
-    } catch (e) {
-      setConnectError((e as Error).message);
-    }
-  }
 
   async function vote(approve: boolean) {
-    if (!signer) return;
+    if (!sender) return;
     await castVoteFlow(
       { proposal: props.proposal, approve },
-      { signer, onState: setFlow },
+      { connection: getConnection(), sender, onState: setFlow },
     );
   }
 
-  const busy =
-    flow !== null && flow.phase !== "done" && flow.phase !== "error";
+  const busy = flow !== null && flow.phase !== "done" && flow.phase !== "error";
 
   return (
     <>
       <h2>Vote</h2>
-      {!signer ? (
+      {!sender ? (
         <>
+          <p className="muted">Connect a wallet to vote on this proposal.</p>
           <button
             className="button"
             type="button"
-            data-testid="connect-wallet"
-            onClick={() => void connect()}
+            data-testid="connect-wallet-vote"
+            onClick={openModal}
           >
             Connect wallet
           </button>
-          {connectError && (
-            <p className="errors" data-testid="connect-error">
-              {connectError}
-            </p>
-          )}
         </>
       ) : (
         <>
           <p className="muted" data-testid="wallet-address">
-            Connected: {signer.address}
+            Connected: {account?.address}
           </p>
           <button
             className="button"
