@@ -11,17 +11,33 @@ import { Connection } from "@solana/web3.js";
 import { RpcChainReader } from "@daofun/sdk/chain-reader";
 import { RpcGovernanceTxSource } from "@daofun/sdk/tx-builder";
 
+// NEXT_PUBLIC_RPC_URL may be a single endpoint or a comma-separated list
+// (resilience: operators can ship fallbacks; the first is the default).
+const DEFAULT_RPC_URLS = (
+  process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.mainnet-beta.solana.com"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 export const DEFAULT_RPC_URL =
-  process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+  DEFAULT_RPC_URLS[0] ?? "https://api.mainnet-beta.solana.com";
 
 const LS_KEY = "daofun.rpcUrl";
 
-export function getRpcUrl(): string {
+/** Endpoints to use, the user's saved override first. */
+export function getRpcUrls(): string[] {
   if (typeof window !== "undefined") {
     const stored = window.localStorage.getItem(LS_KEY);
-    if (stored && stored.length > 0) return stored;
+    if (stored && stored.length > 0) {
+      return [stored, ...DEFAULT_RPC_URLS.filter((u) => u !== stored)];
+    }
   }
-  return DEFAULT_RPC_URL;
+  return DEFAULT_RPC_URLS.length > 0 ? DEFAULT_RPC_URLS : [DEFAULT_RPC_URL];
+}
+
+export function getRpcUrl(): string {
+  return getRpcUrls()[0] ?? DEFAULT_RPC_URL;
 }
 
 export function setRpcUrl(url: string): void {

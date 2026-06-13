@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { DaoNavigator } from "../components/dao-navigator";
 
 /**
  * Mode selection — spec 6.7: side-by-side comparison; copy per spec 12.2.
@@ -71,7 +72,7 @@ export default function ModeSelectionPage() {
                 ))}
               </ul>
               {selectable ? (
-                <Link className="button" href={`/launch?mode=${mode.id}`}>
+                <Link className="button" href={`/launch/?mode=${mode.id}`}>
                   Launch {mode.name}
                 </Link>
               ) : (
@@ -81,6 +82,7 @@ export default function ModeSelectionPage() {
           );
         })}
       </div>
+      <DaoNavigator />
     </>
   );
 }
