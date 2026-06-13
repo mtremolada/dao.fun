@@ -8,6 +8,7 @@
  * the user's RPC. No server, no platform key.
  */
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import {
   validateLaunchForm,
   type GovernanceMode,
@@ -162,9 +163,9 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           vault {vault}
         </p>
         <p>
-          <a className="button" href={`/dao/?realm=${realm}&vault=${vault}&mint=${mint}`}>
+          <Link className="button" href={`/dao/?realm=${realm}&vault=${vault}&mint=${mint}`}>
             Open the DAO dashboard
-          </a>
+          </Link>
         </p>
         <p className="muted">
           mint authority null: {String(result.mintAuthorityNull)} · predicted
