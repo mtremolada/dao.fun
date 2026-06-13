@@ -55,13 +55,10 @@ test("sub-floor override rejected with the floor error; stricter accepted; plan 
   );
   await expect(submit).toBeDisabled();
 
-  // stricter than the floor is allowed
+  // stricter than the floor is allowed, and the resolved plan reflects it
   await page.getByTestId("override-holdup").fill(String(100 * 3600));
   await expect(submit).toBeEnabled();
-
-  await submit.click();
-  const result = page.getByTestId("launch-result");
-  await expect(result).toContainText(/cypherpunk/i);
-  await expect(result).toContainText("holdUpSeconds");
-  await expect(result).toContainText(String(100 * 3600));
+  await expect(page.getByTestId("resolved-params")).toContainText(
+    String(100 * 3600),
+  );
 });

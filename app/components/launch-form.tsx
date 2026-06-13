@@ -1,29 +1,30 @@
 "use client";
 
 /**
- * Launch form — spec 6.7, client-only. Renders validateLaunchForm results
- * live (the shared contract that also guards on-chain) and, on submit,
- * resolves the governance plan in-browser. No server: the resolved plan is
- * what a wallet-driven launch would enact.
+ * Launch form — spec 6.7, client-only. The governance settings render live
+ * from the shared contract (validateLaunchForm); when valid and a wallet is
+ * connected, "Launch" runs the on-chain ceremony in the browser via the
+ * connected wallet (no server). Real SOL is spent on Solana mainnet.
  */
 import { useMemo, useState } from "react";
 import {
   validateLaunchForm,
   type GovernanceMode,
-  type GovernanceParams,
   type LaunchFormInput,
   type MarketCapTier,
 } from "@daofun/sdk/launch-form";
+import { getConnection } from "../lib/solana";
+import { runLaunch, type LaunchResult, type LaunchStepState } from "../lib/launch";
+import { useWallet } from "./wallet-provider";
 
 const TIERS: MarketCapTier[] = ["micro", "small", "mid", "large"];
 
-interface LaunchPlan {
-  mode: GovernanceMode;
-  tier: MarketCapTier;
-  params: GovernanceParams;
-}
+const FEE_TREASURY = process.env.NEXT_PUBLIC_PROTOCOL_TREASURY || "";
+const FEE_LAMPORTS = BigInt(process.env.NEXT_PUBLIC_LAUNCH_FEE_LAMPORTS || "0");
 
 export function LaunchForm({ mode }: { mode: GovernanceMode }) {
+  const { sender, openModal } = useWallet();
+
   const [tier, setTier] = useState<MarketCapTier>("micro");
   const [councilMembers, setCouncilMembers] = useState("");
   const [vetoPercent, setVetoPercent] = useState("60");
@@ -33,7 +34,17 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [confirmations, setConfirmations] = useState<
     LaunchFormInput["confirmations"]
   >({});
-  const [plan, setPlan] = useState<LaunchPlan | null>(null);
+
+  // token metadata
+  const [name, setName] = useState("");
+  const [symbol, setSymbol] = useState("");
+  const [uri, setUri] = useState("");
+  const [devBuy, setDevBuy] = useState("");
+
+  const [steps, setSteps] = useState<LaunchStepState[]>([]);
+  const [launching, setLaunching] = useState(false);
+  const [result, setResult] = useState<LaunchResult | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
 
   const form = useMemo<LaunchFormInput>(() => {
     const overrides: NonNullable<LaunchFormInput["overrides"]> = {};
@@ -69,7 +80,8 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   ]);
 
   const validated = useMemo(() => validateLaunchForm(form), [form]);
-  const errors = validated.errors;
+  const metadataReady =
+    name.trim() !== "" && symbol.trim() !== "" && uri.trim() !== "";
 
   function confirm(key: keyof LaunchFormInput["confirmations"]) {
     return (
@@ -84,46 +96,76 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     );
   }
 
-  function submit() {
-    if (validated.ok && validated.params) {
-      setPlan({ mode, tier, params: validated.params });
+  async function launch() {
+    setLaunchError(null);
+    if (!validated.ok || !validated.params) return;
+    if (!metadataReady) {
+      setLaunchError("Enter the coin name, symbol, and metadata URI.");
+      return;
+    }
+    if (!sender) {
+      openModal();
+      return;
+    }
+    setLaunching(true);
+    setSteps([]);
+    try {
+      const res = await runLaunch(
+        getConnection(),
+        sender,
+        {
+          mode,
+          tier,
+          params: validated.params,
+          metadata: { name: name.trim(), symbol: symbol.trim(), uri: uri.trim() },
+          ...(devBuy !== "" && Number(devBuy) > 0
+            ? { devBuyLamports: BigInt(Math.floor(Number(devBuy) * 1e9)) }
+            : {}),
+          ...(mode === "council"
+            ? {
+                council: {
+                  members: councilMembers
+                    .split("\n")
+                    .map((m) => m.trim())
+                    .filter(Boolean),
+                  vetoThresholdPercent: Number(vetoPercent),
+                },
+              }
+            : {}),
+          ...(FEE_TREASURY && FEE_LAMPORTS > 0n
+            ? { launchFee: { treasury: FEE_TREASURY, lamports: FEE_LAMPORTS } }
+            : {}),
+        },
+        (s) => setSteps((prev) => [...prev.filter((p) => p.step !== s.step), s]),
+      );
+      setResult(res);
+    } catch (e) {
+      setLaunchError((e as Error).message);
+    } finally {
+      setLaunching(false);
     }
   }
 
-  if (plan) {
+  if (result) {
     return (
-      <>
-        <p className="muted">
-          Resolved governance plan — this is what a wallet-driven launch
-          enacts on-chain (no server involved).
+      <div data-testid="launch-result">
+        <p className="badge" data-state="verified">
+          DAO launched 🎉
         </p>
-        <pre className="result" data-testid="launch-result">
-          {JSON.stringify(
-            {
-              mode: plan.mode,
-              tier: plan.tier,
-              params: {
-                quorumPercent: plan.params.quorumPercent,
-                holdUpSeconds: plan.params.holdUpSeconds,
-                proposalThresholdTokens:
-                  plan.params.proposalThresholdTokens.toString(),
-                lockupSaturationSeconds: plan.params.lockupSaturationSeconds,
-                vetoEnabled: plan.params.vetoEnabled,
-              },
-            },
-            null,
-            2,
-          )}
+        <pre className="result">
+          {JSON.stringify(result, null, 2)}
         </pre>
-        <button
-          className="button"
-          type="button"
-          data-testid="launch-back"
-          onClick={() => setPlan(null)}
-        >
-          Edit
-        </button>
-      </>
+        <p>
+          <a
+            className="button"
+            href={`https://pump.fun/coin/${result.mint}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View coin on pump.fun
+          </a>
+        </p>
+      </div>
     );
   }
 
@@ -132,10 +174,52 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
       className="launch"
       onSubmit={(e) => {
         e.preventDefault();
-        submit();
+        void launch();
       }}
     >
-      <label htmlFor="tier">Market-cap tier (sets the floors)</label>
+      <p className="errors" style={{ paddingLeft: 0 }}>
+        ⚠ Real launch — this spends SOL on Solana mainnet and creates on-chain
+        accounts. Beta: try a small amount first.
+      </p>
+
+      <label htmlFor="coin-name">Coin name</label>
+      <input
+        id="coin-name"
+        data-testid="coin-name"
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <label htmlFor="coin-symbol">Symbol (ticker)</label>
+      <input
+        id="coin-symbol"
+        data-testid="coin-symbol"
+        type="text"
+        value={symbol}
+        onChange={(e) => setSymbol(e.target.value)}
+      />
+      <label htmlFor="coin-uri">
+        Metadata URI (JSON with name/symbol/image — e.g. from pump.fun or your
+        own host)
+      </label>
+      <input
+        id="coin-uri"
+        data-testid="coin-uri"
+        type="text"
+        value={uri}
+        onChange={(e) => setUri(e.target.value)}
+      />
+      <label htmlFor="dev-buy">Optional dev-buy at launch (SOL)</label>
+      <input
+        id="dev-buy"
+        data-testid="dev-buy"
+        type="number"
+        min={0}
+        value={devBuy}
+        onChange={(e) => setDevBuy(e.target.value)}
+      />
+
+      <label htmlFor="tier">Market-cap tier (sets the governance floors)</label>
       <select
         id="tier"
         data-testid="tier-select"
@@ -241,9 +325,9 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         </>
       )}
 
-      {errors.length > 0 && (
+      {validated.errors.length > 0 && (
         <ul className="errors" data-testid="form-errors">
-          {errors.map((err) => (
+          {validated.errors.map((err) => (
             <li key={err}>{err}</li>
           ))}
         </ul>
@@ -257,13 +341,35 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         </p>
       )}
 
+      {steps.length > 0 && (
+        <ul className="result" data-testid="launch-progress">
+          {steps.map((s) => (
+            <li key={s.step}>
+              {s.status === "done" ? "✅" : s.status === "error" ? "❌" : "⏳"}{" "}
+              {s.step}
+              {s.error ? ` — ${s.error}` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {launchError && (
+        <p className="errors" data-testid="launch-error">
+          {launchError}
+        </p>
+      )}
+
       <button
         className="button"
         type="submit"
         data-testid="launch-submit"
-        disabled={!validated.ok}
+        disabled={!validated.ok || launching}
       >
-        Resolve launch plan
+        {launching
+          ? "Launching…"
+          : sender
+            ? "Launch on mainnet"
+            : "Connect wallet to launch"}
       </button>
     </form>
   );
