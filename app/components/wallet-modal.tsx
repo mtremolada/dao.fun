@@ -33,7 +33,7 @@ function WalletIcon({
 }
 
 export function WalletModal() {
-  const { modalOpen, closeModal, wallets, connect, connectLedger, connecting, error } =
+  const { modalOpen, closeModal, wallets, connect, connecting, error } =
     useWallet();
 
   useEffect(() => {
@@ -94,33 +94,11 @@ export function WalletModal() {
           </ul>
         )}
 
-        {/* Ledger is hardware (not a browser-injected wallet) — always offered. */}
-        <p className="wallet-more muted">Hardware</p>
-        <ul className="wallet-list">
-          <li>
-            <button
-              type="button"
-              className="wallet-option"
-              data-testid="wallet-option-ledger"
-              disabled={connecting}
-              onClick={() => void connectLedger()}
-            >
-              <WalletIcon name="Ledger" />
-              <span className="wallet-option-name">Ledger</span>
-              <span className="wallet-tag muted">Connect</span>
-            </button>
-          </li>
-        </ul>
-
         {installs.length > 0 && (
           <>
-            <p className="wallet-more muted">
-              {wallets.length > 0 ? "More wallets" : "Install a wallet"}
-            </p>
             {wallets.length === 0 && (
               <p className="muted" data-testid="no-wallets">
-                No browser wallet detected — install one below or connect a
-                Ledger.
+                No Phantom wallet detected — install it to continue:
               </p>
             )}
             <ul className="wallet-list">

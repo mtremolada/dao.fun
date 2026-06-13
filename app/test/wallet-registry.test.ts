@@ -36,25 +36,22 @@ describe("display + slug helpers", () => {
   });
 });
 
-describe("supported-wallet allowlist", () => {
-  it("keeps only Phantom and Solflare among detected wallets", () => {
+describe("supported-wallet allowlist (Phantom only)", () => {
+  it("keeps only Phantom among detected wallets", () => {
     const names = allowedDetected([
       wallet("Phantom"),
       wallet("Backpack"),
       wallet("Solflare"),
       wallet("Glow"),
     ]).map((w) => w.name);
-    expect(names).toEqual(["Phantom", "Solflare"]);
+    expect(names).toEqual(["Phantom"]);
   });
 
-  it("offers install links only for the supported wallets not yet detected", () => {
-    const opts = installOptions([wallet("phantom")]);
-    expect(opts.map((o) => o.name)).toEqual(["Solflare"]);
-    expect(installOptions([]).map((o) => o.name)).toEqual([
-      "Phantom",
-      "Solflare",
-    ]);
-    expect(opts.every((o) => o.url.startsWith("https://"))).toBe(true);
+  it("offers a Phantom install link only when it is not detected", () => {
+    expect(installOptions([wallet("phantom")])).toEqual([]);
+    const opts = installOptions([]);
+    expect(opts.map((o) => o.name)).toEqual(["Phantom"]);
+    expect(opts[0]!.url.startsWith("https://")).toBe(true);
   });
 });
 

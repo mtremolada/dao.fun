@@ -55,6 +55,17 @@ test.beforeEach(async ({ page }) => {
       ) => {
         event.detail.register(wallet);
       }) as EventListener);
+
+      // Real Phantom ALSO exposes an injected provider; the app prefers it.
+      (window as unknown as { phantom: unknown }).phantom = {
+        solana: {
+          isPhantom: true,
+          publicKey: { toString: () => address },
+          connect: async () => ({ publicKey: { toString: () => address } }),
+          disconnect: async () => {},
+          signAndSendTransaction: async () => ({ signature: "FAKE_SIG" }),
+        },
+      };
     },
     { address: WALLET_ADDRESS },
   );
