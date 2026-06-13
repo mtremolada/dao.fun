@@ -341,3 +341,76 @@ pre.result {
 .muted {
   color: var(--muted);
 }
+
+/* ---- governance setting sliders ---- */
+.field {
+  margin: 1.15rem 0;
+  max-width: 32rem;
+}
+
+.field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.field-head label {
+  margin: 0;
+  font-weight: 600;
+}
+
+.slider-val {
+  font-variant-numeric: tabular-nums;
+  color: var(--green);
+  font-weight: 700;
+}
+
+input[type="range"].slider {
+  width: 100%;
+  max-width: 32rem;
+  accent-color: var(--green);
+  height: 1.6rem;
+  margin: 0.2rem 0 0;
+  cursor: pointer;
+}
+
+.slider-hint {
+  margin: 0.15rem 0 0;
+  font-size: 0.8rem;
+}
+
+.tier-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 0.1rem;
+}
+
+.tier-ticks .on {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.summary-card {
+  margin: 1.1rem 0;
+  max-width: 32rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+}
+
+.summary-card .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.18rem 0;
+  font-size: 0.92rem;
+}
+
+.summary-card .row span:last-child {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}

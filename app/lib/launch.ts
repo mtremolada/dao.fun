@@ -21,7 +21,7 @@ import {
   Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
-import { MINT_SIZE } from "@solana/spl-token";
+import { MINT_SIZE, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { deriveGovernanceChainFromMint } from "@daofun/sdk/pda";
 import {
   buildCreateTreasuryIx,
@@ -88,8 +88,11 @@ export async function runLaunch(
   const wallet = new PublicKey(sender.address);
   const mint = Keypair.generate();
   const createKey = Keypair.generate();
+  // council + guarded both seat a council mint (guarded adds the gate's H+1 seat).
   const councilMint =
-    input.mode === "council" ? Keypair.generate() : undefined;
+    input.mode === "council" || input.mode === "guarded"
+      ? Keypair.generate()
+      : undefined;
 
   const predicted = deriveGovernanceChainFromMint(mint.publicKey);
   const { multisigPda, vaultPda } = deriveTreasuryPdas(createKey.publicKey);
@@ -178,6 +181,10 @@ export async function runLaunch(
     payer: wallet,
     mode: input.mode,
     params,
+    // pump create_v2 mints are Token-2022 (D-004): tell the builder so the
+    // realm/governance holding accounts target Token-2022 (D-013/F-1) — without
+    // this the realm-create tx fails on-chain for every pump mint.
+    communityTokenProgram: TOKEN_2022_PROGRAM_ID,
     communityVoterWeightAddin: null,
     ...(councilSetup ? { council: councilSetup } : {}),
   });
@@ -201,6 +208,13 @@ export async function runLaunch(
   }
   await send("Create realm", dao.groups.realmSetup, []);
   await send("Create governance", dao.groups.governanceSetup, []);
+
+  // Guarded only: initialize the gate (it now holds realm authority) and seat
+  // its council tokens. Requires the proposal-gate program to be live on the
+  // cluster — guarded launches stay flag-gated until it is (D-034).
+  if (dao.groups.gateSetup.length > 0) {
+    await send("Initialize gate", dao.groups.gateSetup, []);
+  }
 
   // 5. Prefund the native treasury for its first execution's rent (D-016).
   await send(

@@ -1,12 +1,13 @@
 "use client";
 
 /**
- * Launch form — spec 6.7, client-only. The governance settings render live
- * from the shared contract (validateLaunchForm); when valid and a wallet is
- * connected, "Launch" runs the on-chain ceremony in the browser via the
- * connected wallet (no server). Real SOL is spent on Solana mainnet.
+ * Launch form — spec 6.7, client-only. Governance settings are SLIDERS bounded
+ * to only the valid range (the mode×tier matrix floors), so a sub-floor value
+ * is structurally unreachable — validateLaunchForm never has to reject one.
+ * When valid and a wallet is connected, "Launch" runs the on-chain ceremony in
+ * the browser via the connected wallet (no server). Real SOL on mainnet.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   validateLaunchForm,
@@ -14,25 +15,95 @@ import {
   type LaunchFormInput,
   type MarketCapTier,
 } from "@daofun/sdk/launch-form";
+import { TIER_FLOORS, holdUpFloorSeconds } from "@daofun/sdk/matrix";
 import { getConnection } from "../lib/solana";
 import { runLaunch, type LaunchResult, type LaunchStepState } from "../lib/launch";
 import { prepareImage, uploadPumpMetadata } from "../lib/pump-metadata";
 import { useWallet } from "./wallet-provider";
 
 const TIERS: MarketCapTier[] = ["micro", "small", "mid", "large"];
+const TIER_LABELS: Record<MarketCapTier, string> = {
+  micro: "Micro (<$50k)",
+  small: "Small ($50k–300k)",
+  mid: "Mid ($300k–5M)",
+  large: "Large (>$5M)",
+};
+
+const HOUR = 3600;
+const DAY = 86400;
+const MAX_HOLDUP = 30 * DAY; // generous cap; floor is the meaningful bound
 
 const FEE_TREASURY = process.env.NEXT_PUBLIC_PROTOCOL_TREASURY || "";
 const FEE_LAMPORTS = BigInt(process.env.NEXT_PUBLIC_LAUNCH_FEE_LAMPORTS || "0");
+// Guarded unlock (D-034): the gate ceremony + SDK are complete, but Guarded
+// only WORKS once the proposal-gate program is live on this cluster. Set this
+// ONLY after the program is deployed — otherwise a guarded launch bricks the
+// DAO at the gate-init step.
+const GUARDED_ENABLED = process.env.NEXT_PUBLIC_GUARDED_ENABLED === "1";
+
+function fmtDuration(s: number): string {
+  if (s <= 0) return "0 — instant";
+  const d = Math.floor(s / DAY);
+  const h = Math.round((s % DAY) / HOUR);
+  if (d && h) return `${d}d ${h}h`;
+  if (d) return `${d} day${d > 1 ? "s" : ""}`;
+  return `${h}h`;
+}
+
+function parseMembers(raw: string): string[] {
+  return raw
+    .split("\n")
+    .map((m) => m.trim())
+    .filter(Boolean);
+}
+
+/** A labelled range input with a live value readout. */
+function RangeField(props: {
+  testid: string;
+  label: string;
+  hint?: ReactNode;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  display: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="field">
+      <div className="field-head">
+        <label htmlFor={props.testid}>{props.label}</label>
+        <span className="slider-val" data-testid={`${props.testid}-val`}>
+          {props.display}
+        </span>
+      </div>
+      <input
+        id={props.testid}
+        data-testid={props.testid}
+        className="slider"
+        type="range"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        value={props.value}
+        onChange={(e) => props.onChange(Number(e.target.value))}
+      />
+      {props.hint && <p className="muted slider-hint">{props.hint}</p>}
+    </div>
+  );
+}
 
 export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const { sender, openModal } = useWallet();
 
   const [tier, setTier] = useState<MarketCapTier>("micro");
   const [councilMembers, setCouncilMembers] = useState("");
-  const [vetoPercent, setVetoPercent] = useState("60");
-  const [sovereignHoldUp, setSovereignHoldUp] = useState("");
-  const [overrideHoldUp, setOverrideHoldUp] = useState("");
-  const [overrideQuorum, setOverrideQuorum] = useState("");
+  const [veto, setVeto] = useState(60);
+  // hold-up / quorum sliders hold a raw value; the effective value is always
+  // clamped UP to the current mode×tier floor, so sub-floor is unreachable.
+  const [holdUp, setHoldUp] = useState(0);
+  const [quorum, setQuorum] = useState(0);
+  const [sovereignHoldUp, setSovereignHoldUp] = useState(0);
   const [confirmations, setConfirmations] = useState<
     LaunchFormInput["confirmations"]
   >({});
@@ -51,40 +122,49 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [result, setResult] = useState<LaunchResult | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
 
+  // ---- valid-only bounds, derived from the mode×tier matrix ----
+  const floors = TIER_FLOORS[tier];
+  const holdUpFloor = mode === "sovereign" ? 0 : holdUpFloorSeconds(mode, tier);
+  const quorumFloor = floors.quorumPercent;
+  const effHoldUp = Math.max(holdUp, holdUpFloor); // council/cypherpunk
+  const effQuorum = Math.max(quorum, quorumFloor);
+  const effSovereign = Math.min(Math.max(sovereignHoldUp, 0), MAX_HOLDUP);
+
   const form = useMemo<LaunchFormInput>(() => {
-    const overrides: NonNullable<LaunchFormInput["overrides"]> = {};
-    if (overrideHoldUp !== "") overrides.holdUpSeconds = Number(overrideHoldUp);
-    if (overrideQuorum !== "") overrides.quorumPercent = Number(overrideQuorum);
     return {
       mode,
       tier,
       ...(mode === "council"
         ? {
-            councilMembers: councilMembers
-              .split("\n")
-              .map((m) => m.trim())
-              .filter(Boolean),
-            councilVetoThresholdPercent: Number(vetoPercent),
+            councilMembers: parseMembers(councilMembers),
+            councilVetoThresholdPercent: veto,
           }
         : {}),
-      ...(mode === "sovereign" && sovereignHoldUp !== ""
-        ? { sovereignHoldUpSeconds: Number(sovereignHoldUp) }
+      ...(mode === "sovereign"
+        ? { sovereignHoldUpSeconds: effSovereign }
         : {}),
-      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+      // Overrides only ever tighten; the slider min IS the floor, so these
+      // are always valid (sovereign is exempt — no overrides).
+      ...(mode !== "sovereign"
+        ? { overrides: { holdUpSeconds: effHoldUp, quorumPercent: effQuorum } }
+        : {}),
       confirmations,
     };
   }, [
     mode,
     tier,
     councilMembers,
-    vetoPercent,
-    sovereignHoldUp,
-    overrideHoldUp,
-    overrideQuorum,
+    veto,
+    effHoldUp,
+    effQuorum,
+    effSovereign,
     confirmations,
   ]);
 
-  const validated = useMemo(() => validateLaunchForm(form), [form]);
+  const validated = useMemo(
+    () => validateLaunchForm(form, { guardedEnabled: GUARDED_ENABLED }),
+    [form],
+  );
   const metadataReady =
     name.trim() !== "" &&
     symbol.trim() !== "" &&
@@ -151,14 +231,11 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           ...(devBuy !== "" && Number(devBuy) > 0
             ? { devBuyLamports: BigInt(Math.floor(Number(devBuy) * 1e9)) }
             : {}),
-          ...(mode === "council"
+          ...(mode === "council" || mode === "guarded"
             ? {
                 council: {
-                  members: councilMembers
-                    .split("\n")
-                    .map((m) => m.trim())
-                    .filter(Boolean),
-                  vetoThresholdPercent: Number(vetoPercent),
+                  members: parseMembers(councilMembers),
+                  vetoThresholdPercent: veto,
                 },
               }
             : {}),
@@ -182,9 +259,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         <p className="badge" data-state="verified">
           DAO launched 🎉
         </p>
-        <pre className="result">
-          {JSON.stringify(result, null, 2)}
-        </pre>
+        <pre className="result">{JSON.stringify(result, null, 2)}</pre>
         <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           <Link
             className="button"
@@ -218,6 +293,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         accounts. Beta: try a small amount first.
       </p>
 
+      <h2>Token</h2>
       <label htmlFor="coin-name">Coin name</label>
       <input
         id="coin-name"
@@ -275,28 +351,38 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         data-testid="dev-buy"
         type="number"
         min={0}
+        step="0.01"
         value={devBuy}
         onChange={(e) => setDevBuy(e.target.value)}
       />
 
-      <label htmlFor="tier">Market-cap tier (sets the governance floors)</label>
-      <select
-        id="tier"
-        data-testid="tier-select"
-        value={tier}
-        onChange={(e) => setTier(e.target.value as MarketCapTier)}
-      >
-        {TIERS.map((t) => (
-          <option key={t} value={t}>
-            {t}
-          </option>
-        ))}
-      </select>
+      <h2>Governance</h2>
 
-      {mode === "council" && (
+      {/* Tier slider — sets the matrix floors. */}
+      <RangeField
+        testid="tier-slider"
+        label="Market-cap tier"
+        min={0}
+        max={TIERS.length - 1}
+        step={1}
+        value={TIERS.indexOf(tier)}
+        display={TIER_LABELS[tier]}
+        onChange={(v) => setTier(TIERS[v] ?? "micro")}
+        hint="Higher tiers ease the floors (a bigger, more liquid market needs less friction). You can only set values stricter than the floor."
+      />
+      <div className="tier-ticks" aria-hidden>
+        {TIERS.map((t) => (
+          <span key={t} className={t === tier ? "on" : undefined}>
+            {t}
+          </span>
+        ))}
+      </div>
+
+      {(mode === "council" || mode === "guarded") && (
         <>
           <label htmlFor="council-members">
-            Council members (one pubkey per line, fixed at launch)
+            Council members (one pubkey per line, fixed at launch — they can
+            only veto)
           </label>
           <textarea
             id="council-members"
@@ -305,54 +391,59 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
             value={councilMembers}
             onChange={(e) => setCouncilMembers(e.target.value)}
           />
-          <label htmlFor="veto-percent">Council veto threshold (%)</label>
-          <input
-            id="veto-percent"
-            data-testid="veto-percent"
-            type="number"
-            value={vetoPercent}
-            onChange={(e) => setVetoPercent(e.target.value)}
+          <RangeField
+            testid="veto-percent"
+            label="Council veto threshold"
+            min={1}
+            max={100}
+            step={1}
+            value={veto}
+            display={`${veto}%`}
+            onChange={setVeto}
+            hint="Share of the council that must vote to veto a passing proposal during the hold-up."
           />
         </>
       )}
 
+      {/* Sovereign: hold-up can be ZERO (that is the point). */}
       {mode === "sovereign" && (
-        <>
-          <label htmlFor="sovereign-holdup">
-            Hold-up in seconds (0 is allowed — that is the point)
-          </label>
-          <input
-            id="sovereign-holdup"
-            data-testid="sovereign-holdup"
-            type="number"
-            min={0}
-            value={sovereignHoldUp}
-            onChange={(e) => setSovereignHoldUp(e.target.value)}
-          />
-        </>
+        <RangeField
+          testid="sovereign-holdup"
+          label="Hold-up (delay before a passed vote can execute)"
+          min={0}
+          max={MAX_HOLDUP}
+          step={HOUR}
+          value={effSovereign}
+          display={fmtDuration(effSovereign)}
+          onChange={setSovereignHoldUp}
+          hint="0 is allowed in Sovereign — funds can move the moment a vote passes."
+        />
       )}
 
+      {/* Council / Cypherpunk: hold-up + quorum, floored by the matrix. */}
       {mode !== "sovereign" && (
         <>
-          <label htmlFor="override-holdup">
-            Hold-up override in seconds (stricter than the tier floor only)
-          </label>
-          <input
-            id="override-holdup"
-            data-testid="override-holdup"
-            type="number"
-            value={overrideHoldUp}
-            onChange={(e) => setOverrideHoldUp(e.target.value)}
+          <RangeField
+            testid="override-holdup"
+            label="Hold-up (delay before a passed vote can execute)"
+            min={holdUpFloor}
+            max={MAX_HOLDUP}
+            step={HOUR}
+            value={effHoldUp}
+            display={fmtDuration(effHoldUp)}
+            onChange={setHoldUp}
+            hint={`Tier floor: ${fmtDuration(holdUpFloor)} — the slider can only go stricter (longer).`}
           />
-          <label htmlFor="override-quorum">
-            Quorum override % (stricter than the tier floor only)
-          </label>
-          <input
-            id="override-quorum"
-            data-testid="override-quorum"
-            type="number"
-            value={overrideQuorum}
-            onChange={(e) => setOverrideQuorum(e.target.value)}
+          <RangeField
+            testid="override-quorum"
+            label="Quorum (% of vote weight that must approve)"
+            min={quorumFloor}
+            max={100}
+            step={1}
+            value={effQuorum}
+            display={`${effQuorum}%`}
+            onChange={setQuorum}
+            hint={`Tier floor: ${quorumFloor}% — the slider can only go stricter (higher).`}
           />
         </>
       )}
@@ -408,11 +499,25 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
       )}
 
       {validated.ok && validated.params && (
-        <p className="muted" data-testid="resolved-params">
-          quorum {validated.params.quorumPercent}% · hold-up{" "}
-          {validated.params.holdUpSeconds}s · veto{" "}
-          {validated.params.vetoEnabled ? "enabled" : "none"}
-        </p>
+        <div className="summary-card" data-testid="resolved-params">
+          <div className="row">
+            <span>Quorum</span>
+            <span>{validated.params.quorumPercent}%</span>
+          </div>
+          <div className="row">
+            <span>Hold-up</span>
+            <span>
+              {fmtDuration(validated.params.holdUpSeconds)} (
+              {validated.params.holdUpSeconds}s)
+            </span>
+          </div>
+          <div className="row">
+            <span>Veto</span>
+            <span>
+              {validated.params.vetoEnabled ? `${veto}% council` : "none"}
+            </span>
+          </div>
+        </div>
       )}
 
       {steps.length > 0 && (

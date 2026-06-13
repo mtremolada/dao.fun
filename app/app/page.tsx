@@ -40,11 +40,19 @@ const MODES = [
     name: "Guarded",
     tagline: "Proposals restricted to a fixed safe action menu.",
     points: [
-      "Realm authority held by the proposal-gate program",
-      "Ships at Stage 3 — not selectable yet",
+      "Realm authority held by the on-chain proposal-gate program",
+      "Treasury can't be sent to an arbitrary address even by a winning vote",
+      "Needs the gate program deployed on-chain to function",
     ],
   },
 ] as const;
+
+// Guarded needs the custom proposal-gate program LIVE on this cluster. The
+// ceremony + SDK + UI are complete and tested on the real binaries; this flag
+// is the single switch that turns it on once the program is deployed. Until
+// then it stays unselectable — picking it without the program on-chain would
+// brick the DAO at the gate-init step and burn the launcher's SOL.
+const GUARDED_ENABLED = process.env.NEXT_PUBLIC_GUARDED_ENABLED === "1";
 
 export default function ModeSelectionPage() {
   return (
@@ -56,7 +64,7 @@ export default function ModeSelectionPage() {
       </p>
       <div className="mode-grid">
         {MODES.map((mode) => {
-          const selectable = mode.id !== "guarded";
+          const selectable = mode.id !== "guarded" || GUARDED_ENABLED;
           return (
             <div
               key={mode.id}
@@ -75,7 +83,9 @@ export default function ModeSelectionPage() {
                   Launch {mode.name}
                 </Link>
               ) : (
-                <span className="muted">Available at Stage 3</span>
+                <span className="muted">
+                  Gate program not yet deployed on-chain
+                </span>
               )}
             </div>
           );

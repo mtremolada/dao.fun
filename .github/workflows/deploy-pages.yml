@@ -54,6 +54,11 @@ jobs:
           STATIC_EXPORT: "1"
           NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
           NEXT_PUBLIC_RPC_URL: ${{ vars.NEXT_PUBLIC_RPC_URL }}
+          # Set repo variable NEXT_PUBLIC_GUARDED_ENABLED=1 ONLY after the
+          # proposal-gate program is deployed on the target cluster — otherwise
+          # a guarded launch bricks the DAO at gate-init. The ceremony + SDK +
+          # UI are complete; this is the single switch that turns Guarded on.
+          NEXT_PUBLIC_GUARDED_ENABLED: ${{ vars.NEXT_PUBLIC_GUARDED_ENABLED }}
         run: pnpm exec next build
 
       - uses: actions/upload-pages-artifact@v3

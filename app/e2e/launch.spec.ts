@@ -15,9 +15,11 @@ test("mode page compares modes side by side; guarded is unselectable", async ({
     await expect(card).toBeVisible();
     await expect(card.getByRole("link", { name: /launch/i })).toBeVisible();
   }
+  // Guarded is unselectable until the proposal-gate program is deployed
+  // on-chain (NEXT_PUBLIC_GUARDED_ENABLED unset in this build).
   const guarded = page.getByTestId("mode-card-guarded");
   await expect(guarded).toBeVisible();
-  await expect(guarded).toContainText(/stage 3/i);
+  await expect(guarded).toContainText(/gate program/i);
   await expect(guarded.getByRole("link")).toHaveCount(0);
 });
 
@@ -39,7 +41,7 @@ test("sovereign requires BOTH confirmations before launch enables", async ({
   await expect(submit).toBeEnabled();
 });
 
-test("sub-floor override rejected with the floor error; stricter accepted; plan resolves", async ({
+test("hold-up slider is floored at the tier minimum (sub-floor is unreachable); stricter values resolve", async ({
   page,
 }) => {
   await page.goto("/launch?mode=cypherpunk");
@@ -48,15 +50,17 @@ test("sub-floor override rejected with the floor error; stricter accepted; plan 
   await page.getByTestId("confirm-noVetoIrreversible").check();
   await expect(submit).toBeEnabled();
 
-  // micro hold-up floor is 72h; 1h must be rejected client-side
-  await page.getByTestId("override-holdup").fill("3600");
-  await expect(page.getByTestId("form-errors")).toContainText(
-    /below the micro tier floor/,
+  // micro cypherpunk hold-up floor is 72h — the slider CANNOT go below it,
+  // so a sub-floor value is structurally impossible (no error to reject).
+  const holdup = page.getByTestId("override-holdup");
+  await expect(holdup).toHaveAttribute("min", String(72 * 3600));
+  // the resolved plan sits at the floor by default
+  await expect(page.getByTestId("resolved-params")).toContainText(
+    String(72 * 3600),
   );
-  await expect(submit).toBeDisabled();
 
-  // stricter than the floor is allowed, and the resolved plan reflects it
-  await page.getByTestId("override-holdup").fill(String(100 * 3600));
+  // dragging it stricter (longer) reflects in the resolved plan and stays valid
+  await holdup.fill(String(100 * 3600));
   await expect(submit).toBeEnabled();
   await expect(page.getByTestId("resolved-params")).toContainText(
     String(100 * 3600),
