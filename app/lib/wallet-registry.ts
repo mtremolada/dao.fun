@@ -75,42 +75,29 @@ export interface InstallOption {
 }
 
 /**
- * The full set of popular Solana wallets, offered as install links when not
- * already detected in the page. Installed wallets register themselves via
- * wallet-standard and are shown ahead of this list, so the modal always
- * presents the complete roster: what you have + what you can add.
+ * The browser (wallet-standard) wallets we support for now. Detected wallets
+ * are filtered to this allowlist; Ledger is handled separately as hardware.
  */
+export const ALLOWED_WALLET_NAMES = ["Phantom", "Solflare"] as const;
+
+/** Detected wallet-standard wallets, restricted to the allowlist. */
+export function allowedDetected(
+  wallets: StandardWalletLike[],
+): StandardWalletLike[] {
+  const allow = new Set(
+    ALLOWED_WALLET_NAMES.map((n) => n.toLowerCase()),
+  );
+  return wallets.filter((w) => allow.has(w.name.toLowerCase()));
+}
+
+/** Install links for the supported browser wallets. */
 export const KNOWN_WALLETS: readonly InstallOption[] = [
   { name: "Phantom", url: "https://phantom.app/download" },
   { name: "Solflare", url: "https://solflare.com/download" },
-  { name: "Backpack", url: "https://backpack.app/download" },
-  { name: "Coinbase Wallet", url: "https://www.coinbase.com/wallet/downloads" },
-  { name: "OKX Wallet", url: "https://www.okx.com/web3" },
-  { name: "Trust", url: "https://trustwallet.com/download" },
-  { name: "Bitget Wallet", url: "https://web3.bitget.com/en/wallet-download" },
-  { name: "Glow", url: "https://glow.app/download" },
-  { name: "Exodus", url: "https://www.exodus.com/download/" },
-  { name: "Ledger", url: "https://www.ledger.com/ledger-live" },
-  { name: "Nightly", url: "https://nightly.app/download" },
-  { name: "Coin98", url: "https://coin98.com/wallet" },
-  { name: "MathWallet", url: "https://mathwallet.org/" },
-  { name: "Torus", url: "https://app.tor.us/" },
 ];
 
-/**
- * The curated wallets that are NOT already detected (case-insensitive on
- * the name, and tolerant of the common "<Name> Wallet" suffix so a detected
- * "Trust Wallet" still suppresses the "Trust" install row).
- */
+/** Supported browser wallets that are NOT already detected (case-insensitive). */
 export function installOptions(detected: StandardWalletLike[]): InstallOption[] {
-  const have = new Set<string>();
-  for (const w of detected) {
-    const n = w.name.toLowerCase();
-    have.add(n);
-    have.add(n.replace(/\s+wallet$/, ""));
-  }
-  return KNOWN_WALLETS.filter((k) => {
-    const n = k.name.toLowerCase();
-    return !have.has(n) && !have.has(n.replace(/\s+wallet$/, ""));
-  });
+  const have = new Set(detected.map((w) => w.name.toLowerCase()));
+  return KNOWN_WALLETS.filter((k) => !have.has(k.name.toLowerCase()));
 }

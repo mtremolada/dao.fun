@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * The connect popup — the universal "pick a wallet" dialog every app shows:
- * detected wallet-standard wallets first (with their own brand icons), then
- * a curated install list for popular wallets that aren't present. Backdrop
- * click and Escape close it.
+ * Connect popup — the supported set for now: Phantom and Solflare (browser,
+ * wallet-standard) plus Ledger (hardware, Solana app over WebHID). Detected
+ * browser wallets show first; missing ones get an install link; Ledger is
+ * always offered. Backdrop click and Escape close it.
  */
 import { useEffect } from "react";
 import { useWallet } from "./wallet-provider";
@@ -33,7 +33,7 @@ function WalletIcon({
 }
 
 export function WalletModal() {
-  const { modalOpen, closeModal, wallets, connect, connecting, error } =
+  const { modalOpen, closeModal, wallets, connect, connectLedger, connecting, error } =
     useWallet();
 
   useEffect(() => {
@@ -74,7 +74,7 @@ export function WalletModal() {
           </button>
         </div>
 
-        {wallets.length > 0 ? (
+        {wallets.length > 0 && (
           <ul className="wallet-list">
             {wallets.map((w: StandardWalletLike) => (
               <li key={w.name}>
@@ -92,16 +92,36 @@ export function WalletModal() {
               </li>
             ))}
           </ul>
-        ) : (
-          <p className="muted" data-testid="no-wallets">
-            No Solana wallet detected. Install one of these to continue:
-          </p>
         )}
+
+        {/* Ledger is hardware (not a browser-injected wallet) — always offered. */}
+        <p className="wallet-more muted">Hardware</p>
+        <ul className="wallet-list">
+          <li>
+            <button
+              type="button"
+              className="wallet-option"
+              data-testid="wallet-option-ledger"
+              disabled={connecting}
+              onClick={() => void connectLedger()}
+            >
+              <WalletIcon name="Ledger" />
+              <span className="wallet-option-name">Ledger</span>
+              <span className="wallet-tag muted">Connect</span>
+            </button>
+          </li>
+        </ul>
 
         {installs.length > 0 && (
           <>
-            {wallets.length > 0 && (
-              <p className="wallet-more muted">More wallets</p>
+            <p className="wallet-more muted">
+              {wallets.length > 0 ? "More wallets" : "Install a wallet"}
+            </p>
+            {wallets.length === 0 && (
+              <p className="muted" data-testid="no-wallets">
+                No browser wallet detected — install one below or connect a
+                Ledger.
+              </p>
             )}
             <ul className="wallet-list">
               {installs.map((opt) => (

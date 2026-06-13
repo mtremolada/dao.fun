@@ -18,7 +18,8 @@ test.beforeEach(async ({ page }) => {
       const account = { address };
       const wallet = {
         version: "1.0.0",
-        name: "E2E Fake Wallet",
+        // an allowlisted name so it surfaces in the supported-wallet list
+        name: "Phantom",
         icon: "data:image/svg+xml;base64,",
         chains: ["solana:mainnet"],
         accounts: [],
@@ -53,7 +54,7 @@ test("connect via the universal top-right modal; the vote panel unlocks", async 
 
   await page.getByTestId("connect-wallet").click();
   await expect(page.getByTestId("wallet-modal")).toBeVisible();
-  await page.getByTestId("wallet-option-e2e-fake-wallet").click();
+  await page.getByTestId("wallet-option-phantom").click();
 
   // header reflects the connection (truncated), the vote panel the full key
   await expect(page.getByTestId("wallet-button-address")).toBeVisible();
@@ -68,7 +69,7 @@ test("the connection persists across a reload (stays connected)", async ({
 }) => {
   await page.goto(URL);
   await page.getByTestId("connect-wallet").click();
-  await page.getByTestId("wallet-option-e2e-fake-wallet").click();
+  await page.getByTestId("wallet-option-phantom").click();
   await expect(page.getByTestId("wallet-button-address")).toBeVisible();
 
   await page.reload();

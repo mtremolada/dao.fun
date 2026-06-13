@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  allowedDetected,
   clearLastWalletName,
   installOptions,
   loadLastWalletName,
@@ -35,13 +36,24 @@ describe("display + slug helpers", () => {
   });
 });
 
-describe("install list", () => {
-  it("offers only curated wallets that are not already detected (case-insensitive)", () => {
-    const opts = installOptions([wallet("phantom"), wallet("Backpack")]);
-    const names = opts.map((o) => o.name);
-    expect(names).not.toContain("Phantom");
-    expect(names).not.toContain("Backpack");
-    expect(names).toContain("Solflare");
+describe("supported-wallet allowlist", () => {
+  it("keeps only Phantom and Solflare among detected wallets", () => {
+    const names = allowedDetected([
+      wallet("Phantom"),
+      wallet("Backpack"),
+      wallet("Solflare"),
+      wallet("Glow"),
+    ]).map((w) => w.name);
+    expect(names).toEqual(["Phantom", "Solflare"]);
+  });
+
+  it("offers install links only for the supported wallets not yet detected", () => {
+    const opts = installOptions([wallet("phantom")]);
+    expect(opts.map((o) => o.name)).toEqual(["Solflare"]);
+    expect(installOptions([]).map((o) => o.name)).toEqual([
+      "Phantom",
+      "Solflare",
+    ]);
     expect(opts.every((o) => o.url.startsWith("https://"))).toBe(true);
   });
 });

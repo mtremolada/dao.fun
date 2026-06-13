@@ -11,7 +11,8 @@ import { useWallet } from "./wallet-provider";
 import { truncateAddress } from "../lib/wallet-registry";
 
 export function WalletButton() {
-  const { wallet, account, connecting, openModal, disconnect } = useWallet();
+  const { wallet, account, connectedName, connecting, openModal, disconnect } =
+    useWallet();
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -61,7 +62,7 @@ export function WalletButton() {
         aria-expanded={menuOpen}
         onClick={() => setMenuOpen((v) => !v)}
       >
-        {wallet?.icon && (
+        {wallet?.icon ? (
           <img
             className="wallet-icon-sm"
             src={wallet.icon}
@@ -69,6 +70,10 @@ export function WalletButton() {
             width={18}
             height={18}
           />
+        ) : (
+          <span className="wallet-icon-sm wallet-icon-letter" aria-hidden="true">
+            {(connectedName ?? "?").slice(0, 1).toUpperCase()}
+          </span>
         )}
         <span data-testid="wallet-button-address">
           {truncateAddress(account.address)}

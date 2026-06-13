@@ -60,6 +60,12 @@ body {
   border-radius: 50%;
 }
 
+.wallet-icon-sm.wallet-icon-letter {
+  width: 18px;
+  height: 18px;
+  font-size: 0.7rem;
+}
+
 .wallet-dropdown {
   position: absolute;
   right: 0;
