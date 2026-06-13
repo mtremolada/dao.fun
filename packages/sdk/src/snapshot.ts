@@ -27,6 +27,18 @@ export interface ProRataParams {
   totalLamports: bigint;
   /** Owners that never receive a share: the vault, pools, treasuries. */
   excludeOwners?: PublicKey[];
+  /**
+   * Drop owners that are OFF the ed25519 curve — program-owned PDAs (the
+   * bonding curve, AMM pool vaults, the DAO's own Squads vault, the
+   * distributor, …). The merkle distributor's `new_claim` requires the
+   * claimant to SIGN, which a PDA can never do permissionlessly, so an
+   * off-curve share is permanently UNCLAIMABLE: it would only dilute real
+   * holders and lock SOL in the distributor until clawback. A holder snapshot
+   * of a graduated token is mostly the pool's vault, so without this a
+   * distribute is economically broken by default (AUDIT F-11). Strictly
+   * correct to exclude for this distributor; default true.
+   */
+  dropUnclaimableOwners?: boolean;
 }
 
 export interface ProRataResult {
@@ -38,6 +50,12 @@ export interface ProRataResult {
   dustLamports: bigint;
   /** Σ eligible holder amounts (the pro-rata denominator). */
   heldSupply: bigint;
+  /**
+   * Token amount held by owners dropped as unclaimable (off-curve PDAs). When
+   * non-zero, real circulating holders were the only ones allocated to — and
+   * the operator should sanity-check that no genuine claimant was a PDA.
+   */
+  unclaimableHeld: bigint;
 }
 
 export function proRataShares(p: ProRataParams): ProRataResult {
@@ -56,6 +74,19 @@ export function proRataShares(p: ProRataParams): ProRataResult {
     if (h.amount === 0n || excluded.has(key)) continue;
     byOwner.set(key, (byOwner.get(key) ?? 0n) + h.amount);
   }
+
+  // Drop owners that can never claim (off-curve PDAs); their share would be
+  // unclaimable and would dilute real holders (AUDIT F-11). Default on.
+  let unclaimableHeld = 0n;
+  if (p.dropUnclaimableOwners ?? true) {
+    for (const [key, amount] of [...byOwner]) {
+      if (!PublicKey.isOnCurve(new PublicKey(key).toBytes())) {
+        byOwner.delete(key);
+        unclaimableHeld += amount;
+      }
+    }
+  }
+
   if (byOwner.size === 0) {
     throw new Error("proRataShares: no eligible holders");
   }
@@ -80,5 +111,6 @@ export function proRataShares(p: ProRataParams): ProRataResult {
     allocatedLamports,
     dustLamports: p.totalLamports - allocatedLamports,
     heldSupply,
+    unclaimableHeld,
   };
 }

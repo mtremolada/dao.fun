@@ -17,7 +17,7 @@
  * SOL-equivalents; pump DAO tokens are Token-2022 which this program
  * predates, so the DAO's own token is NOT distributable here.
  */
-import { createHash } from "node:crypto";
+import { createHash } from "./sha256";
 import {
   PublicKey,
   SystemProgram,

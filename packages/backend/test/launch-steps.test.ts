@@ -78,12 +78,14 @@ describe("buildLaunchSteps", () => {
     const { steps, getResult } = buildLaunchSteps(args, deps);
     const state = await runLaunch(args.mint.toBase58(), steps, new MemoryLaunchStore());
     expect(state.status).toBe("complete");
+    // AUDIT F-3: the launch fee is collected only after the DAO + treasury
+    // exist (after prefund-treasury, before the invariant assertions).
     expect(Object.keys(state.completedSteps)).toEqual([
       "create-treasury",
-      "collect-launch-fee",
       "create-token",
       "create-dao",
       "prefund-treasury",
+      "collect-launch-fee",
       "assert-invariants",
     ]);
 
@@ -191,11 +193,13 @@ describe("buildLaunchSteps", () => {
       store,
     );
     expect(resumed.status).toBe("complete");
-    // resume must NOT recreate treasury/fee/token
+    // resume must NOT recreate the steps that already completed (treasury,
+    // token), and must run the rest — including create-dao and the fee, which
+    // now runs AFTER create-dao (AUDIT F-3) so it had not completed yet.
     expect(sent.some((l) => l === "create-treasury")).toBe(false);
-    expect(sent.some((l) => l === "collect-launch-fee")).toBe(false);
     expect(sent.some((l) => l === "create-token")).toBe(false);
     expect(sent.some((l) => l.startsWith("create-dao"))).toBe(true);
+    expect(sent.some((l) => l === "collect-launch-fee")).toBe(true);
   });
 
   it("INV-5 violation (mint authority not null) fails the launch — no silent workaround", async () => {

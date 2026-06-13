@@ -127,6 +127,53 @@ describe("proRataShares", () => {
   });
 });
 
+describe("AUDIT F-11: unclaimable off-curve (PDA) owners", () => {
+  // A program-derived address is OFF the ed25519 curve by construction — it
+  // can never produce the signature new_claim requires.
+  function pda(seed: string): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from(seed)],
+      Keypair.generate().publicKey,
+    )[0];
+  }
+
+  it("drops off-curve owners by default: their share would be unclaimable", () => {
+    const pool = pda("pool"); // e.g. the AMM pool's base vault / bonding curve
+    expect(PublicKey.isOnCurve(pool.toBytes())).toBe(false);
+    const real = holder(100n);
+    const r = proRataShares({
+      holders: [{ owner: pool, amount: 9_000_000n }, real],
+      totalLamports: 1_000n,
+    });
+    // the PDA got NOTHING; the real holder receives the full distribution, and
+    // the denominator excludes the PDA's huge balance (no dilution).
+    expect(r.shares).toHaveLength(1);
+    expect(r.shares[0]!.claimant.equals(real.owner)).toBe(true);
+    expect(r.shares[0]!.lamports).toBe(1_000n);
+    expect(r.heldSupply).toBe(100n);
+    expect(r.unclaimableHeld).toBe(9_000_000n);
+  });
+
+  it("refuses a distribution whose holders are ALL unclaimable PDAs", () => {
+    expect(() =>
+      proRataShares({
+        holders: [{ owner: pda("only"), amount: 100n }],
+        totalLamports: 1_000n,
+      }),
+    ).toThrow(/no eligible holders/);
+  });
+
+  it("can be disabled for callers that handle exclusion themselves", () => {
+    const r = proRataShares({
+      holders: [{ owner: pda("p2"), amount: 100n }, holder(100n)],
+      totalLamports: 1_000n,
+      dropUnclaimableOwners: false,
+    });
+    expect(r.shares).toHaveLength(2);
+    expect(r.unclaimableHeld).toBe(0n);
+  });
+});
+
 describe("proRataShares exclusion semantics", () => {
   it("treats excludeOwners as owners, not token accounts", () => {
     const excluded = Keypair.generate().publicKey;

@@ -85,6 +85,25 @@ For ANY attacker budget and ANY reachable voting window
 - Undecodable instructions render as "UNKNOWN — raw data" red flags;
   anomaly detection (`detectProposalAnomalies`) flags hash mismatch,
   missing artifact hash, and zero hold-up on the API every UI consumes.
+- **Audit F-8 (MEDIUM, now FIXED):** the chain reader that recomputes the
+  INV-9 hash could be made to UNDER-read an adversarial proposal — a fixed
+  32-`ProposalTransaction` cap, a break-on-gap scan, option-0-only reading, and
+  a MAX (not MIN) hold-up summary. A proposer could append a 33rd transaction (a
+  hidden drain) past the cap and publish the truncated hash → a GREEN "verified"
+  badge over a prefix of what executes, with no anomaly. Since MVP does not
+  byte-enforce the menu (Stage 3), this badge IS the defense, so a badge that
+  can lie is the real risk. Fixed in `getProposalState`: it now reads the
+  authoritative on-chain transaction count (`options[0].instructionsNextIndex`),
+  never silently truncates (an incomplete read becomes the
+  `incomplete-instruction-set` red flag), reports the MIN hold-up, and flags any
+  non-single-option shape — pinned by `audit-reader-recompute.test.ts` +
+  `anomalies.test.ts`. The attacker precondition is unchanged (still must reach
+  quorum), but the badge no longer lies. **Fail-safe + surfacing (F-9):** on an
+  incomplete read the reader returns `chainHash: null` so the badge fail-closes
+  to non-verified by construction, and the proposal view now actually RENDERS
+  the anomaly list (it was computed server-side but the page dropped it, and a
+  missing artifact hid even the artifact's own flags) — always visible, with
+  explicit "DANGER" copy for the incomplete/non-canonical cases.
 
 ### 2.2 Direct-leg privilege escalation
 
@@ -128,6 +147,12 @@ not already do — and both are hash-pinned and hold-up-gated.
 - **Funds stranded in the distributor**: clawback is permissionless
   after the window and returns the remainder to the vault's WSOL ATA
   (proven on the real binary; books close exactly).
+- **Unclaimable allocation (Audit F-11, FIXED)**: a holder snapshot of a
+  graduated token is mostly the pool/curve/vault PDAs, which can never sign
+  `new_claim`. Allocating to them diluted real holders and locked SOL until
+  clawback. `proRataShares` now drops off-curve (PDA) owners by default — their
+  share is provably unclaimable — so real holders get their fair share of the
+  *claimable* supply and nothing is stranded (`snapshot.test.ts`).
 
 ## 5. Inherited / platform risks (residual, accepted with eyes open)
 
@@ -166,3 +191,133 @@ No capture path found on simulated micro-tier in either MVP mode that
 defeats (a) the zero-weight-unlocked entry gate, (b) the lockup-vs-drain
 dichotomy, and (c) the hold-up + veto/exit-window layer — each pinned by
 tests against the real binaries, not by this document.
+
+## 6. Audit correction (2026-06-12) — §1 overstates the SHIPPING configuration
+
+**The §1.1/§1.2 guarantees above assume VSR lockup weighting. The MVP does
+not ship that.** Every pump `create_v2` mint is Token-2022 (D-004); the
+deployed VSR rejects Token-2022 (D-013/D-018); production realms are
+therefore built with NO voter-weight addin (`communityVoterWeightAddin:
+null`). With no addin, **vote weight is the plain deposited token amount,
+with no lockup**. Consequences for the claims above:
+
+- **§1.1 "unlocked deposits carry ZERO vote weight (VSR baseline-0)"** —
+  TRUE only on the VSR leg (a classic-SPL test mint). FALSE for the
+  shipping Token-2022 no-addin path: an unlocked deposit carries FULL
+  weight. The flash-capture entry gate is the proposal threshold + the
+  voting window + the hold-up, NOT a zero-weight gate.
+- **§1.2 "EITHER the attacker's capital is still locked when the drain
+  executes …"** — FALSE for the shipping path. There is no lockup, so a
+  voter can deposit, vote a draining proposal to success, RELINQUISH and
+  WITHDRAW the full stake before the hold-up elapses, and let the drain
+  land — never at capital risk through execution. **Proven on the real
+  binary:** `tests/audit-f2-no-lock.integration.test.ts`.
+
+**What actually protects an MVP DAO (corrected model):**
+1. **Quorum-acquisition cost** — reaching `quorumPercent` of the max vote
+   weight (`FULL_SUPPLY_FRACTION` → 25% of supply at micro) requires
+   amassing and depositing that share of supply, which is economically
+   large and price-moving. This is a plutocratic-cost barrier, not a
+   capital-locked-through-execution barrier.
+2. **Notice window** — vote tipping is Disabled (full voting window
+   always) + the hold-up (≥72h micro / ≥24h cypherpunk): the drain is
+   public for the whole window before it can execute (INV-3, on-chain).
+3. **Council veto** (council mode) during the hold-up (INV-4, on-chain).
+
+This matches the cypherpunk UI copy ("your only protection is information
+and the exit window") but is WEAKER than the lockup dichotomy §1.2 claims.
+The lockup-vs-drain dichotomy and the zero-weight entry gate re-arm only if
+a real voter-weight plugin (VSR upgrade or custom Token-2022 plugin) lands
+(Stage 2/3). Until then, the property suite tests a configuration the
+product does not ship; add a no-addin property test (AUDIT-FINDINGS F-2).
+
+(Audit F-1 (HIGH, now FIXED): the backend orchestrator did not apply the
+no-addin + token-program retarget the no-addin path requires, so a backend
+launch could not stand up a DAO at all. Fixed inside `buildCreateDaoIxs`
+(`communityTokenProgram`) and proven on the deployed binaries for cypherpunk
+and council — see audit/AUDIT-FINDINGS.md. Still recommended: a property test
+over this section's no-addin model before advertising any lockup guarantee.)
+
+(Audit F-7 (HIGH, now FIXED): the DEPOSIT-side twin of F-1. The browser
+deposit builder emitted the classic-Token-program, no-mint deposit the 0.3.28
+client produces, which the deployed v3.1.4 fork REJECTS for a Token-2022
+governing mint — so no holder could acquire vote weight through the product and
+no community proposal could ever reach quorum. Fixed in
+`buildDepositGoverningTokensTx` (retarget + mint-append, the proven mainnet
+patch) and proven on the real binary: a holder deposits Token-2022 governing
+tokens and the TokenOwnerRecord records exactly that weight
+(`tests/audit-f7-token2022-deposit.integration.test.ts`). Together F-1 + F-7
+close the full launch→deposit→vote path for the shipping configuration.)
+
+## 7. Decentralized self-serve model (no intermediary)
+
+The protocol now runs with NO trusted backend in any fund or trust path:
+launches, deposits, and votes are built, signed, and submitted by the user's
+own wallet in the browser (`buildLaunchPlan` + `launchFlow`,
+`*ClientFlow`); the proposal/dashboard reads recompute the INV-9 hash,
+anomalies, and decode the effects locally from chain (SDK `chain-reader` +
+`decode`); fee collection is permissionless (anyone can crank it, INV-2). The
+new threat surface and its handling:
+
+- **Permissionless launching = advisory floors.** A user (or a forked
+  frontend) can submit ANY governance config — the tier floors and the
+  standard custody structure are CLIENT-side. A weak or backdoored DAO only
+  harms ITS OWN token's buyers, who chose to buy it. This is inherent to a
+  permissionless launchpad (pump.fun itself launches any config). The defense
+  is not prevention but VERIFIABILITY: `verifyDao(connection, mint,
+  {multisigPda})` lets any buyer confirm, from chain alone, that a token's
+  governance is the genuine advance-derived structure — realm authority is its
+  own governance, governance governs the mint, mint/freeze authorities null
+  (INV-5), and the Squads multisig's sole member is the native treasury with
+  threshold 1 and no config authority (INV-7). Surface it behind a "Verify
+  this DAO" badge before any buy.
+- **No mid-launch backdoor via partial state.** A launch is several
+  non-atomic txs; INV-1 (creator == vault) is set IN the create instruction,
+  and the whole realm→governance→treasury chain is advance-derived from the
+  mint, so no tx ordering or interruption can yield a wrong-creator or
+  attacker-substituted chain. A failed launch is always pre-fee (F-3); recovery
+  is "restart with fresh ephemeral keys" (the browser generates them with the
+  platform CSPRNG; they hold no funds and no post-launch authority).
+- **Permissionless collect cannot redirect fees.** The collect destination is
+  fixed by the pump program to the creator vault (the DAO's); a clicker pays
+  only the tx fee (INV-2) and cannot route fees to themselves.
+- **RPC trust (inherited light-client residual, §5).** A browser recompute is
+  only as honest as the RPC feeding it account data. A malicious RPC could lie;
+  the mitigation is the same as any light client — use a trusted/own RPC, or
+  cross-check across providers. The INV-9 hash is recomputed in the USER's
+  browser (a strict improvement over trusting a backend's claimed hash), but it
+  still reads through an RPC.
+
+## 8. Launch front-running / realm-squatting (self-serve, AUDIT-D)
+
+In the decentralized self-serve launch each step is a SEPARATE wallet-approved
+transaction. `create-token` (pump create_v2) reveals the mint on chain; the
+realm name derives deterministically from the mint; `create-dao` (which creates
+the realm) is one or more wallet popups later. An attacker watching the mempool
+can `createRealm` at the derived address inside that window:
+
+- **Grief**: the realm PDA is occupied, so the launcher's `create-dao` reverts.
+  The launch fails BEFORE the fee (F-3) — no funds lost. Recovery: restart with
+  a fresh mint (new ephemeral keys).
+- **Hijack (harder)**: the squatter stands up a malicious governance at the
+  deterministic address (low quorum / zero hold-up / themselves as council) and,
+  if they later acquire enough of the token to meet their own low quorum and the
+  vault is funded, drains it.
+
+The window is inherent to a MULTI-TX launch (the mint must exist before the
+realm can register its holding account, so create-token必须 precede create-dao);
+the structural fix is the Stage-3 atomic launch-coordinator. MVP defenses:
+
+1. **Fail-fast guard** (`app/lib/launch.ts`): before sending `create-dao:realm`
+   the flow reads the realm PDA; if it already exists it aborts with an explicit
+   "front-run/squat — restart, do NOT fund this one" error instead of a cryptic
+   revert. (Best-effort; a same-slot race still just reverts on chain.)
+2. **verifyDao catches the hijack for buyers**: a squatted DAO either fails the
+   structural checks (realm authority not its own governance, etc.) or trips the
+   config `riskFlags` (zero-hold-up / very-low-quorum / vote-tipping-enabled).
+   A "Verify this DAO" panel on the dashboard surfaces this before any buy.
+3. **Pre-fee**: a failed/squatted launch never charges the launch fee.
+
+Residual (accepted, documented): a determined mempool attacker can grief an
+anticipated-valuable launch into restarting. No fund theft; the structural close
+is Stage 3.

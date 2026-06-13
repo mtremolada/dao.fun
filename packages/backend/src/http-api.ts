@@ -5,6 +5,7 @@
  * server-side with the SAME shared functions the UI renders (spec 6.7).
  */
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { PublicKey } from "@solana/web3.js";
 import { proRataShares, validateLaunchForm, type LaunchFormInput } from "@daofun/sdk";
 import {
@@ -16,18 +17,45 @@ import type { ArtifactStore } from "./artifacts";
 import { detectProposalAnomalies, type ChainReader } from "./chain-reader";
 import type { HolderSnapshotSource } from "./holder-snapshot";
 import type { GovernanceTxSource } from "./tx-builder";
+import type { TokenLaunchInput } from "./launch-steps";
 
 export interface ApiDeps {
   launchStore: LaunchStore;
   artifactStore: ArtifactStore;
   /** Builds the concrete steps for a validated launch (see launch-steps). */
-  buildSteps: (launchId: string, form: LaunchFormInput) => LaunchStep[];
+  buildSteps: (
+    launchId: string,
+    form: LaunchFormInput,
+    token?: TokenLaunchInput,
+  ) => LaunchStep[];
   /** RPC-backed in prod, fake in tests; /chain/* is 501 when absent. */
   chain?: ChainReader;
   /** Holder snapshots for `distribute` inputs; /snapshots is 501 when absent. */
   snapshot?: HolderSnapshotSource;
   /** Unsigned-tx builder for browser signing (D-028); /chain/txs/* 501 when absent. */
   txs?: GovernanceTxSource;
+  /**
+   * Bearer token guarding the MUTATING, server-funded routes (POST /launches,
+   * POST /snapshots). `/launches` spends the server's launcher wallet, so it
+   * MUST be gated in production. When unset the routes are open (dev/test);
+   * set `API_AUTH_TOKEN` in any real deployment. The public browser routes
+   * (GET /chain/*, /artifacts/*, POST /chain/txs/* — the user-signed voting
+   * seam) are intentionally NOT gated.
+   */
+  authToken?: string;
+}
+
+/** Constant-time bearer check; open (true) only when no token is configured. */
+function isAuthorized(req: IncomingMessage, token?: string): boolean {
+  if (!token) return true;
+  const header = req.headers["authorization"];
+  if (typeof header !== "string" || !header.startsWith("Bearer ")) return false;
+  const presented = Buffer.from(header.slice("Bearer ".length));
+  const expected = Buffer.from(token);
+  return (
+    presented.length === expected.length &&
+    timingSafeEqual(presented, expected)
+  );
 }
 
 /**
@@ -89,7 +117,16 @@ async function handle(
   }
 
   if (req.method === "POST" && url.pathname === "/launches") {
-    let body: { launchId?: string; form?: LaunchFormInput };
+    // Server-funded: a launch spends the launcher wallet (treasury rent +
+    // prefund + fee). Gate it whenever a token is configured.
+    if (!isAuthorized(req, deps.authToken)) {
+      return json(res, 401, { error: "unauthorized" });
+    }
+    let body: {
+      launchId?: string;
+      form?: LaunchFormInput;
+      token?: TokenLaunchInput;
+    };
     try {
       body = (await readBody(req)) as typeof body;
     } catch {
@@ -105,7 +142,7 @@ async function handle(
     }
     const state = await runLaunch(
       body.launchId,
-      deps.buildSteps(body.launchId, body.form),
+      deps.buildSteps(body.launchId, body.form, body.token),
       deps.launchStore,
     );
     return json(res, state.status === "complete" ? 201 : 502, state);
@@ -117,6 +154,11 @@ async function handle(
   }
 
   if (req.method === "POST" && url.pathname === "/snapshots") {
+    // Drives the holder snapshot (RPC cost) for a distribute proposal — a
+    // privileged proposer action, not a public read. Gate it.
+    if (!isAuthorized(req, deps.authToken)) {
+      return json(res, 401, { error: "unauthorized" });
+    }
     if (!deps.snapshot) {
       return json(res, 501, { error: "snapshot source not configured" });
     }
@@ -153,6 +195,10 @@ async function handle(
       heldSupply: result.heldSupply.toString(),
       allocatedLamports: result.allocatedLamports.toString(),
       dustLamports: result.dustLamports.toString(),
+      // AUDIT F-11: token amount held by owners dropped as unclaimable
+      // (off-curve PDAs — pools, vault, curve). Non-zero is expected and
+      // healthy; it means that supply was correctly NOT allocated.
+      unclaimableHeld: result.unclaimableHeld.toString(),
       shares: result.shares.map((s) => ({
         claimant: s.claimant.toBase58(),
         lamports: s.lamports.toString(),

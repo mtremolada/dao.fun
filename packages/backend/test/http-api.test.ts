@@ -161,3 +161,43 @@ describe("GET /launches/:id and /artifacts/:proposal/:hash", () => {
     expect((await fetch(`${base}/nope`)).status).toBe(404);
   });
 });
+
+describe("auth guard on the server-funded mutating routes", () => {
+  const TOKEN = "s3cret-deploy-token";
+
+  async function postLaunch(base: string, headers: Record<string, string> = {}) {
+    return fetch(`${base}/launches`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({ launchId: "auth-1", form: validForm }),
+    });
+  }
+
+  it("rejects /launches without a valid bearer when a token is configured", async () => {
+    const { base } = await startApi({ authToken: TOKEN });
+    expect((await postLaunch(base)).status).toBe(401); // no header
+    expect((await postLaunch(base, { authorization: "Bearer wrong" })).status).toBe(
+      401,
+    );
+  });
+
+  it("accepts /launches with the correct bearer", async () => {
+    const { base } = await startApi({ authToken: TOKEN });
+    const res = await postLaunch(base, { authorization: `Bearer ${TOKEN}` });
+    expect(res.status).toBe(201); // the stub steps complete
+  });
+
+  it("is OPEN when no token is configured (dev/test default)", async () => {
+    const { base } = await startApi();
+    expect((await postLaunch(base)).status).toBe(201);
+  });
+
+  it("does NOT gate the public, user-signed routes (GET /chain is untouched)", async () => {
+    const { base } = await startApi({ authToken: TOKEN });
+    // no chain reader wired -> 501, NOT 401: the guard never ran on this route
+    expect(
+      (await fetch(`${base}/chain/proposals/11111111111111111111111111111111`))
+        .status,
+    ).toBe(501);
+  });
+});
