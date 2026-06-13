@@ -66,6 +66,18 @@ const TOKEN_TAG: Record<number, string> = {
   6: "SetAuthority",
 };
 
+/**
+ * Token instructions a voter MUST see flagged: minting (inflation/dilution) and
+ * authority changes (re-enabling a mint/freeze authority = a rug primitive).
+ * AUDIT-C: these were previously decoded with NO red flag.
+ */
+const TOKEN_FLAG: Record<string, string> = {
+  Burn: "token-burn",
+  BurnChecked: "token-burn",
+  MintTo: "token-mint",
+  SetAuthority: "set-authority",
+};
+
 export function decodeInstruction(ix: TransactionInstruction): DecodedInstruction {
   const program = NAMED_PROGRAMS.get(ix.programId.toBase58());
 
@@ -98,7 +110,7 @@ export function decodeInstruction(ix: TransactionInstruction): DecodedInstructio
         program: program ?? "Token",
         summary: amount !== null ? `${tag} ${amount} base units` : tag,
         known: true,
-        flags: tag === "Burn" || tag === "BurnChecked" ? ["token-burn"] : [],
+        flags: TOKEN_FLAG[tag] ? [TOKEN_FLAG[tag]!] : [],
       };
     }
   }

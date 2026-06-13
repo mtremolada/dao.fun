@@ -1,30 +1,38 @@
 /**
  * On-chain DAO verifier (decentralized trust). A launchpad is permissionless,
- * so anyone can publish a token whose "DAO" is a sham (a multisig they control,
- * a live mint authority, a sub-floor config). The defense is not to prevent it
- * but to make any BUYER able to verify, from chain alone, that a token's
- * governance is the genuine advance-derived structure with no human backdoor:
- *
- *   - the realm/governance/native-treasury chain matches the advance derivation
- *     from the mint (so the addresses are not attacker-substituted);
- *   - the realm authority IS its own governance (no platform/launcher key, INV);
- *   - the governance governs exactly this mint;
- *   - the mint + freeze authorities are null (INV-5);
- *   - (given the vault's multisig) its SOLE member is the native treasury, with
- *     threshold 1 and no config authority (INV-7) — i.e. the only controller is
- *     the DAO itself.
+ * so anyone can publish a token whose "DAO" is a sham. This lets any BUYER
+ * verify, from chain alone, BOTH that there is no platform/launcher backdoor in
+ * the structure AND what the governance PARAMETERS are — because a structurally
+ * perfect DAO with a 1% quorum and a 0s hold-up is still a rug waiting to
+ * happen. `ok` is the structural integrity (no backdoor); `riskFlags` surfaces
+ * dangerous-but-legal config the buyer must judge for themselves.
  *
  * Pure reads; runs in the browser. Use it behind a "Verify this DAO" button.
  */
 import { Connection, PublicKey } from "@solana/web3.js";
 import { getMint } from "@solana/spl-token";
-import { Governance, Realm, getGovernanceAccount } from "@solana/spl-governance";
+import {
+  Governance,
+  Realm,
+  VoteThresholdType,
+  VoteTipping,
+  getGovernanceAccount,
+} from "@solana/spl-governance";
 import * as multisig from "@sqds/multisig";
 import { deriveGovernanceChainFromMint } from "./pda";
 
 export interface DaoVerification {
+  /** Structural integrity: no platform/launcher backdoor. */
   ok: boolean;
   checks: Record<string, boolean>;
+  /** Governance parameters, surfaced so the buyer can judge rug risk. */
+  config: {
+    quorumPercent: number | null;
+    holdUpSeconds: number | null;
+    voteTippingDisabled: boolean | null;
+  } | null;
+  /** Dangerous-but-LEGAL config the buyer must weigh (not part of `ok`). */
+  riskFlags: string[];
   /** The advance-derived chain, for display. */
   realm: string;
   governance: string;
@@ -39,11 +47,20 @@ export async function verifyDao(
 ): Promise<DaoVerification> {
   const chain = deriveGovernanceChainFromMint(mint);
   const checks: Record<string, boolean> = {};
+  const riskFlags: string[] = [];
   const notes: string[] = [];
+  let config: DaoVerification["config"] = null;
 
-  // Mint + freeze authority null (INV-5).
+  // Mint + freeze authority null (INV-5). AUDIT-B: resolve the token program
+  // from the mint's OWNER so a Token-2022 mint (every pump launch) is not a
+  // false negative when the caller omits `tokenProgram`.
   try {
-    const m = await getMint(connection, mint, "confirmed", opts.tokenProgram);
+    let tokenProgram = opts.tokenProgram;
+    if (!tokenProgram) {
+      const info = await connection.getAccountInfo(mint);
+      if (info) tokenProgram = info.owner;
+    }
+    const m = await getMint(connection, mint, "confirmed", tokenProgram);
     checks["mintAuthorityNull"] = m.mintAuthority === null;
     checks["freezeAuthorityNull"] = m.freezeAuthority === null;
   } catch (e) {
@@ -65,7 +82,8 @@ export async function verifyDao(
     checks["communityMintMatches"] = false;
   }
 
-  // Governance governs exactly this mint.
+  // Governance governs exactly this mint — and READ ITS CONFIG (AUDIT-A): the
+  // parameters that decide whether the launcher can rug, surfaced + risk-flagged.
   try {
     const gov = await getGovernanceAccount(
       connection,
@@ -73,6 +91,22 @@ export async function verifyDao(
       Governance,
     );
     checks["governanceGovernsMint"] = gov.account.governedAccount.equals(mint);
+
+    const c = gov.account.config;
+    const quorumPercent =
+      c.communityVoteThreshold.type === VoteThresholdType.YesVotePercentage
+        ? (c.communityVoteThreshold.value ?? null)
+        : null;
+    const holdUpSeconds = c.minInstructionHoldUpTime;
+    const voteTippingDisabled = c.communityVoteTipping === VoteTipping.Disabled;
+    config = { quorumPercent, holdUpSeconds, voteTippingDisabled };
+
+    // Dangerous-but-legal config (informational; the buyer judges).
+    if (holdUpSeconds === 0) riskFlags.push("zero-hold-up");
+    if (!voteTippingDisabled) riskFlags.push("vote-tipping-enabled");
+    if (quorumPercent !== null && quorumPercent < 10) {
+      riskFlags.push("very-low-quorum");
+    }
   } catch {
     checks["governanceGovernsMint"] = false;
   }
@@ -105,6 +139,8 @@ export async function verifyDao(
   return {
     ok: Object.values(checks).every(Boolean),
     checks,
+    config,
+    riskFlags,
     realm: chain.realm.toBase58(),
     governance: chain.governance.toBase58(),
     nativeTreasury: chain.nativeTreasury.toBase58(),

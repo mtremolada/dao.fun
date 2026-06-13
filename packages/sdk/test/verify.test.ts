@@ -44,4 +44,14 @@ describe("verifyDao", () => {
     // without it, the custody checks are simply absent (not silently 'true')
     expect(v.checks["multisigMemberIsNativeTreasury"]).toBeUndefined();
   });
+
+  it("AUDIT-A: exposes config + riskFlags (degrades to null/empty unread)", async () => {
+    const v = await verifyDao(emptyConnection, Keypair.generate().publicKey);
+    // the fields exist (the verifier surfaces governance params, not just structure)
+    expect(v).toHaveProperty("config");
+    expect(v).toHaveProperty("riskFlags");
+    // unread chain -> no config to judge, no spurious risk flags
+    expect(v.config).toBeNull();
+    expect(v.riskFlags).toEqual([]);
+  });
 });

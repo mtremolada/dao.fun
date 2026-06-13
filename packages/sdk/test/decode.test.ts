@@ -12,8 +12,11 @@ import {
   TransactionInstruction,
 } from "@solana/web3.js";
 import {
+  AuthorityType,
   TOKEN_2022_PROGRAM_ID,
   createBurnInstruction,
+  createMintToInstruction,
+  createSetAuthorityInstruction,
 } from "@solana/spl-token";
 import { createSetGovernanceConfig } from "@solana/spl-governance";
 import {
@@ -47,6 +50,34 @@ describe("decodeInstruction", () => {
     expect(d.known).toBe(true);
     expect(d.summary).toContain("Burn 12345 base units");
     expect(d.flags).toContain("token-burn");
+  });
+
+  it("AUDIT-C: flags MintTo (inflation) — a rug primitive voters must see", () => {
+    const mint = Keypair.generate().publicKey;
+    const acct = Keypair.generate().publicKey;
+    const auth = Keypair.generate().publicKey;
+    const d = decodeInstruction(
+      createMintToInstruction(mint, acct, auth, 1_000n, [], TOKEN_2022_PROGRAM_ID),
+    );
+    expect(d.summary).toContain("MintTo");
+    expect(d.flags).toContain("token-mint");
+  });
+
+  it("AUDIT-C: flags SetAuthority (re-enabling mint/freeze authority)", () => {
+    const mint = Keypair.generate().publicKey;
+    const auth = Keypair.generate().publicKey;
+    const newAuth = Keypair.generate().publicKey;
+    const d = decodeInstruction(
+      createSetAuthorityInstruction(
+        mint,
+        auth,
+        AuthorityType.MintTokens,
+        newAuth,
+        [],
+        TOKEN_2022_PROGRAM_ID,
+      ),
+    );
+    expect(d.flags).toContain("set-authority");
   });
 
   it("flags a governance config (setParam) instruction", () => {
