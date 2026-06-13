@@ -57,6 +57,17 @@ export interface WalletContextValue {
   disconnect: () => Promise<void>;
 }
 
+/** A user-facing message for a connect failure — never blank. */
+function describeError(e: unknown, label: string): string {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  if (/reject|denied|cancel/i.test(msg)) {
+    return `${label} connection was rejected.`;
+  }
+  return msg
+    ? `Couldn't connect ${label}: ${msg}`
+    : `Couldn't connect ${label}. Make sure it's unlocked and try again.`;
+}
+
 const WalletContext = createContext<WalletContextValue | null>(null);
 
 export function useWallet(): WalletContextValue {
@@ -118,7 +129,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         saveLastWalletName(w.name);
         setModalOpen(false);
       } catch (e) {
-        setError((e as Error).message);
+        console.error("wallet connect failed", e);
+        setError(describeError(e, walletName));
       } finally {
         setConnecting(false);
       }
@@ -142,7 +154,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       clearLastWalletName();
       setModalOpen(false);
     } catch (e) {
-      setError((e as Error).message);
+      console.error("ledger connect failed", e);
+      setError(describeError(e, "Ledger"));
     } finally {
       setConnecting(false);
     }

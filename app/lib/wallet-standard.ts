@@ -127,8 +127,10 @@ export async function connectWallet(
     | ConnectFeature
     | undefined;
   if (connect) {
+    // Always pass an object (what the standard wallet adapter does); some
+    // wallets read input.silent without a default and throw on undefined.
     const { accounts } = await connect.connect(
-      opts?.silent ? { silent: true } : undefined,
+      opts?.silent ? { silent: true } : {},
     );
     if (accounts[0]) return accounts[0];
   }

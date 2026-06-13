@@ -26,7 +26,20 @@ test.beforeEach(async ({ page }) => {
         features: {
           "standard:connect": {
             version: "1.0.0",
-            connect: async () => ({ accounts: [account] }),
+            // Faithful to real wallets: reads input.silent (no default), so a
+            // caller passing `undefined` would throw — guards that regression.
+            connect: async (input: { silent?: boolean }) => {
+              void input.silent;
+              return { accounts: [account] };
+            },
+          },
+          "standard:disconnect": {
+            version: "1.0.0",
+            disconnect: async () => {},
+          },
+          "standard:events": {
+            version: "1.0.0",
+            on: () => () => {},
           },
           "solana:signAndSendTransaction": {
             version: "1.0.0",
