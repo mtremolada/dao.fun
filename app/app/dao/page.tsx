@@ -11,7 +11,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PublicKey } from "@solana/web3.js";
 import type { DaoDashboard } from "@daofun/sdk/chain-reader";
-import { getChainReader } from "../../lib/rpc";
+import { readWithFallback } from "../../lib/rpc";
 import { DepositActions } from "../../components/deposit-actions";
 import { RpcSettings } from "../../components/rpc-settings";
 
@@ -55,14 +55,15 @@ function DaoInner() {
     setError(null);
     void (async () => {
       try {
-        const d = await getChainReader().getDashboard(realmKey, {
-          vault: vaultKey,
-          wallet: walletKey,
-        });
+        const d = await readWithFallback((r) =>
+          r.getDashboard(realmKey, { vault: vaultKey, wallet: walletKey }),
+        );
         if (cancelled) return;
         if (!d) {
           setStatus("error");
-          setError("not found");
+          setError(
+            "DAO not found (or every RPC endpoint is unavailable — set your own RPC above and retry).",
+          );
           return;
         }
         setDashboard(d);

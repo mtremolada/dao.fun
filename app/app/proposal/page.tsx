@@ -14,7 +14,7 @@ import {
   detectProposalAnomalies,
   type ProposalChainState,
 } from "@daofun/sdk/chain-reader";
-import { getChainReader } from "../../lib/rpc";
+import { readWithFallback } from "../../lib/rpc";
 import { ProposalView } from "../../components/proposal-view";
 import { WalletActions } from "../../components/wallet-actions";
 import { RpcSettings } from "../../components/rpc-settings";
@@ -58,7 +58,7 @@ function ProposalInner() {
     setError(null);
     void (async () => {
       try {
-        const s = await getChainReader().getProposalState(proposal);
+        const s = await readWithFallback((r) => r.getProposalState(proposal));
         if (cancelled) return;
         if (!s) {
           setStatus("notfound");
@@ -116,7 +116,8 @@ function ProposalInner() {
       )}
       {status === "notfound" && (
         <p className="errors" data-testid="proposal-error">
-          not found
+          Proposal not found (or every RPC endpoint is unavailable — set your
+          own RPC above and retry).
         </p>
       )}
       <ProposalView

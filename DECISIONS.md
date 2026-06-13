@@ -905,9 +905,19 @@ higher-order requirement; the server seam is removed from the deployment.
   deployment.
 
 **Verified:** vendored hash byte-exact (unit + real binaries); SDK 143 /
-backend 62 / app 18 / keeper 19 unit; 21 integration on real binaries;
+backend 62 / app 28 / keeper 19 unit; 21 integration on real binaries;
 root tsc + eslint clean; `next build` produces a static export of all four
 routes (`app/out`).
+
+**Live verification + resilience (2026-06-13):** the read/verify path was run
+against LIVE mainnet through the shipped client SDK
+(`scripts/verify-frontend-read.ts`, the GATE-1 DAO) — the INV-9 hash
+recomputed in-browser from chain matches the gate evidence
+(`76962352…`) exactly, on two independent endpoints. The static front end is
+deployed and serving on GitHub Pages (basePath build) AND remains IPFS-ready
+(no-basePath build). Reads use multi-endpoint fallback (`readWithFallback`,
+firstNonNull) with a keyless public fallback (publicnode) so a rate-limited
+primary never takes reads down; users can also set their own RPC in-app.
 
 **Operator-accepted residual (explicit, 2026-06-13 — "no devnet, we are
 shipping this into production"):** this container has no browser, wallet, or
