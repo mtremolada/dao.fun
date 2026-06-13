@@ -204,6 +204,19 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         <p className="muted">
           completed: {selfServe.completed.join(", ") || "—"}
         </p>
+        {selfServe.phase === "done" && selfServe.realm && selfServe.vault && (
+          <p>
+            <a
+              className="button"
+              data-testid="view-dao"
+              href={`/dao/${selfServe.realm}?vault=${selfServe.vault}${
+                selfServe.multisigPda ? `&ms=${selfServe.multisigPda}` : ""
+              }`}
+            >
+              View &amp; verify your DAO →
+            </a>
+          </p>
+        )}
         {selfServe.error && <p className="errors">{selfServe.error}</p>}
       </div>
     );

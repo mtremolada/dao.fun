@@ -147,3 +147,16 @@ export async function verifyDao(
     notes,
   };
 }
+
+/**
+ * Convenience for the dashboard, which knows the realm (not the mint): read the
+ * realm's community mint, then verify. Resolves the token program too.
+ */
+export async function verifyDaoByRealm(
+  connection: Connection,
+  realm: PublicKey,
+  opts: { multisigPda?: PublicKey } = {},
+): Promise<DaoVerification> {
+  const r = await getGovernanceAccount(connection, realm, Realm);
+  return verifyDao(connection, r.account.communityMint, opts);
+}

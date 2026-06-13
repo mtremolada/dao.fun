@@ -38,10 +38,16 @@ export default async function DaoPage({
     );
   }
 
-  // Fully decentralized: read + collect entirely in the browser (no backend).
+  // Fully decentralized: read + collect + verify entirely in the browser.
   if (RPC) {
     return (
-      <DashboardLive realm={realm} vault={q.vault} wallet={q.wallet} rpcUrl={RPC} />
+      <DashboardLive
+        realm={realm}
+        vault={q.vault}
+        wallet={q.wallet}
+        multisigPda={q.ms}
+        rpcUrl={RPC}
+      />
     );
   }
 

@@ -63,6 +63,9 @@ export interface LaunchFlowState {
   signatures: string[];
   mint?: string;
   realm?: string;
+  /** Squads vault + multisig — for linking straight to the DAO dashboard. */
+  vault?: string;
+  multisigPda?: string;
   error?: string;
 }
 
@@ -188,8 +191,26 @@ export async function launchFlow(
     });
     state.mint = plan.mint.toBase58();
     state.realm = plan.treasury.realm.toBase58();
+    state.vault = plan.treasury.vaultPda.toBase58();
+    state.multisigPda = plan.treasury.multisigPda.toBase58();
 
     for (const group of plan.groups) {
+      // AUDIT-D: realm-squat / launch front-run guard. create-token reveals the
+      // mint on-chain; the realm name derives from it; an attacker watching the
+      // mempool could createRealm at the derived address before our create-dao
+      // lands (a wider window here because each tx is a separate wallet popup).
+      // Fail fast with a clear, actionable error rather than a cryptic revert.
+      // (The hijack variant — a malicious squatted governance — is caught for
+      // buyers by verifyDao's structural + config risk checks.)
+      if (group.label === "create-dao:realm") {
+        const existing = await connection.getAccountInfo(plan.treasury.realm);
+        if (existing) {
+          throw new Error(
+            "realm already exists at the derived address — possible launch front-run/squat. " +
+              "Restart with a fresh launch (new keys); do NOT fund this one.",
+          );
+        }
+      }
       state.phase = "signing";
       state.step = group.label;
       emit();

@@ -287,3 +287,37 @@ new threat surface and its handling:
   cross-check across providers. The INV-9 hash is recomputed in the USER's
   browser (a strict improvement over trusting a backend's claimed hash), but it
   still reads through an RPC.
+
+## 8. Launch front-running / realm-squatting (self-serve, AUDIT-D)
+
+In the decentralized self-serve launch each step is a SEPARATE wallet-approved
+transaction. `create-token` (pump create_v2) reveals the mint on chain; the
+realm name derives deterministically from the mint; `create-dao` (which creates
+the realm) is one or more wallet popups later. An attacker watching the mempool
+can `createRealm` at the derived address inside that window:
+
+- **Grief**: the realm PDA is occupied, so the launcher's `create-dao` reverts.
+  The launch fails BEFORE the fee (F-3) — no funds lost. Recovery: restart with
+  a fresh mint (new ephemeral keys).
+- **Hijack (harder)**: the squatter stands up a malicious governance at the
+  deterministic address (low quorum / zero hold-up / themselves as council) and,
+  if they later acquire enough of the token to meet their own low quorum and the
+  vault is funded, drains it.
+
+The window is inherent to a MULTI-TX launch (the mint must exist before the
+realm can register its holding account, so create-token必须 precede create-dao);
+the structural fix is the Stage-3 atomic launch-coordinator. MVP defenses:
+
+1. **Fail-fast guard** (`app/lib/launch.ts`): before sending `create-dao:realm`
+   the flow reads the realm PDA; if it already exists it aborts with an explicit
+   "front-run/squat — restart, do NOT fund this one" error instead of a cryptic
+   revert. (Best-effort; a same-slot race still just reverts on chain.)
+2. **verifyDao catches the hijack for buyers**: a squatted DAO either fails the
+   structural checks (realm authority not its own governance, etc.) or trips the
+   config `riskFlags` (zero-hold-up / very-low-quorum / vote-tipping-enabled).
+   A "Verify this DAO" panel on the dashboard surfaces this before any buy.
+3. **Pre-fee**: a failed/squatted launch never charges the launch fee.
+
+Residual (accepted, documented): a determined mempool attacker can grief an
+anticipated-valuable launch into restarting. No fund theft; the structural close
+is Stage 3.
