@@ -19,7 +19,11 @@ import {
   type DaoVerification,
 } from "../lib/chain";
 import { collectFees } from "../lib/collect";
+import { depositFlow, type FlowState } from "../lib/governance-actions";
 import { useWallet } from "./wallet-provider";
+
+// pump tokens have 6 decimals — let holders enter whole tokens.
+const TOKEN_DECIMALS = 6;
 
 function sol(lamports: number): string {
   const sign = lamports > 0 ? "+" : lamports < 0 ? "-" : "";
@@ -42,6 +46,9 @@ export function DaoScreen() {
   const [collecting, setCollecting] = useState(false);
   const [collectSig, setCollectSig] = useState<string | null>(null);
   const [collectError, setCollectError] = useState<string | null>(null);
+
+  const [depositAmt, setDepositAmt] = useState("");
+  const [depositState, setDepositState] = useState<FlowState | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +84,25 @@ export function DaoScreen() {
       cancelled = true;
     };
   }, [realm, vault, wallet, ms]);
+
+  async function onDeposit() {
+    if (!sender) {
+      openModal();
+      return;
+    }
+    if (!dashboard?.communityMint) return;
+    const tokens = Number(depositAmt);
+    if (!(tokens > 0)) return;
+    const base = BigInt(Math.floor(tokens * 10 ** TOKEN_DECIMALS));
+    await depositFlow(
+      {
+        realm,
+        governingTokenMint: dashboard.communityMint,
+        amount: base.toString(),
+      },
+      { connection: getConnection(), sender, onState: setDepositState },
+    );
+  }
 
   async function onCollect() {
     setCollectError(null);
@@ -263,6 +289,55 @@ export function DaoScreen() {
       ) : (
         <p className="muted" data-testid="vote-power">
           pass ?wallet= to see a holder&apos;s deposited vote power
+        </p>
+      )}
+
+      <h2>Get voting power</h2>
+      <p className="muted">
+        Vote weight = governing tokens you deposit into the realm. Deposit your{" "}
+        {dashboard.realmName} tokens here to be able to vote (withdrawable later).
+      </p>
+      <input
+        type="number"
+        min={0}
+        step="0.000001"
+        placeholder="amount of tokens"
+        data-testid="deposit-amount"
+        value={depositAmt}
+        onChange={(e) => setDepositAmt(e.target.value)}
+        style={{
+          maxWidth: "16rem",
+          background: "var(--bg)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          color: "var(--text)",
+          padding: "0.45rem",
+          marginRight: "0.5rem",
+        }}
+      />
+      <button
+        className="button"
+        type="button"
+        data-testid="deposit-button"
+        disabled={
+          !dashboard.communityMint ||
+          depositState?.phase === "building" ||
+          depositState?.phase === "sending" ||
+          !(Number(depositAmt) > 0)
+        }
+        onClick={() => void onDeposit()}
+      >
+        {sender ? "Deposit for voting power" : "Connect wallet to deposit"}
+      </button>
+      {depositState && (
+        <p data-testid="deposit-status" data-phase={depositState.phase}>
+          {depositState.phase === "done"
+            ? "Deposited ✅ — you can vote now"
+            : depositState.phase === "error"
+              ? `Deposit failed: ${depositState.error}`
+              : depositState.phase === "sending"
+                ? "Confirm in your wallet…"
+                : "Building transaction…"}
         </p>
       )}
     </>

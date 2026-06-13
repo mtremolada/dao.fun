@@ -42,6 +42,14 @@
       "types": "./src/governance.ts",
       "default": "./src/governance.ts"
     },
+    "./launch-plan": {
+      "types": "./src/launch-plan.ts",
+      "default": "./src/launch-plan.ts"
+    },
+    "./governance-tx": {
+      "types": "./src/governance-tx.ts",
+      "default": "./src/governance-tx.ts"
+    },
     "./chain-reader": {
       "types": "./src/chain-reader.ts",
       "default": "./src/chain-reader.ts"

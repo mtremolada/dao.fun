@@ -7,7 +7,25 @@ everything in **DECISIONS.md** (D-001..D-033 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
-## RESOLVED last session: Guarded mode = Option A, SHIPPED (D-033)
+## ⚠ LIVE + the one PENDING operator action (read first)
+
+The dapp is **LIVE on GitHub Pages** (`https://mtremolada.github.io/dao.fun/`,
+deploy-pages triggers on `claude/zen-cori-t9td4x`). Council/Cypherpunk/Sovereign
+do the whole loop client-side on mainnet (launch → in-browser INV-9 verify +
+decode + verifyDao → deposit/vote → permissionless execute → collect fees),
+all on audited deployed programs. The app launch now delegates to the
+real-binary-tested `buildLaunchPlan` (D-035) — settings flow verified.
+
+**PENDING (needs the operator's wallet):** deploy `proposal-gate` to mainnet to
+turn Guarded on. Turnkey: `programs/proposal-gate/DEPLOY.md` +
+`scripts/deploy-gate.sh`. Needs a funded deployer (~3 SOL) + an upgrade-authority
+decision; the program is UNAUDITED (deliberate GATE 3 override — operator's
+call). Until then Guarded stays unselectable via `NEXT_PUBLIC_GUARDED_ENABLED`
+(unset) — turning it on without the program live would brick the DAO at
+gate-init. The code/UI/validation are 100% ready; it's a one-variable flip
+once deployed.
+
+## RESOLVED earlier: Guarded mode = Option A, SHIPPED (D-033)
 
 The D-032 operator decision came back **"implement A end to end"** —
 done in session of 2026-06-12 (branch

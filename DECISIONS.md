@@ -1000,6 +1000,50 @@ Green at go-live: sdk 181 + backend 89 + app 23 unit; 17 integration
 files / 31 tests on real binaries; root + app tsc + eslint clean; static
 export builds.
 
+## D-035 — Final launch-path audit: the app now drives the TESTED plan; Guarded deploy made turnkey (2026-06-13)
+
+Operator asked to (a) make the Guarded mainnet deploy ready + noted as
+pending a funded wallet, and (b) audit that the front end actually launches
+DAOs with the chosen settings. Findings + fixes:
+
+- **BUG (would have failed every real launch): `runLaunch` did not pass
+  `communityTokenProgram`.** pump `create_v2` mints are Token-2022 (D-004),
+  but the app called `buildCreateDaoIxs` without it, so the realm-create tx
+  used the classic Token program for the Token-2022 holding accounts — an
+  on-chain failure AFTER the launcher already paid for the treasury + coin.
+  The tested `buildLaunchPlan` always passed it; the app's hand-rolled path
+  did not. (The client launch was never money-tested — PR note: "the first
+  real launch is the live test".)
+- **Fix = delegate, don't duplicate.** `runLaunch` now builds
+  `buildLaunchPlan` (the exact sequence `launch-plan-selfservice` proves
+  end-to-end on the real binaries) and signs+sends its groups via the wallet.
+  The app therefore inherits: Token-2022 retargeting, F-3 fee-LAST (a failed
+  launch never debits the launcher for an ungovernable token — the old app
+  charged the fee 2nd), F-12 council-before-realm, the advance-derivation
+  assertion (INV-7), and the realm-squat guard (AUDIT-D). Settings flow
+  verified: the slider-resolved GovernanceParams (quorum/hold-up/veto) pass
+  straight into the on-chain GovernanceConfig; the proposal threshold is
+  recomputed from the real pump supply at launch (form preview uses a
+  placeholder). `buildLaunchPlan` extended to also emit the guarded
+  council+gate groups (flag-gated; unit + integration green).
+- **Sliders (UI):** governance settings are range inputs whose MIN is the
+  mode×tier floor, so a sub-floor value is structurally unreachable — no
+  after-the-fact floor rejection. (`@daofun/sdk/launch-plan` added as a
+  browser subpath export.)
+- **Guarded deploy is turnkey, pending the operator's wallet.**
+  `programs/proposal-gate/DEPLOY.md` + `scripts/deploy-gate.sh`: generate the
+  program keypair, pin declare_id, build SBF, deploy (upgradeable to an
+  operator key, or `--final` immutable), then pin `GATE_PROGRAM_ID`, rebuild
+  the fixture, set repo var `NEXT_PUBLIC_GUARDED_ENABLED=1`. NOT executed —
+  needs a funded deployer (~3 SOL) + the upgrade-authority decision, and the
+  program is unaudited (deliberate GATE 3 override, operator's call). Guarded
+  stays unselectable until then (selecting it without the program live would
+  brick the DAO at gate-init).
+
+Green: sdk 181 + backend 89 + app 23 unit; 17 integration files / 31 tests on
+real binaries; root + app tsc + eslint clean; static export builds with the
+guarded flag off AND on.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

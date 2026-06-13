@@ -1,36 +1,31 @@
 /**
- * Client-side launch orchestrator (no server). Drives the connected wallet
- * through the on-chain ceremony using the SAME instruction builders the
- * integration suite proves against real mainnet binaries:
+ * Client-side launch orchestrator (no server). It does NOT hand-roll the
+ * ceremony: it builds the SAME `buildLaunchPlan` the integration suite proves
+ * end-to-end against the real mainnet binaries (launch-plan-selfservice), then
+ * signs + sends each group through the connected wallet. So what users launch
+ * is exactly the tested plan — F-3 fee-last, F-12 council-first, advance-derived
+ * custody (INV-7), Token-2022 retargeting (D-013), and the realm-squat guard.
  *
- *   1. create treasury (Squads multisig; createKey co-signs)
- *   2. collect launch fee (optional)
- *   3. create coin (pump create_v2; mint co-signs; creator = vault PDA, INV-1)
- *   4. create DAO (council? -> realm + governance; realm authority -> DAO)
- *   5. prefund the native treasury (execution rent headroom)
- *
- * pump v2 mints are Token-2022, which the deployed VSR rejects (D-013), so
- * the realm is built with NO voter-weight addin: vote weight == deposited
- * tokens 1:1. Ephemeral keypairs live only for the duration of the flow.
+ * pump v2 mints are Token-2022, which the deployed VSR rejects (D-013), so the
+ * realm is built with NO voter-weight addin: vote weight == deposited tokens
+ * 1:1. Ephemeral keypairs live only for the duration of the flow.
  */
 import {
   Connection,
   Keypair,
   PublicKey,
-  SystemProgram,
   Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
-import { MINT_SIZE, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
-import { deriveGovernanceChainFromMint } from "@daofun/sdk/pda";
-import {
-  buildCreateTreasuryIx,
-  deriveTreasuryPdas,
-  fetchProgramConfigTreasury,
-} from "@daofun/sdk/treasury";
-import { buildCreateDaoIxs } from "@daofun/sdk/governance";
+import { MINT_SIZE } from "@solana/spl-token";
+import { deriveTreasuryPdas, fetchProgramConfigTreasury } from "@daofun/sdk/treasury";
 import { PumpFunRail } from "@daofun/sdk/rails/pumpfun";
 import { TIER_FLOORS } from "@daofun/sdk/matrix";
+import {
+  buildLaunchPlan,
+  extraSignersFor,
+  type LaunchTxGroup,
+} from "@daofun/sdk/launch-plan";
 import type {
   GovernanceMode,
   GovernanceParams,
@@ -40,7 +35,18 @@ import type { WalletSender } from "./wallet-sender";
 
 /** pump.fun fixed supply: 1,000,000,000 tokens × 10^6 decimals. */
 const PUMP_TOTAL_SUPPLY = 1_000_000_000_000_000n;
-const PREFUND_LAMPORTS = 6_000_000;
+
+/** Friendly step labels for the progress UI, keyed by the plan group label. */
+const STEP_LABELS: Record<string, string> = {
+  "create-treasury": "Create treasury",
+  "create-token": "Create coin",
+  "create-dao:council": "Create council",
+  "create-dao:realm": "Create realm",
+  "create-dao:governance": "Create governance",
+  "create-dao:gate": "Initialize gate",
+  "prefund-treasury": "Prefund treasury",
+  "collect-launch-fee": "Collect launch fee",
+};
 
 export interface LaunchInput {
   mode: GovernanceMode;
@@ -93,63 +99,12 @@ export async function runLaunch(
     input.mode === "council" || input.mode === "guarded"
       ? Keypair.generate()
       : undefined;
-
-  const predicted = deriveGovernanceChainFromMint(mint.publicKey);
-  const { multisigPda, vaultPda } = deriveTreasuryPdas(createKey.publicKey);
+  const { vaultPda } = deriveTreasuryPdas(createKey.publicKey);
   const params = realParams(input);
-  const signatures: string[] = [];
 
-  async function send(
-    step: string,
-    ixs: TransactionInstruction[],
-    extraSigners: Keypair[],
-  ): Promise<void> {
-    onStep({ step, status: "running" });
-    try {
-      const tx = new Transaction().add(...ixs);
-      tx.feePayer = wallet;
-      tx.recentBlockhash = (
-        await connection.getLatestBlockhash("confirmed")
-      ).blockhash;
-      if (extraSigners.length) tx.partialSign(...extraSigners);
-      const sig = await sender.signAndSend(tx, connection);
-      await connection.confirmTransaction(sig, "confirmed");
-      signatures.push(sig);
-      onStep({ step, status: "done", signature: sig });
-    } catch (e) {
-      onStep({ step, status: "error", error: (e as Error).message });
-      throw e;
-    }
-  }
-
-  // 1. Squads treasury — createKey co-signs.
-  const programConfigTreasury = await fetchProgramConfigTreasury(connection);
-  const { ix: treasuryIx } = buildCreateTreasuryIx({
-    payer: wallet,
-    predictedNativeTreasury: predicted.nativeTreasury,
-    createKey: createKey.publicKey,
-    programConfigTreasury,
-  });
-  await send("Create treasury", [treasuryIx], [createKey]);
-
-  // 2. Launch fee (optional).
-  if (input.launchFee && input.launchFee.lamports > 0n) {
-    await send(
-      "Collect launch fee",
-      [
-        SystemProgram.transfer({
-          fromPubkey: wallet,
-          toPubkey: new PublicKey(input.launchFee.treasury),
-          lamports: Number(input.launchFee.lamports),
-        }),
-      ],
-      [],
-    );
-  }
-
-  // 3. pump create_v2 — mint co-signs; creator is the vault PDA (INV-1).
+  // The pump create_v2 instructions — creator MUST be the vault PDA (INV-1).
   const rail = new PumpFunRail(connection);
-  const tokenIxs = await rail.buildCreateTokenIxs(
+  const createTokenIxs = await rail.buildCreateTokenIxs(
     {
       metadata: input.metadata,
       launcher: wallet,
@@ -162,10 +117,8 @@ export async function runLaunch(
     vaultPda,
     mint,
   );
-  await send("Create coin", tokenIxs, [mint]);
 
-  // 4. DAO. Token-2022 mint -> no VSR addin (D-013).
-  const councilSetup =
+  const council =
     councilMint && input.council
       ? {
           mint: councilMint.publicKey,
@@ -176,66 +129,74 @@ export async function runLaunch(
           ),
         }
       : undefined;
-  const dao = await buildCreateDaoIxs({
+
+  const programConfigTreasury = await fetchProgramConfigTreasury(connection);
+  const plan = await buildLaunchPlan({
+    launcher: wallet,
     mint: mint.publicKey,
-    payer: wallet,
+    createKey: createKey.publicKey,
     mode: input.mode,
     params,
-    // pump create_v2 mints are Token-2022 (D-004): tell the builder so the
-    // realm/governance holding accounts target Token-2022 (D-013/F-1) — without
-    // this the realm-create tx fails on-chain for every pump mint.
-    communityTokenProgram: TOKEN_2022_PROGRAM_ID,
-    communityVoterWeightAddin: null,
-    ...(councilSetup ? { council: councilSetup } : {}),
+    createTokenIxs,
+    programConfigTreasury,
+    ...(council ? { council } : {}),
+    ...(input.launchFee && input.launchFee.lamports > 0n
+      ? {
+          protocolTreasury: new PublicKey(input.launchFee.treasury),
+          launchFeeLamports: input.launchFee.lamports,
+        }
+      : {}),
   });
-  if (dao.groups.council.length > 0) {
-    await send(
-      "Create council",
-      dao.groups.council,
-      councilMint ? [councilMint] : [],
-    );
-  }
-  // AUDIT-D: the multi-tx launch reveals the mint — and thus the deterministic
-  // realm PDA — before the realm exists. If someone squatted that address in
-  // the window, abort LOUDLY rather than letting create-realm fail cryptically
-  // (the structural close is the Stage-3 atomic launch-coordinator).
-  const squatter = await connection.getAccountInfo(predicted.realm);
-  if (squatter) {
-    const msg =
-      "A realm already exists at this DAO's derived address — possible front-run/squat. Restart with a fresh launch; do NOT continue funding this one.";
-    onStep({ step: "Create realm", status: "error", error: msg });
-    throw new Error(msg);
-  }
-  await send("Create realm", dao.groups.realmSetup, []);
-  await send("Create governance", dao.groups.governanceSetup, []);
 
-  // Guarded only: initialize the gate (it now holds realm authority) and seat
-  // its council tokens. Requires the proposal-gate program to be live on the
-  // cluster — guarded launches stay flag-gated until it is (D-034).
-  if (dao.groups.gateSetup.length > 0) {
-    await send("Initialize gate", dao.groups.gateSetup, []);
+  const keypairs = [mint, createKey, ...(councilMint ? [councilMint] : [])];
+  const signatures: string[] = [];
+
+  async function send(group: LaunchTxGroup): Promise<void> {
+    const step = STEP_LABELS[group.label] ?? group.label;
+    onStep({ step, status: "running" });
+    try {
+      const extra = extraSignersFor(group, keypairs);
+      const tx = new Transaction().add(...group.instructions);
+      tx.feePayer = wallet;
+      tx.recentBlockhash = (
+        await connection.getLatestBlockhash("confirmed")
+      ).blockhash;
+      if (extra.length) tx.partialSign(...extra);
+      const sig = await sender.signAndSend(tx, connection);
+      await connection.confirmTransaction(sig, "confirmed");
+      signatures.push(sig);
+      onStep({ step, status: "done", signature: sig });
+    } catch (e) {
+      onStep({ step, status: "error", error: (e as Error).message });
+      throw e;
+    }
   }
 
-  // 5. Prefund the native treasury for its first execution's rent (D-016).
-  await send(
-    "Prefund treasury",
-    [
-      SystemProgram.transfer({
-        fromPubkey: wallet,
-        toPubkey: predicted.nativeTreasury,
-        lamports: PREFUND_LAMPORTS,
-      }),
-    ],
-    [],
-  );
+  for (const group of plan.groups) {
+    // AUDIT-D: the multi-tx launch reveals the mint — and thus the deterministic
+    // realm PDA — before the realm exists. Abort LOUDLY if it was squatted in
+    // the window, rather than letting create-realm fail cryptically.
+    if (group.label === "create-dao:realm") {
+      const squatter = await connection.getAccountInfo(plan.treasury.realm);
+      if (squatter) {
+        const msg =
+          "A realm already exists at this DAO's derived address — possible front-run/squat. Restart with a fresh launch; do NOT continue funding this one.";
+        onStep({ step: STEP_LABELS[group.label]!, status: "error", error: msg });
+        throw new Error(msg);
+      }
+    }
+    const t: TransactionInstruction[] = group.instructions;
+    if (t.length === 0) continue;
+    await send(group);
+  }
 
   return {
     mint: mint.publicKey.toBase58(),
-    realm: predicted.realm.toBase58(),
-    governance: predicted.governance.toBase58(),
-    vault: vaultPda.toBase58(),
-    multisig: multisigPda.toBase58(),
-    nativeTreasury: predicted.nativeTreasury.toBase58(),
+    realm: plan.treasury.realm.toBase58(),
+    governance: plan.treasury.governance.toBase58(),
+    vault: plan.treasury.vaultPda.toBase58(),
+    multisig: plan.treasury.multisigPda.toBase58(),
+    nativeTreasury: plan.treasury.nativeTreasury.toBase58(),
     signatures,
   };
 }

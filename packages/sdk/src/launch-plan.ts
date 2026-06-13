@@ -79,10 +79,12 @@ export async function buildLaunchPlan(
   req: LaunchPlanRequest,
 ): Promise<LaunchPlan> {
   if (
-    req.mode === "council" &&
+    (req.mode === "council" || req.mode === "guarded") &&
     (!req.council || req.council.members.length === 0)
   ) {
-    throw new Error("council mode requires council.members and council.mint");
+    throw new Error(
+      `${req.mode} mode requires council.members and council.mint`,
+    );
   }
   if (req.createTokenIxs.length === 0) {
     throw new Error("buildLaunchPlan: createTokenIxs must be non-empty");
@@ -134,8 +136,12 @@ export async function buildLaunchPlan(
       extraSigners: [req.mint],
     },
   ];
-  // F-12: council mint FIRST — createRealm registers (validates) it.
-  if (req.mode === "council" && req.council) {
+  // F-12: council mint FIRST — createRealm registers (validates) it. Guarded
+  // seats a council too (the gate's H+1 + the human members).
+  if (
+    (req.mode === "council" || req.mode === "guarded") &&
+    req.council
+  ) {
     groups.push({
       label: "create-dao:council",
       instructions: dao.groups.council,
@@ -153,18 +159,28 @@ export async function buildLaunchPlan(
       instructions: dao.groups.governanceSetup,
       extraSigners: [],
     },
-    {
-      label: "prefund-treasury",
-      instructions: [
-        SystemProgram.transfer({
-          fromPubkey: req.launcher,
-          toPubkey: predicted.nativeTreasury,
-          lamports: prefund,
-        }),
-      ],
-      extraSigners: [],
-    },
   );
+  // Guarded only: initialize the gate (it now holds realm authority) + seat
+  // its council tokens. Runs after governance (the realm authority was just
+  // handed to the gate PDA). Empty group otherwise — omitted.
+  if (req.mode === "guarded" && dao.groups.gateSetup.length > 0) {
+    groups.push({
+      label: "create-dao:gate",
+      instructions: dao.groups.gateSetup,
+      extraSigners: [],
+    });
+  }
+  groups.push({
+    label: "prefund-treasury",
+    instructions: [
+      SystemProgram.transfer({
+        fromPubkey: req.launcher,
+        toPubkey: predicted.nativeTreasury,
+        lamports: prefund,
+      }),
+    ],
+    extraSigners: [],
+  });
   // F-3: charge the fee LAST, after the DAO + treasury exist, so a failed
   // launch never debits the launcher for an ungovernable token.
   if (fee > 0n) {

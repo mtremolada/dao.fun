@@ -85,6 +85,8 @@ export interface DaoDashboard {
   sweeps: SweepEntry[];
   /** Deposited governing tokens for the queried wallet (vote weight, D-013). */
   votePower: { wallet: string; depositedTokens: string } | null;
+  /** Community (governing) mint — what a holder deposits for vote power. */
+  communityMint?: string;
 }
 
 export interface ChainReader {
@@ -392,6 +394,7 @@ export class RpcChainReader implements ChainReader {
       vaultBalanceLamports,
       sweeps,
       votePower,
+      communityMint: realmAccount.communityMint.toBase58(),
     };
   }
 }
