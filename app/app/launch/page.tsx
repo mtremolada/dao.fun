@@ -1,23 +1,12 @@
-import { LaunchForm } from "../../components/launch-form";
-import type { GovernanceMode } from "@daofun/sdk/launch-form";
+import { Suspense } from "react";
+import { LaunchScreen } from "../../components/launch-screen";
 
-const SELECTABLE: GovernanceMode[] = ["council", "cypherpunk", "sovereign"];
-
-export default async function LaunchPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ mode?: string }>;
-}) {
-  const { mode } = await searchParams;
-  const selected = SELECTABLE.find((m) => m === mode) ?? "cypherpunk";
+// Static route; the mode is read client-side from ?mode= so it works on
+// static hosting with no server.
+export default function LaunchPage() {
   return (
-    <>
-      <h1>Launch — {selected}</h1>
-      <p className="muted">
-        Floors are enforced here for convenience; the server re-validates
-        with the same functions. Sub-floor values never launch.
-      </p>
-      <LaunchForm mode={selected} />
-    </>
+    <Suspense fallback={<p className="muted">Loading…</p>}>
+      <LaunchScreen />
+    </Suspense>
   );
 }

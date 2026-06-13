@@ -1,54 +1,78 @@
-import type { DaoDashboard } from "@daofun/backend";
+"use client";
 
-const API = process.env.API_URL ?? "http://127.0.0.1:4404";
+/**
+ * DAO dashboard — fully client-side (no server). Reads vault balance, sweep
+ * history, and lockup-weighted vote power from the user's RPC. Addresses
+ * come from the query string (?realm=&vault=&wallet=); the Squads vault is
+ * not derivable from the realm, so it must be supplied.
+ */
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { PublicKey } from "@solana/web3.js";
+import { getConnection } from "../lib/solana";
+import { getDashboard, type DaoDashboard } from "../lib/chain";
 
 function sol(lamports: number): string {
   const sign = lamports > 0 ? "+" : lamports < 0 ? "-" : "";
   return `${sign}${Math.abs(lamports) / 1e9}`;
 }
 
-/**
- * Dashboard — spec 6.7: vault balance, sweep history, lockup-weighted vote
- * power. All values come from the chain reader (/chain/dao/:realm); the
- * Squads vault is passed as ?vault= (it is not derivable from the realm —
- * it hangs off the multisig createKey) and ?wallet= selects whose vote
- * power to show.
- */
-export default async function DaoPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ realm: string }>;
-  searchParams: Promise<Record<string, string | undefined>>;
-}) {
-  const { realm } = await params;
-  const q = await searchParams;
+export function DaoScreen() {
+  const q = useSearchParams();
+  const realm = q.get("realm") ?? "";
+  const vault = q.get("vault") ?? "";
+  const wallet = q.get("wallet") ?? "";
 
-  if (!q.vault) {
+  const [dashboard, setDashboard] = useState<DaoDashboard | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (!realm || !vault) {
+        setLoaded(true);
+        return;
+      }
+      try {
+        const d = await getDashboard(getConnection(), new PublicKey(realm), {
+          vault: new PublicKey(vault),
+          ...(wallet ? { wallet: new PublicKey(wallet) } : {}),
+        });
+        if (!cancelled) {
+          if (d) setDashboard(d);
+          else setError("not found");
+        }
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      }
+      if (!cancelled) setLoaded(true);
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [realm, vault, wallet]);
+
+  if (!realm || !vault) {
     return (
       <>
         <h1>DAO dashboard</h1>
         <p className="errors" data-testid="dashboard-error">
-          Missing ?vault= — pass the DAO&apos;s Squads vault address.
+          Missing ?realm= and ?vault= — pass the realm and the DAO&apos;s
+          Squads vault address.
         </p>
       </>
     );
   }
 
-  let dashboard: DaoDashboard | null = null;
-  let error: string | null = null;
-  try {
-    const url = new URL(`${API}/chain/dao/${realm}`);
-    url.searchParams.set("vault", q.vault);
-    if (q.wallet) url.searchParams.set("wallet", q.wallet);
-    const res = await fetch(url, { cache: "no-store" });
-    if (res.ok) {
-      dashboard = (await res.json()) as DaoDashboard;
-    } else {
-      error = ((await res.json()) as { error?: string }).error ?? `HTTP ${res.status}`;
-    }
-  } catch (e) {
-    error = (e as Error).message;
+  if (!loaded) {
+    return (
+      <>
+        <h1>DAO dashboard</h1>
+        <p className="muted">Loading…</p>
+      </>
+    );
   }
 
   if (!dashboard) {
@@ -74,7 +98,9 @@ export default async function DaoPage({
       <h2>Vault balance</h2>
       <p data-testid="vault-balance">
         <strong>{dashboard.vaultBalanceLamports / 1e9} SOL</strong>{" "}
-        <span className="muted">({dashboard.vaultBalanceLamports} lamports)</span>
+        <span className="muted">
+          ({dashboard.vaultBalanceLamports} lamports)
+        </span>
       </p>
 
       <h2>Sweep history</h2>

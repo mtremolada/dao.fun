@@ -2,11 +2,9 @@
  * Minimal wallet-standard client (D-028). Implements the injected-wallet
  * discovery handshake and the two features the seam needs
  * ("standard:connect", "solana:signTransaction") directly against the
- * protocol — wallets exchange RAW transaction bytes, so no chain library
- * ever enters the client bundle. Phantom/Solflare/Backpack all register
- * through this same event protocol.
+ * protocol. Phantom/Solflare/Backpack all register through this same event
+ * protocol. The signing/sending adapter lives in wallet-sender.ts.
  */
-import type { SignerLike } from "./governance-actions";
 
 export interface WalletAccountLike {
   address: string;
@@ -21,13 +19,6 @@ interface ConnectFeature {
 
 interface DisconnectFeature {
   disconnect(): Promise<void>;
-}
-
-interface SignTransactionFeature {
-  signTransaction(input: {
-    transaction: Uint8Array;
-    account: WalletAccountLike;
-  }): Promise<readonly { signedTransaction: Uint8Array }[]>;
 }
 
 interface EventsFeature {
@@ -177,28 +168,4 @@ export function onWalletChange(
   } catch {
     return () => {};
   }
-}
-
-/** Adapts a connected wallet-standard wallet to the flow's SignerLike. */
-export function makeSigner(
-  wallet: StandardWalletLike,
-  account: WalletAccountLike,
-): SignerLike {
-  const feature = wallet.features["solana:signTransaction"] as
-    | SignTransactionFeature
-    | undefined;
-  if (!feature) {
-    throw new Error(`wallet "${wallet.name}" cannot sign transactions`);
-  }
-  return {
-    address: account.address,
-    async signTransaction(txBase64: string): Promise<string> {
-      const [out] = await feature.signTransaction({
-        transaction: base64ToBytes(txBase64),
-        account,
-      });
-      if (!out) throw new Error("wallet returned no signed transaction");
-      return bytesToBase64(out.signedTransaction);
-    },
-  };
 }

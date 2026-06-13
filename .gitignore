@@ -8,6 +8,7 @@ dist/
 *.keypair.json
 coverage/
 .next/
+out/
 *.tsbuildinfo
 test-results/
 playwright-report/

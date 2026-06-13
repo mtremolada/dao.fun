@@ -112,6 +112,8 @@ body {
 .wallet-modal {
   width: 100%;
   max-width: 24rem;
+  max-height: min(80vh, 40rem);
+  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;

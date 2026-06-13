@@ -18,16 +18,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { SignerLike } from "../lib/governance-actions";
 import {
   connectWallet,
   disconnectWallet,
-  makeSigner,
   onWalletChange,
   subscribeWallets,
   type StandardWalletLike,
   type WalletAccountLike,
 } from "../lib/wallet-standard";
+import { makeWalletSender, type WalletSender } from "../lib/wallet-sender";
 import {
   clearLastWalletName,
   loadLastWalletName,
@@ -41,8 +40,8 @@ export interface WalletContextValue {
   wallets: StandardWalletLike[];
   wallet: StandardWalletLike | null;
   account: WalletAccountLike | null;
-  /** Signer for the vote/deposit flows; null until connected. */
-  signer: SignerLike | null;
+  /** Sender for the vote/deposit flows (wallet signs + broadcasts); null until connected. */
+  sender: WalletSender | null;
   connecting: boolean;
   error: string | null;
   modalOpen: boolean;
@@ -67,7 +66,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallets, setWallets] = useState<StandardWalletLike[]>([]);
   const [wallet, setWallet] = useState<StandardWalletLike | null>(null);
   const [account, setAccount] = useState<WalletAccountLike | null>(null);
-  const [signer, setSigner] = useState<SignerLike | null>(null);
+  const [sender, setSender] = useState<WalletSender | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -80,7 +79,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     (w: StandardWalletLike, acc: WalletAccountLike) => {
       setWallet(w);
       setAccount(acc);
-      setSigner(makeSigner(w, acc));
+      setSender(makeWalletSender(w, acc));
       setError(null);
     },
     [],
@@ -89,7 +88,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const reset = useCallback(() => {
     setWallet(null);
     setAccount(null);
-    setSigner(null);
+    setSender(null);
   }, []);
 
   const connect = useCallback(
@@ -163,7 +162,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       wallets,
       wallet,
       account,
-      signer,
+      sender,
       connecting,
       error,
       modalOpen,
@@ -176,7 +175,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       wallets,
       wallet,
       account,
-      signer,
+      sender,
       connecting,
       error,
       modalOpen,

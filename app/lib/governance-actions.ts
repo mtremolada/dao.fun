@@ -1,20 +1,14 @@
 /**
- * Browser governance actions (D-028) — the client half of the
- * browser-signing seam. The backend builds UNSIGNED transactions and
- * submits SIGNED bytes; this module only moves base64 between the API
- * and the wallet, so the client bundle carries no chain deps at all.
- *
- * Pure state machine, injected fetch + signer — unit-tested offline.
+ * Browser governance flows — fully client-side, no server. Each flow builds
+ * the transaction in the browser (over the user's RPC), then hands it to the
+ * connected wallet to sign AND send through the wallet's own RPC. The
+ * builders are injectable so the state machine is unit-tested offline.
  */
+import { Connection, PublicKey, Transaction } from "@solana/web3.js";
+import type { WalletSender } from "./wallet-sender";
+import { buildCastVoteTx, buildDepositTx } from "./vote";
 
-export interface SignerLike {
-  /** base58 wallet address. */
-  address: string;
-  /** Signs a base64 unsigned tx, returns the base64 signed tx. */
-  signTransaction(txBase64: string): Promise<string>;
-}
-
-export type FlowPhase = "building" | "signing" | "submitting" | "done" | "error";
+export type FlowPhase = "building" | "sending" | "done" | "error";
 
 export interface FlowState {
   phase: FlowPhase;
@@ -22,56 +16,31 @@ export interface FlowState {
   error?: string;
 }
 
-interface FlowOpts {
-  signer: SignerLike;
-  fetchImpl?: typeof fetch;
-  apiBase?: string;
+export interface FlowOpts {
+  connection: Connection;
+  sender: WalletSender;
   onState?: (s: FlowState) => void;
+  /** Test seam: override the builder so the flow runs without an RPC. */
+  buildTx?: (connection: Connection, wallet: PublicKey) => Promise<Transaction>;
 }
 
-async function postJson(
-  fetchImpl: typeof fetch,
-  url: string,
-  body: unknown,
-): Promise<Record<string, unknown>> {
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = (await res.json()) as Record<string, unknown>;
-  if (!res.ok) {
-    throw new Error(String(payload["error"] ?? `HTTP ${res.status}`));
-  }
-  return payload;
-}
-
-/** build (unsigned tx from the API) -> sign (wallet) -> submit (API). */
 async function runFlow(
-  buildUrl: string,
-  buildBody: Record<string, unknown>,
+  defaultBuild: (connection: Connection, wallet: PublicKey) => Promise<Transaction>,
   opts: FlowOpts,
 ): Promise<FlowState> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const api = opts.apiBase ?? "/api";
   const step = (s: FlowState) => {
     opts.onState?.(s);
     return s;
   };
   try {
     step({ phase: "building" });
-    const built = await postJson(fetchImpl, `${api}${buildUrl}`, buildBody);
-    const txBase64 = String(built["txBase64"] ?? "");
-    if (!txBase64) throw new Error("API returned no transaction");
+    const wallet = new PublicKey(opts.sender.address);
+    const build = opts.buildTx ?? defaultBuild;
+    const tx = await build(opts.connection, wallet);
 
-    step({ phase: "signing" });
-    const signed = await opts.signer.signTransaction(txBase64);
-
-    step({ phase: "submitting" });
-    const submitted = await postJson(fetchImpl, `${api}/chain/txs/submit`, {
-      signedTxBase64: signed,
-    });
-    return step({ phase: "done", signature: String(submitted["signature"]) });
+    step({ phase: "sending" });
+    const signature = await opts.sender.signAndSend(tx, opts.connection);
+    return step({ phase: "done", signature });
   } catch (e) {
     return step({ phase: "error", error: (e as Error).message });
   }
@@ -81,25 +50,26 @@ export function castVoteFlow(
   p: { proposal: string; approve: boolean },
   opts: FlowOpts,
 ): Promise<FlowState> {
-  return runFlow(
-    "/chain/txs/cast-vote",
-    { proposal: p.proposal, wallet: opts.signer.address, approve: p.approve },
-    opts,
-  );
+  const proposal = (() => {
+    try {
+      return new PublicKey(p.proposal);
+    } catch {
+      return null;
+    }
+  })();
+  return runFlow((connection, wallet) => {
+    if (!proposal) throw new Error("invalid proposal address");
+    return buildCastVoteTx(connection, proposal, wallet, p.approve);
+  }, opts);
 }
 
 export function depositFlow(
   p: { realm: string; governingTokenMint: string; amount: string },
   opts: FlowOpts,
 ): Promise<FlowState> {
-  return runFlow(
-    "/chain/txs/deposit",
-    {
-      realm: p.realm,
-      governingTokenMint: p.governingTokenMint,
-      wallet: opts.signer.address,
-      amount: p.amount,
-    },
-    opts,
-  );
+  return runFlow((connection, wallet) => {
+    const realm = new PublicKey(p.realm);
+    const mint = new PublicKey(p.governingTokenMint);
+    return buildDepositTx(connection, realm, mint, wallet, BigInt(p.amount));
+  }, opts);
 }

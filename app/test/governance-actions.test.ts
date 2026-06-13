@@ -1,184 +1,115 @@
 /**
- * Browser-signing flow (D-028) — written before the component wiring.
- * The flow is build -> sign -> submit with injected fetch + signer; the
- * wallet-standard adapter moves raw bytes <-> base64. No chain deps.
+ * Client-side governance flow (serverless): build (in-browser) -> sign+send
+ * (wallet). The builder and the wallet sender are injected so the state
+ * machine is verified offline, with no RPC and no wallet extension.
  */
 import { describe, expect, it } from "vitest";
-import { castVoteFlow, depositFlow, type FlowState } from "../lib/governance-actions";
+import type { Connection, Transaction } from "@solana/web3.js";
 import {
-  base64ToBytes,
-  bytesToBase64,
-  connectWallet,
-  discoverWallets,
-  makeSigner,
-  type StandardWalletLike,
-} from "../lib/wallet-standard";
+  castVoteFlow,
+  depositFlow,
+  type FlowState,
+} from "../lib/governance-actions";
+import type { WalletSender } from "../lib/wallet-sender";
 
-const WALLET = "BrowserHo1der1111111111111111111111111111111";
+// valid base58 pubkeys so PublicKey() parsing succeeds
+const WALLET = "So11111111111111111111111111111111111111112";
+const PROPOSAL = "11111111111111111111111111111111";
+const REALM = "GRdkevbhSoJrnEtqadhvyuev81jSL99HYyhMCa3Tt8wR";
+const MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-function fakeFetch(
-  routes: Record<string, { status: number; body: unknown } | ((body: unknown) => { status: number; body: unknown })>,
-  calls: { url: string; body: unknown }[],
-): typeof fetch {
-  return (async (url: unknown, init?: { body?: unknown }) => {
-    const body = JSON.parse(String(init?.body));
-    calls.push({ url: String(url), body });
-    const route = routes[String(url)];
-    if (!route) return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
-    const r = typeof route === "function" ? route(body) : route;
-    return new Response(JSON.stringify(r.body), { status: r.status });
-  }) as unknown as typeof fetch;
+const fakeTx = { marker: "TX" } as unknown as Transaction;
+const conn = {} as unknown as Connection;
+
+function sender(
+  signAndSend: WalletSender["signAndSend"],
+): WalletSender {
+  return { address: WALLET, signAndSend };
 }
 
-const signer = {
-  address: WALLET,
-  async signTransaction(txBase64: string) {
-    return `signed:${txBase64}`;
-  },
-};
-
 describe("castVoteFlow", () => {
-  it("build -> sign -> submit; phases in order; payloads exact", async () => {
-    const calls: { url: string; body: unknown }[] = [];
+  it("build -> send -> done; phases in order; the built tx is what gets sent", async () => {
     const phases: string[] = [];
+    let sent: Transaction | null = null;
     const result = await castVoteFlow(
-      { proposal: "Prop111", approve: true },
+      { proposal: PROPOSAL, approve: true },
       {
-        signer,
-        fetchImpl: fakeFetch(
-          {
-            "/api/chain/txs/cast-vote": { status: 200, body: { txBase64: "dW5zaWduZWQ=" } },
-            "/api/chain/txs/submit": (body) => {
-              expect(body).toEqual({ signedTxBase64: "signed:dW5zaWduZWQ=" });
-              return { status: 200, body: { signature: "SIG42" } };
-            },
-          },
-          calls,
-        ),
+        connection: conn,
+        sender: sender(async (tx) => {
+          sent = tx;
+          return "SIG42";
+        }),
+        buildTx: async () => fakeTx,
         onState: (s: FlowState) => phases.push(s.phase),
       },
     );
     expect(result).toEqual({ phase: "done", signature: "SIG42" });
-    expect(phases).toEqual(["building", "signing", "submitting", "done"]);
-    expect(calls[0]!.body).toEqual({
-      proposal: "Prop111",
-      wallet: WALLET,
-      approve: true,
-    });
+    expect(phases).toEqual(["building", "sending", "done"]);
+    expect(sent).toBe(fakeTx);
   });
 
-  it("API build errors surface as error state with the server message", async () => {
+  it("a build failure surfaces as error; nothing is sent", async () => {
+    let sendCalls = 0;
     const result = await castVoteFlow(
-      { proposal: "P", approve: false },
+      { proposal: PROPOSAL, approve: false },
       {
-        signer,
-        fetchImpl: fakeFetch(
-          { "/api/chain/txs/cast-vote": { status: 400, body: { error: "bad proposal" } } },
-          [],
-        ),
+        connection: conn,
+        sender: sender(async () => {
+          sendCalls++;
+          return "nope";
+        }),
+        buildTx: async () => {
+          throw new Error("rpc down");
+        },
       },
     );
     expect(result.phase).toBe("error");
-    expect(result.error).toBe("bad proposal");
+    expect(result.error).toBe("rpc down");
+    expect(sendCalls).toBe(0);
   });
 
-  it("a wallet rejection surfaces as error, nothing is submitted", async () => {
-    const calls: { url: string; body: unknown }[] = [];
+  it("a wallet rejection surfaces as error", async () => {
     const result = await castVoteFlow(
-      { proposal: "P", approve: true },
+      { proposal: PROPOSAL, approve: true },
       {
-        signer: {
-          address: WALLET,
-          async signTransaction() {
-            throw new Error("user rejected");
-          },
-        },
-        fetchImpl: fakeFetch(
-          { "/api/chain/txs/cast-vote": { status: 200, body: { txBase64: "AA==" } } },
-          calls,
-        ),
+        connection: conn,
+        sender: sender(async () => {
+          throw new Error("user rejected");
+        }),
+        buildTx: async () => fakeTx,
       },
     );
     expect(result).toEqual({ phase: "error", error: "user rejected" });
-    expect(calls.map((c) => c.url)).toEqual(["/api/chain/txs/cast-vote"]);
+  });
+
+  it("an invalid proposal address errors during build, never sends", async () => {
+    let sendCalls = 0;
+    const result = await castVoteFlow(
+      { proposal: "not-a-pubkey", approve: true },
+      {
+        connection: conn,
+        sender: sender(async () => {
+          sendCalls++;
+          return "nope";
+        }),
+      },
+    );
+    expect(result.phase).toBe("error");
+    expect(result.error).toMatch(/invalid proposal/i);
+    expect(sendCalls).toBe(0);
   });
 });
 
 describe("depositFlow", () => {
-  it("posts the deposit request with the signer's wallet", async () => {
-    const calls: { url: string; body: unknown }[] = [];
+  it("builds then sends, returning the wallet signature", async () => {
     const result = await depositFlow(
-      { realm: "R", governingTokenMint: "M", amount: "5000" },
+      { realm: REALM, governingTokenMint: MINT, amount: "5000" },
       {
-        signer,
-        fetchImpl: fakeFetch(
-          {
-            "/api/chain/txs/deposit": {
-              status: 200,
-              body: { txBase64: "AA==", tokenOwnerRecord: "tor" },
-            },
-            "/api/chain/txs/submit": { status: 200, body: { signature: "S" } },
-          },
-          calls,
-        ),
+        connection: conn,
+        sender: sender(async () => "DEPOSIT_SIG"),
+        buildTx: async () => fakeTx,
       },
     );
-    expect(result.phase).toBe("done");
-    expect(calls[0]!.body).toEqual({
-      realm: "R",
-      governingTokenMint: "M",
-      wallet: WALLET,
-      amount: "5000",
-    });
-  });
-});
-
-describe("wallet-standard adapter", () => {
-  it("base64 helpers round-trip raw bytes", () => {
-    const bytes = new Uint8Array([0, 1, 2, 250, 255, 128, 7]);
-    expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes);
-  });
-
-  it("discovers wallets registered via app-ready and connects + signs raw bytes", async () => {
-    const account = { address: WALLET };
-    const wallet: StandardWalletLike = {
-      name: "FakeWallet",
-      accounts: [],
-      features: {
-        "standard:connect": {
-          connect: async () => ({ accounts: [account] }),
-        },
-        "solana:signTransaction": {
-          signTransaction: async (input: { transaction: Uint8Array }) => [
-            // "sign" = append a marker byte; proves raw bytes round-trip
-            { signedTransaction: new Uint8Array([...input.transaction, 99]) },
-          ],
-        },
-      },
-    };
-    // node has no window; an EventTarget carries the handshake exactly
-    (globalThis as Record<string, unknown>)["window"] = new EventTarget();
-    window.addEventListener("wallet-standard:app-ready", ((
-      e: CustomEvent<{ register: (...ws: StandardWalletLike[]) => void }>,
-    ) => {
-      e.detail.register(wallet);
-    }) as EventListener);
-
-    const found = discoverWallets();
-    expect(found.map((w) => w.name)).toContain("FakeWallet");
-    const connected = await connectWallet(found[0]!);
-    expect(connected.address).toBe(WALLET);
-    const s = makeSigner(found[0]!, connected);
-    const signed = await s.signTransaction(bytesToBase64(new Uint8Array([1, 2])));
-    expect(base64ToBytes(signed)).toEqual(new Uint8Array([1, 2, 99]));
-  });
-
-  it("a wallet without the sign feature is refused at adapter construction", () => {
-    expect(() =>
-      makeSigner(
-        { name: "ReadOnly", accounts: [], features: {} },
-        { address: WALLET },
-      ),
-    ).toThrow(/cannot sign/);
+    expect(result).toEqual({ phase: "done", signature: "DEPOSIT_SIG" });
   });
 });

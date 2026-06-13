@@ -1,9 +1,8 @@
 /**
- * Spec 6.7 e2e (written before the shell): mode selection + launch form
- * through the real UI against the real backend handler (stub steps).
- * Covers: guarded unselectable, sovereign double-confirm, sub-floor
- * override rejection, stricter-than-floor acceptance, full launch round
- * trip rendering the completed state.
+ * Mode selection + launch form through the real UI (serverless). Covers:
+ * guarded unselectable, sovereign double-confirm, sub-floor override
+ * rejection, stricter-than-floor acceptance, and resolving the on-chain plan
+ * client-side (no backend).
  */
 import { expect, test } from "@playwright/test";
 
@@ -40,7 +39,7 @@ test("sovereign requires BOTH confirmations before launch enables", async ({
   await expect(submit).toBeEnabled();
 });
 
-test("sub-floor override rejected with the floor error; stricter accepted; launch completes", async ({
+test("sub-floor override rejected with the floor error; stricter accepted; plan resolves", async ({
   page,
 }) => {
   await page.goto("/launch?mode=cypherpunk");
@@ -62,6 +61,7 @@ test("sub-floor override rejected with the floor error; stricter accepted; launc
 
   await submit.click();
   const result = page.getByTestId("launch-result");
-  await expect(result).toContainText(/complete/i);
-  await expect(result).toContainText("stub-sig-create-dao");
+  await expect(result).toContainText(/cypherpunk/i);
+  await expect(result).toContainText("holdUpSeconds");
+  await expect(result).toContainText(String(100 * 3600));
 });
