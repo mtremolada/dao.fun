@@ -7,7 +7,7 @@
  * IDL (src/idl/vsr.json, from @blockworks-foundation/voter-stake-registry-
  * client@0.2.3). See DECISIONS.md D-010.
  */
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha256";
 import {
   PublicKey,
   SYSVAR_INSTRUCTIONS_PUBKEY,
@@ -23,8 +23,11 @@ import {
 import { SPL_GOVERNANCE_PROGRAM_ID, VSR_PROGRAM_ID } from "./constants";
 import { deriveVsrRegistrar } from "./pda";
 
+// Browser+node-safe sha256 (was node:crypto, which webpack can't bundle for
+// the static client build). Anchor discriminator = sha256("global:<ix>")[:8].
 function anchorDiscriminator(ixName: string): Buffer {
-  return createHash("sha256").update(`global:${ixName}`).digest().subarray(0, 8);
+  const digest = sha256(new TextEncoder().encode(`global:${ixName}`));
+  return Buffer.from(digest.subarray(0, 8));
 }
 
 /** VSR scaled factors use 1e9 as 1.0 (per VSR source). */

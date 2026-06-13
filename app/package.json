@@ -22,7 +22,9 @@
     "bs58": "6.0.0",
     "next": "^15.5.19",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "@pump-fun/pump-sdk": "1.36.0",
+    "@sqds/multisig": "2.1.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

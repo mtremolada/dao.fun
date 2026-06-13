@@ -13,6 +13,38 @@
     "./launch-form": {
       "types": "./src/launch-form.ts",
       "default": "./src/launch-form.ts"
+    },
+    "./matrix": {
+      "types": "./src/matrix.ts",
+      "default": "./src/matrix.ts"
+    },
+    "./pda": {
+      "types": "./src/pda.ts",
+      "default": "./src/pda.ts"
+    },
+    "./constants": {
+      "types": "./src/constants.ts",
+      "default": "./src/constants.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
+    "./vsr": {
+      "types": "./src/vsr.ts",
+      "default": "./src/vsr.ts"
+    },
+    "./treasury": {
+      "types": "./src/treasury.ts",
+      "default": "./src/treasury.ts"
+    },
+    "./governance": {
+      "types": "./src/governance.ts",
+      "default": "./src/governance.ts"
+    },
+    "./rails/pumpfun": {
+      "types": "./src/rails/pumpfun.ts",
+      "default": "./src/rails/pumpfun.ts"
     }
   },
   "scripts": {
@@ -28,7 +60,8 @@
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",
     "@sqds/multisig": "2.1.4",
-    "bn.js": "5.2.3"
+    "bn.js": "5.2.3",
+    "@noble/hashes": "1.8.0"
   },
   "devDependencies": {
     "@types/bn.js": "^5.1.6",
