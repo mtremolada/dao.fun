@@ -34,4 +34,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Build workspace packages first: the integration tests (and the backend
+      # they import) resolve the `@daofun/sdk` barrel from dist/, so without this
+      # collection fails with "Failed to resolve entry for package @daofun/sdk".
+      - run: pnpm -r run build
       - run: pnpm test:integration
