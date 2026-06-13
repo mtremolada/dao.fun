@@ -75,10 +75,10 @@ export interface InstallOption {
 }
 
 /**
- * The browser (wallet-standard) wallets we support for now. Detected wallets
- * are filtered to this allowlist; Ledger is handled separately as hardware.
+ * The wallet(s) we support for now — Phantom only. Detected wallets are
+ * filtered to this allowlist.
  */
-export const ALLOWED_WALLET_NAMES = ["Phantom", "Solflare"] as const;
+export const ALLOWED_WALLET_NAMES = ["Phantom"] as const;
 
 /** Detected wallet-standard wallets, restricted to the allowlist. */
 export function allowedDetected(
@@ -90,10 +90,9 @@ export function allowedDetected(
   return wallets.filter((w) => allow.has(w.name.toLowerCase()));
 }
 
-/** Install links for the supported browser wallets. */
+/** Install links for the supported wallet(s). */
 export const KNOWN_WALLETS: readonly InstallOption[] = [
   { name: "Phantom", url: "https://phantom.app/download" },
-  { name: "Solflare", url: "https://solflare.com/download" },
 ];
 
 /** Supported browser wallets that are NOT already detected (case-insensitive). */

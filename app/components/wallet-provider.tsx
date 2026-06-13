@@ -27,6 +27,7 @@ import {
   type WalletAccountLike,
 } from "../lib/wallet-standard";
 import { makeWalletSender, type WalletSender } from "../lib/wallet-sender";
+import { connectInjected, injectedProvider } from "../lib/injected";
 import {
   allowedDetected,
   clearLastWalletName,
@@ -89,6 +90,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [modalOpen, setModalOpen] = useState(false);
   const eagerTried = useRef(false);
   const ledgerRef = useRef<{ disconnect: () => Promise<void> } | null>(null);
+  const injectedRef = useRef<{ disconnect?: () => Promise<void> } | null>(null);
 
   // Live wallet-standard discovery, restricted to the supported wallets.
   useEffect(
@@ -116,18 +118,33 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const connect = useCallback(
     async (walletName: string) => {
-      const w = wallets.find((x) => x.name === walletName);
-      if (!w) {
-        setError(`wallet "${walletName}" is not available`);
-        return;
-      }
+      const stdWallet = wallets.find((x) => x.name === walletName);
       setConnecting(true);
       setError(null);
       try {
-        const acc = await connectWallet(w);
-        applyConnection(w, acc);
-        saveLastWalletName(w.name);
-        setModalOpen(false);
+        // Prefer the wallet's injected provider (most reliable; avoids the
+        // wallet-standard -32603 "Unexpected error" some setups hit). Fall
+        // back to the wallet-standard connect if there's no injected provider.
+        if (injectedProvider(walletName)) {
+          const { address, sender: s, provider } = await connectInjected(
+            walletName,
+          );
+          injectedRef.current = provider;
+          setWallet(stdWallet ?? null); // keep the icon if we have it
+          setAccount({ address });
+          setConnectedName(walletName);
+          setSender(s);
+          setError(null);
+          saveLastWalletName(walletName);
+          setModalOpen(false);
+        } else if (stdWallet) {
+          const acc = await connectWallet(stdWallet);
+          applyConnection(stdWallet, acc);
+          saveLastWalletName(stdWallet.name);
+          setModalOpen(false);
+        } else {
+          setError(`${walletName} is not installed.`);
+        }
       } catch (e) {
         console.error("wallet connect failed", e);
         setError(describeError(e, walletName));
@@ -162,7 +179,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const disconnect = useCallback(async () => {
-    if (wallet) await disconnectWallet(wallet);
+    if (injectedRef.current?.disconnect) {
+      try {
+        await injectedRef.current.disconnect();
+      } catch {
+        /* provider already disconnected */
+      }
+      injectedRef.current = null;
+    } else if (wallet) {
+      await disconnectWallet(wallet);
+    }
     if (ledgerRef.current) {
       try {
         await ledgerRef.current.disconnect();
@@ -186,8 +212,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     eagerTried.current = true;
     void (async () => {
       try {
-        const acc = await connectWallet(target, { silent: true });
-        applyConnection(target, acc);
+        if (injectedProvider(target.name)) {
+          const { address, sender: s, provider } = await connectInjected(
+            target.name,
+            { silent: true },
+          );
+          injectedRef.current = provider;
+          setWallet(target);
+          setAccount({ address });
+          setConnectedName(target.name);
+          setSender(s);
+        } else {
+          const acc = await connectWallet(target, { silent: true });
+          applyConnection(target, acc);
+        }
       } catch {
         clearLastWalletName();
       }
