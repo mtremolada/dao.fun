@@ -109,6 +109,19 @@ describe("POST /launches", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("an oversized body is rejected with 413, never buffered", async () => {
+    const { base } = await startApi();
+    // ~300 KiB of JSON — past the 256 KiB cap. content-length is set by
+    // fetch, so the server short-circuits before reading the stream.
+    const huge = "a".repeat(300 * 1024);
+    const res = await fetch(`${base}/launches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ launchId: huge, form: validForm }),
+    });
+    expect(res.status).toBe(413);
+  });
 });
 
 describe("GET /launches/:id and /artifacts/:proposal/:hash", () => {

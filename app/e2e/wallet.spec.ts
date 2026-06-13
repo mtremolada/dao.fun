@@ -52,12 +52,19 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
-test("connect a wallet-standard wallet and vote yes; the signed bytes round-trip", async ({
+test("connect via the universal top-right modal and vote yes; the signed bytes round-trip", async ({
   page,
 }) => {
   await page.goto(`/proposal/${PROPOSAL}`);
 
+  // The persistent top-right control opens the provider modal; the detected
+  // wallet is selected from the list (just like any dapp connect popup).
   await page.getByTestId("connect-wallet").click();
+  await expect(page.getByTestId("wallet-modal")).toBeVisible();
+  await page.getByTestId("wallet-option-e2e-fake-wallet").click();
+
+  // Header reflects the connection (truncated), the vote panel the full key.
+  await expect(page.getByTestId("wallet-button-address")).toBeVisible();
   await expect(page.getByTestId("wallet-address")).toContainText(
     WALLET_ADDRESS,
   );
@@ -73,7 +80,22 @@ test("connect a wallet-standard wallet and vote yes; the signed bytes round-trip
   );
 });
 
-test("without a wallet installed, connect explains instead of crashing", async ({
+test("the connection persists across a reload (stays connected)", async ({
+  page,
+}) => {
+  await page.goto(`/proposal/${PROPOSAL}`);
+  await page.getByTestId("connect-wallet").click();
+  await page.getByTestId("wallet-option-e2e-fake-wallet").click();
+  await expect(page.getByTestId("wallet-button-address")).toBeVisible();
+
+  await page.reload();
+
+  // No reconnect click: the last wallet is restored silently on load.
+  await expect(page.getByTestId("wallet-button-address")).toContainText("GRdk");
+  await expect(page.getByTestId("connect-wallet")).toHaveCount(0);
+});
+
+test("with no wallet installed, the modal lists install options instead of crashing", async ({
   browser,
 }) => {
   // a fresh context WITHOUT the init script: no wallet registered
@@ -81,8 +103,8 @@ test("without a wallet installed, connect explains instead of crashing", async (
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:3210/proposal/${PROPOSAL}`);
   await page.getByTestId("connect-wallet").click();
-  await expect(page.getByTestId("connect-error")).toContainText(
-    "No wallet found",
-  );
+  await expect(page.getByTestId("no-wallets")).toContainText(/no .*wallet/i);
+  // and a way forward: at least one curated install link is offered.
+  await expect(page.getByTestId("wallet-install-phantom")).toBeVisible();
   await context.close();
 });
