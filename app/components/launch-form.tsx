@@ -15,6 +15,7 @@ import {
 } from "@daofun/sdk/launch-form";
 import { getConnection } from "../lib/solana";
 import { runLaunch, type LaunchResult, type LaunchStepState } from "../lib/launch";
+import { prepareImage, uploadPumpMetadata } from "../lib/pump-metadata";
 import { useWallet } from "./wallet-provider";
 
 const TIERS: MarketCapTier[] = ["micro", "small", "mid", "large"];
@@ -38,7 +39,10 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   // token metadata
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
-  const [uri, setUri] = useState("");
+  const [description, setDescription] = useState("");
+  const [image, setImage] = useState<File | null>(null);
+  const [imageUrl, setImageUrl] = useState("");
+  const [uri, setUri] = useState(""); // advanced: pre-hosted metadata URI
   const [devBuy, setDevBuy] = useState("");
 
   const [steps, setSteps] = useState<LaunchStepState[]>([]);
@@ -81,7 +85,17 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
 
   const validated = useMemo(() => validateLaunchForm(form), [form]);
   const metadataReady =
-    name.trim() !== "" && symbol.trim() !== "" && uri.trim() !== "";
+    name.trim() !== "" &&
+    symbol.trim() !== "" &&
+    (image !== null || uri.trim() !== "");
+
+  function onPickImage(file: File | null) {
+    setImage(file);
+    setImageUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : "";
+    });
+  }
 
   function confirm(key: keyof LaunchFormInput["confirmations"]) {
     return (
@@ -100,7 +114,9 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     setLaunchError(null);
     if (!validated.ok || !validated.params) return;
     if (!metadataReady) {
-      setLaunchError("Enter the coin name, symbol, and metadata URI.");
+      setLaunchError(
+        "Add a name, symbol, and an image (or paste a metadata URI under Advanced).",
+      );
       return;
     }
     if (!sender) {
@@ -110,6 +126,19 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     setLaunching(true);
     setSteps([]);
     try {
+      // Resolve the metadata URI: use a pasted one, else upload the image.
+      let metadataUri = uri.trim();
+      if (!metadataUri && image) {
+        setSteps([{ step: "Upload image & metadata", status: "running" }]);
+        const blob = await prepareImage(image);
+        metadataUri = await uploadPumpMetadata({
+          image: blob,
+          name: name.trim(),
+          symbol: symbol.trim(),
+          description: description.trim(),
+        });
+        setSteps([{ step: "Upload image & metadata", status: "done" }]);
+      }
       const res = await runLaunch(
         getConnection(),
         sender,
@@ -117,7 +146,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           mode,
           tier,
           params: validated.params,
-          metadata: { name: name.trim(), symbol: symbol.trim(), uri: uri.trim() },
+          metadata: { name: name.trim(), symbol: symbol.trim(), uri: metadataUri },
           ...(devBuy !== "" && Number(devBuy) > 0
             ? { devBuyLamports: BigInt(Math.floor(Number(devBuy) * 1e9)) }
             : {}),
@@ -198,17 +227,41 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         value={symbol}
         onChange={(e) => setSymbol(e.target.value)}
       />
-      <label htmlFor="coin-uri">
-        Metadata URI (JSON with name/symbol/image — e.g. from pump.fun or your
-        own host)
+
+      <label htmlFor="coin-image">
+        Image (any image — it&apos;s auto-cropped to a square and uploaded)
       </label>
       <input
-        id="coin-uri"
-        data-testid="coin-uri"
-        type="text"
-        value={uri}
-        onChange={(e) => setUri(e.target.value)}
+        id="coin-image"
+        data-testid="coin-image"
+        type="file"
+        accept="image/*"
+        onChange={(e) => onPickImage(e.target.files?.[0] ?? null)}
       />
+      {imageUrl && (
+        <img
+          src={imageUrl}
+          alt="preview"
+          width={96}
+          height={96}
+          style={{
+            objectFit: "cover",
+            borderRadius: 12,
+            border: "1px solid var(--border)",
+            marginTop: "0.5rem",
+          }}
+        />
+      )}
+
+      <label htmlFor="coin-desc">Description (optional)</label>
+      <textarea
+        id="coin-desc"
+        data-testid="coin-desc"
+        rows={2}
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+      />
+
       <label htmlFor="dev-buy">Optional dev-buy at launch (SOL)</label>
       <input
         id="dev-buy"
@@ -324,6 +377,20 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           </div>
         </>
       )}
+
+      <details>
+        <summary className="muted">Advanced: paste a metadata URI</summary>
+        <label htmlFor="coin-uri">
+          Pre-hosted metadata JSON URI (overrides the image upload)
+        </label>
+        <input
+          id="coin-uri"
+          data-testid="coin-uri"
+          type="text"
+          value={uri}
+          onChange={(e) => setUri(e.target.value)}
+        />
+      </details>
 
       {validated.errors.length > 0 && (
         <ul className="errors" data-testid="form-errors">
