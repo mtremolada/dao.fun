@@ -146,6 +146,17 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [uri, setUri] = useState(""); // advanced: pre-hosted metadata URI
   const [devBuy, setDevBuy] = useState("");
 
+  // DEX-paid bounty (enhanced listing, D-036) — opt-in, set pre-launch.
+  const [elEnabled, setElEnabled] = useState(false);
+  const [elFeeCap, setElFeeCap] = useState("");
+  const [elDescription, setElDescription] = useState("");
+  const [elBanner, setElBanner] = useState<File | null>(null);
+  const [elBannerUrl, setElBannerUrl] = useState("");
+  const [elTwitter, setElTwitter] = useState("");
+  const [elTelegram, setElTelegram] = useState("");
+  const [elWebsite, setElWebsite] = useState("");
+  const [elDiscord, setElDiscord] = useState("");
+
   const [steps, setSteps] = useState<LaunchStepState[]>([]);
   const [launching, setLaunching] = useState(false);
   const [result, setResult] = useState<LaunchResult | null>(null);
@@ -177,6 +188,20 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
       ...(mode !== "sovereign"
         ? { overrides: { holdUpSeconds: effHoldUp, quorumPercent: effQuorum } }
         : {}),
+      ...(elEnabled
+        ? {
+            enhancedListing: {
+              enabled: true,
+              feeCapSol: elFeeCap,
+              description: elDescription,
+              bannerProvided: elBanner !== null,
+              ...(elTwitter.trim() ? { twitter: elTwitter.trim() } : {}),
+              ...(elTelegram.trim() ? { telegram: elTelegram.trim() } : {}),
+              ...(elWebsite.trim() ? { website: elWebsite.trim() } : {}),
+              ...(elDiscord.trim() ? { discord: elDiscord.trim() } : {}),
+            },
+          }
+        : {}),
       confirmations,
     };
   }, [
@@ -187,6 +212,14 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     effHoldUp,
     effQuorum,
     effSovereign,
+    elEnabled,
+    elFeeCap,
+    elDescription,
+    elBanner,
+    elTwitter,
+    elTelegram,
+    elWebsite,
+    elDiscord,
     confirmations,
   ]);
 
@@ -202,6 +235,14 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   function onPickImage(file: File | null) {
     setImage(file);
     setImageUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : "";
+    });
+  }
+
+  function onPickBanner(file: File | null) {
+    setElBanner(file);
+    setElBannerUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return file ? URL.createObjectURL(file) : "";
     });
@@ -249,6 +290,38 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         });
         setSteps([{ step: "Upload image & metadata", status: "done" }]);
       }
+
+      // DEX-paid bounty: upload the banner (kept full-bleed, not square-cropped)
+      // and commit to its IPFS URI + the listing content. No SOL moves now.
+      let enhancedListing:
+        | NonNullable<Parameters<typeof runLaunch>[2]["enhancedListing"]>
+        | undefined;
+      if (elEnabled && elBanner) {
+        const label = "Upload listing banner";
+        setSteps((prev) => [...prev, { step: label, status: "running" }]);
+        const bannerCid = await uploadPumpMetadata({
+          image: elBanner,
+          name: `${symbol.trim()} listing banner`,
+          symbol: symbol.trim(),
+          description: elDescription.trim(),
+        });
+        setSteps((prev) => [
+          ...prev.filter((p) => p.step !== label),
+          { step: label, status: "done" },
+        ]);
+        enhancedListing = {
+          feeCapLamports: BigInt(Math.floor(Number(elFeeCap) * 1e9)),
+          content: {
+            bannerCid,
+            description: elDescription.trim(),
+            ...(elTwitter.trim() ? { twitter: elTwitter.trim() } : {}),
+            ...(elTelegram.trim() ? { telegram: elTelegram.trim() } : {}),
+            ...(elWebsite.trim() ? { website: elWebsite.trim() } : {}),
+            ...(elDiscord.trim() ? { discord: elDiscord.trim() } : {}),
+          },
+        };
+      }
+
       const res = await runLaunch(
         getConnection(),
         sender,
@@ -257,6 +330,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           tier,
           params: validated.params,
           metadata: { name: name.trim(), symbol: symbol.trim(), uri: metadataUri },
+          ...(enhancedListing ? { enhancedListing } : {}),
           ...(devBuy !== "" && Number(devBuy) > 0
             ? { devBuyLamports: BigInt(Math.floor(Number(devBuy) * 1e9)) }
             : {}),
@@ -301,6 +375,25 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           <CopyAddr label="Multisig" value={result.multisig} />
           <CopyAddr label="Native treasury" value={result.nativeTreasury} />
         </div>
+        {result.enhancedListing && (
+          <div className="summary-card" data-testid="launch-bounty">
+            <div className="row">
+              <span>DEX-paid bounty</span>
+              <span>
+                cap {Number(result.enhancedListing.feeCapLamports) / 1e9} SOL
+              </span>
+            </div>
+            <CopyAddr
+              label="Listing commitment"
+              value={result.enhancedListing.contentCommitment}
+            />
+            <p className="muted">
+              Committed at launch. When someone pays for the DexScreener
+              listing, they claim a capped reimbursement against this commitment
+              via a DAO vote.
+            </p>
+          </div>
+        )}
         <div className="actions-row">
           <Link
             className="button"
@@ -518,6 +611,92 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
               itself the moment a vote passes.
             </span>
           </div>
+        </>
+      )}
+
+      <h2>DEX-paid bounty (optional)</h2>
+      <div className="confirm">
+        <input
+          type="checkbox"
+          data-testid="enhanced-listing-toggle"
+          checked={elEnabled}
+          onChange={(e) => setElEnabled(e.target.checked)}
+        />
+        <span>
+          Set a <b>DEX-paid bounty</b> now: commit to a DexScreener Enhanced
+          Token Info listing (banner + socials). <b>No SOL moves at launch</b> —
+          whoever later pays for the listing is reimbursed by a DAO vote, capped
+          at the amount you set here.
+        </span>
+      </div>
+      {elEnabled && (
+        <>
+          <label htmlFor="el-fee-cap">Reimbursement cap (SOL)</label>
+          <input
+            id="el-fee-cap"
+            data-testid="el-fee-cap"
+            type="number"
+            min={0}
+            step="0.01"
+            value={elFeeCap}
+            onChange={(e) => setElFeeCap(e.target.value)}
+          />
+          <label htmlFor="el-banner">Listing banner image</label>
+          <input
+            id="el-banner"
+            data-testid="el-banner"
+            type="file"
+            accept="image/*"
+            onChange={(e) => onPickBanner(e.target.files?.[0] ?? null)}
+          />
+          {elBannerUrl && (
+            <img
+              className="img-preview"
+              src={elBannerUrl}
+              alt="banner preview"
+              style={{ width: "100%", height: "auto", maxHeight: 140 }}
+            />
+          )}
+          <label htmlFor="el-desc">Listing description</label>
+          <textarea
+            id="el-desc"
+            data-testid="el-desc"
+            rows={2}
+            value={elDescription}
+            onChange={(e) => setElDescription(e.target.value)}
+          />
+          <label htmlFor="el-twitter">Twitter / X (optional)</label>
+          <input
+            id="el-twitter"
+            data-testid="el-twitter"
+            type="text"
+            value={elTwitter}
+            onChange={(e) => setElTwitter(e.target.value)}
+          />
+          <label htmlFor="el-telegram">Telegram (optional)</label>
+          <input
+            id="el-telegram"
+            data-testid="el-telegram"
+            type="text"
+            value={elTelegram}
+            onChange={(e) => setElTelegram(e.target.value)}
+          />
+          <label htmlFor="el-website">Website (optional)</label>
+          <input
+            id="el-website"
+            data-testid="el-website"
+            type="text"
+            value={elWebsite}
+            onChange={(e) => setElWebsite(e.target.value)}
+          />
+          <label htmlFor="el-discord">Discord (optional)</label>
+          <input
+            id="el-discord"
+            data-testid="el-discord"
+            type="text"
+            value={elDiscord}
+            onChange={(e) => setElDiscord(e.target.value)}
+          />
         </>
       )}
 

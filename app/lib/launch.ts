@@ -26,6 +26,10 @@ import {
   extraSignersFor,
   type LaunchTxGroup,
 } from "@daofun/sdk/launch-plan";
+import {
+  computeContentCommitment,
+  type EnhancedListingContent,
+} from "@daofun/sdk/enhanced-listing";
 import type {
   GovernanceMode,
   GovernanceParams,
@@ -56,6 +60,14 @@ export interface LaunchInput {
   devBuyLamports?: bigint;
   council?: { members: string[]; vetoThresholdPercent: number };
   launchFee?: { treasury: string; lamports: bigint };
+  /**
+   * Opt-in DEX-paid bounty (enhanced listing, D-036), set pre-launch. NO funds
+   * move at launch: the DAO just COMMITS to the listing content (hashed here) and
+   * a reimbursement ceiling. A community member later pays DEX Screener and is
+   * reimbursed by a capped DAO vote (INV-12). Purely additive — it does not
+   * touch the on-chain launch plan.
+   */
+  enhancedListing?: { feeCapLamports: bigint; content: EnhancedListingContent };
 }
 
 export interface LaunchStepState {
@@ -73,6 +85,12 @@ export interface LaunchResult {
   multisig: string;
   nativeTreasury: string;
   signatures: string[];
+  /**
+   * Present iff the launch set a DEX-paid bounty (D-036). The commitment +
+   * cap are what the later reimbursement claim/vote is checked against;
+   * feeCapLamports is a decimal string so the result stays JSON-serializable.
+   */
+  enhancedListing?: { contentCommitment: string; feeCapLamports: string };
 }
 
 /** Real-supply proposal threshold (the form preview uses a placeholder supply). */
@@ -198,5 +216,15 @@ export async function runLaunch(
     multisig: plan.treasury.multisigPda.toBase58(),
     nativeTreasury: plan.treasury.nativeTreasury.toBase58(),
     signatures,
+    ...(input.enhancedListing
+      ? {
+          enhancedListing: {
+            contentCommitment: computeContentCommitment(
+              input.enhancedListing.content,
+            ),
+            feeCapLamports: input.enhancedListing.feeCapLamports.toString(),
+          },
+        }
+      : {}),
   };
 }

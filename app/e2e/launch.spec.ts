@@ -41,6 +41,29 @@ test("sovereign requires BOTH confirmations before launch enables", async ({
   await expect(submit).toBeEnabled();
 });
 
+test("DEX-paid bounty is opt-in pre-launch: the checkbox reveals the fields and gates the launch until they're complete", async ({
+  page,
+}) => {
+  await page.goto("/launch?mode=cypherpunk");
+  const submit = page.getByTestId("launch-submit");
+  await page.getByTestId("confirm-noVetoIrreversible").check();
+  await expect(submit).toBeEnabled();
+
+  // fields hidden until opted in
+  await expect(page.getByTestId("el-fee-cap")).toBeHidden();
+
+  // opting in reveals the fields and, while incomplete, blocks the launch
+  await page.getByTestId("enhanced-listing-toggle").check();
+  await expect(page.getByTestId("el-fee-cap")).toBeVisible();
+  await expect(submit).toBeDisabled();
+  await expect(page.getByTestId("form-errors")).toContainText(/banner/i);
+
+  // unchecking it clears the requirement again (bounty is optional)
+  await page.getByTestId("enhanced-listing-toggle").uncheck();
+  await expect(page.getByTestId("el-fee-cap")).toBeHidden();
+  await expect(submit).toBeEnabled();
+});
+
 test("hold-up slider is floored at the tier minimum (sub-floor is unreachable); stricter values resolve", async ({
   page,
 }) => {
