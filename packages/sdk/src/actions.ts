@@ -105,8 +105,6 @@ export interface EnhancedListingReimbursementParams {
   doer: PublicKey;
   /** USDC base units (6dp) the doer provably paid DEX Screener (the verified outflow). */
   usdcAmount: bigint;
-  /** Vault's USDC-ATA balance at build time (re-checked by simulation, 12.3). */
-  vaultUsdcBalance: bigint;
   /** Override the USDC mint (tests); defaults to canonical mainnet USDC. */
   usdcMint?: PublicKey;
   /** Override the protocol over-payment ceiling (tests); defaults to the known list price. */
@@ -122,9 +120,16 @@ export interface EnhancedListingReimbursementParams {
  *
  * No per-launch cap: Enhanced Token Info is a fixed-price product, so the
  * launcher never defines a ceiling. The on-chain over-payment guard is the
- * KNOWN-COST protocol ceiling (MAX_LISTING_REIMBURSEMENT_USDC) — it replaces
- * the old per-DAO INV-12 cap while keeping the treasury protected from an
- * inflated claim. The exact amount is the doer's verified on-chain payment.
+ * KNOWN-COST protocol ceiling (MAX_LISTING_REIMBURSEMENT_USDC). The exact
+ * amount is the doer's verified on-chain payment.
+ *
+ * Deliberately NO build-time balance gate: the vote must be able to pass BEFORE
+ * the treasury holds the USDC (the `approved-awaiting-funds` lifecycle). The
+ * "yes" is banked in the passed proposal; SPL Governance lets anyone (the
+ * keeper, fee-only) re-attempt execution permissionlessly — the SPL transfer
+ * simply fails harmlessly while the vault is short and SUCCEEDS the moment the
+ * USDC is there (e.g. once SOL has accrued and been converted). The known-cost
+ * ceiling, not a balance check, is what protects the treasury.
  */
 export function buildBountyReimbursementIxs(
   p: EnhancedListingReimbursementParams,
@@ -136,11 +141,6 @@ export function buildBountyReimbursementIxs(
   if (p.usdcAmount > ceiling) {
     throw new Error(
       `enhanced-listing: claim ${p.usdcAmount} exceeds the known-cost ceiling ${ceiling} (USDC base units)`,
-    );
-  }
-  if (p.usdcAmount > p.vaultUsdcBalance) {
-    throw new Error(
-      `enhanced-listing: claim ${p.usdcAmount} exceeds vault USDC balance ${p.vaultUsdcBalance} — fund the treasury with USDC`,
     );
   }
   const mint = p.usdcMint ?? USDC_MINT;

@@ -87,7 +87,6 @@ describe("buildBountyReimbursementIxs (USDC payout to the proven payer, no per-l
       vault,
       doer,
       usdcAmount: PAID,
-      vaultUsdcBalance: 1_000_000_000n,
     });
     expect(ixs).toHaveLength(1);
     const ix = ixs[0]!;
@@ -110,33 +109,27 @@ describe("buildBountyReimbursementIxs (USDC payout to the proven payer, no per-l
     expect(ix.data.readBigUInt64LE(1)).toBe(PAID);
   });
 
+  it("builds BEFORE the treasury holds the USDC — the vote can pass with no funds yet (approved-awaiting-funds)", () => {
+    // No balance is passed in or checked: the yes is banked now and the SPL
+    // transfer executes (permissionlessly, later) once the USDC has accrued.
+    expect(() =>
+      buildBountyReimbursementIxs({ vault, doer, usdcAmount: PAID }),
+    ).not.toThrow();
+  });
+
   it("refuses a claim above the known-cost protocol ceiling (over-payment guard)", () => {
     expect(() =>
       buildBountyReimbursementIxs({
         vault,
         doer,
         usdcAmount: MAX_LISTING_REIMBURSEMENT_USDC + 1n,
-        vaultUsdcBalance: 10_000_000_000n,
       }),
     ).toThrow(/known-cost ceiling/);
   });
 
-  it("refuses a non-positive amount and a claim above the vault USDC balance", () => {
+  it("refuses a non-positive amount", () => {
     expect(() =>
-      buildBountyReimbursementIxs({
-        vault,
-        doer,
-        usdcAmount: 0n,
-        vaultUsdcBalance: 1_000_000_000n,
-      }),
+      buildBountyReimbursementIxs({ vault, doer, usdcAmount: 0n }),
     ).toThrow(/positive/);
-    expect(() =>
-      buildBountyReimbursementIxs({
-        vault,
-        doer,
-        usdcAmount: PAID,
-        vaultUsdcBalance: 1_000n, // treasury holds almost no USDC
-      }),
-    ).toThrow(/vault USDC balance/);
   });
 });
