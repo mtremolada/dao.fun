@@ -6,5 +6,6 @@ export * from "./http-api";
 export * from "./chain-reader";
 export * from "./holder-snapshot";
 export * from "./tx-builder";
+export * from "./enhanced-listing-source";
 export * from "./config";
 export * from "./launch-service";

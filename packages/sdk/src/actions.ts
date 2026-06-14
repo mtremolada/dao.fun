@@ -95,6 +95,49 @@ export function buildGrantIxs(p: GrantParams): TransactionInstruction[] {
   ];
 }
 
+export interface EnhancedListingReimbursementParams {
+  /** The DAO's Squads vault (the payer; signs via the custody chain). */
+  vault: PublicKey;
+  /** The proven payer ("doer") wallet that gets reimbursed (recipient). */
+  doer: PublicKey;
+  /** Actual lamports the doer paid DEX Screener (from their receipt). */
+  claimedLamports: bigint;
+  /** Ceiling the DAO committed to at launch — claims above it are refused (INV-12). */
+  feeCapLamports: bigint;
+  /** Vault balance at proposal build time (re-checked by simulation, 12.3). */
+  vaultBalanceLamports: bigint;
+  rentFloorLamports?: bigint;
+}
+
+/**
+ * Reimburse a community member who paid DEX Screener for the token's Enhanced
+ * Token Info (D-036). This is a `grant` (a single SystemProgram.transfer) with
+ * ONE extra bound: the payout can never exceed the fee cap the DAO committed to
+ * at launch (INV-12). Reusing `grant` keeps the fixed action menu (spec 6.8)
+ * and the Guarded proposal-gate (D-030) untouched — no new menu row, no
+ * whitelist change. The recipient is the proven payer wallet; the proof (a
+ * signature from that wallet over the claim, matched to the on-chain payment)
+ * is verified off-chain by the claim service and by voters before approval.
+ */
+export function buildBountyReimbursementIxs(
+  p: EnhancedListingReimbursementParams,
+): TransactionInstruction[] {
+  if (p.claimedLamports > p.feeCapLamports) {
+    throw new Error(
+      `enhanced-listing: claim ${p.claimedLamports} exceeds the committed fee cap ${p.feeCapLamports} (INV-12)`,
+    );
+  }
+  return buildGrantIxs({
+    vault: p.vault,
+    recipient: p.doer,
+    lamports: p.claimedLamports,
+    vaultBalanceLamports: p.vaultBalanceLamports,
+    ...(p.rentFloorLamports !== undefined
+      ? { rentFloorLamports: p.rentFloorLamports }
+      : {}),
+  });
+}
+
 export interface BurnParams {
   vault: PublicKey;
   mint: PublicKey;

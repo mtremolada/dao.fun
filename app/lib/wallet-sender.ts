@@ -14,6 +14,13 @@ export interface WalletSender {
   address: string;
   /** Signs and broadcasts; resolves to the base58 transaction signature. */
   signAndSend(tx: Transaction, connection: Connection): Promise<string>;
+  /**
+   * ed25519-sign an arbitrary message (off-chain), resolving the raw 64-byte
+   * signature. Optional: not every wallet exposes it (e.g. Ledger over the
+   * Solana app here). The enhanced-listing claim uses it so the payer proves
+   * control of the paying wallet (D-037).
+   */
+  signMessage?(message: Uint8Array): Promise<Uint8Array>;
 }
 
 interface SignAndSendFeature {
@@ -29,6 +36,13 @@ interface SignTransactionFeature {
     transaction: Uint8Array;
     account: WalletAccountLike;
   }): Promise<readonly { signedTransaction: Uint8Array }[]>;
+}
+
+interface SignMessageFeature {
+  signMessage(input: {
+    message: Uint8Array;
+    account: WalletAccountLike;
+  }): Promise<readonly { signedMessage: Uint8Array; signature: Uint8Array }[]>;
 }
 
 function serialize(tx: Transaction): Uint8Array {
@@ -70,6 +84,17 @@ export function makeWalletSender(
       return connection.sendRawTransaction(signed.signedTransaction, {
         skipPreflight: false,
       });
+    },
+    async signMessage(message) {
+      const sm = wallet.features["solana:signMessage"] as
+        | SignMessageFeature
+        | undefined;
+      if (!sm) {
+        throw new Error(`wallet "${wallet.name}" cannot sign messages`);
+      }
+      const [out] = await sm.signMessage({ message, account });
+      if (!out) throw new Error("wallet returned no signature");
+      return out.signature;
     },
   };
 }

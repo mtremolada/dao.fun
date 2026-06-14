@@ -15,6 +15,8 @@ export * from "./execution-adapter";
 export * from "./actions";
 export * from "./launch-form";
 export * from "./artifact-hash";
+export * from "./enhanced-listing";
+export * from "./enhanced-listing-claim";
 export * from "./proposal";
 export * from "./gate";
 export * from "./merkle-distributor";

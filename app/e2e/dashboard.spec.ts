@@ -1,11 +1,27 @@
 /**
  * DAO dashboard (serverless): reads come from the visitor's RPC, so the e2e
- * only asserts the input-guard path (which needs no network) — the missing
- * realm/vault state explains itself instead of crashing.
+ * asserts the input-guard path and the OFFLINE discovery path (both need no
+ * network) — the missing realm/vault state explains itself, and given just a
+ * mint the DAO's addresses are derived deterministically in the browser.
  */
+import { PublicKey } from "@solana/web3.js";
 import { expect, test } from "@playwright/test";
 
 const REALM = "GRdkevbhSoJrnEtqadhvyuev81jSL99HYyhMCa3Tt8wR";
+const MINT = "So11111111111111111111111111111111111111112";
+
+// Inline copy of deriveRealm(realmNameForMint(mint)) (pinned by the sdk pda
+// tests) so the Playwright loader needs no TS-source import from the sdk.
+const GOVERNANCE_PROGRAM = new PublicKey(
+  "GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw",
+);
+function realmFromMint(mint: string): string {
+  const name = new PublicKey(mint).toBase58().slice(0, 32);
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("governance"), Buffer.from(name)],
+    GOVERNANCE_PROGRAM,
+  )[0].toBase58();
+}
 
 test("dashboard without the required params explains itself instead of crashing", async ({
   page,
@@ -15,4 +31,16 @@ test("dashboard without the required params explains itself instead of crashing"
 
   await page.goto(`/dao?realm=${REALM}`);
   await expect(page.getByTestId("dashboard-error")).toContainText(/vault/i);
+});
+
+test("given only a mint, the DAO's realm is derived deterministically with no server", async ({
+  page,
+}) => {
+  const expectedRealm = realmFromMint(MINT);
+
+  // a bogus ?rpc= makes the proposal fetch fail fast; the derived addresses
+  // render synchronously regardless — proving discovery needs no working server
+  await page.goto(`/dao?mint=${MINT}&rpc=http://127.0.0.1:1`);
+  await expect(page.getByTestId("dao-realm")).toHaveText(expectedRealm);
+  await expect(page.getByTestId("dao-addresses")).toContainText(MINT);
 });
