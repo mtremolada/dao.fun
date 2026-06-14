@@ -58,6 +58,10 @@
       "types": "./src/governance-tx.ts",
       "default": "./src/governance-tx.ts"
     },
+    "./proposal-create": {
+      "types": "./src/proposal-create.ts",
+      "default": "./src/proposal-create.ts"
+    },
     "./chain-reader": {
       "types": "./src/chain-reader.ts",
       "default": "./src/chain-reader.ts"

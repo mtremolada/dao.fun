@@ -18,6 +18,7 @@ export * from "./artifact-hash";
 export * from "./enhanced-listing";
 export * from "./enhanced-listing-claim";
 export * from "./proposal";
+export * from "./proposal-create";
 export * from "./gate";
 export * from "./merkle-distributor";
 export * from "./snapshot";

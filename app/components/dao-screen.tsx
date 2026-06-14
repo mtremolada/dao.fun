@@ -31,6 +31,7 @@ import {
 } from "../lib/chain";
 import { collectFees } from "../lib/collect";
 import { depositFlow, type FlowState } from "../lib/governance-actions";
+import { CreateProposal } from "./create-proposal";
 import { useWallet } from "./wallet-provider";
 
 // pump tokens have 6 decimals — let holders enter whole tokens.
@@ -439,6 +440,10 @@ export function DaoScreen() {
             </p>
           )}
         </>
+      )}
+
+      {mint && vault && ms && (
+        <CreateProposal mint={mint} vault={vault} multisig={ms} />
       )}
     </>
   );
