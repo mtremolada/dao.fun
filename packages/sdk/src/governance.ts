@@ -36,6 +36,7 @@ import {
   GoverningTokenConfigAccountArgs,
   GoverningTokenType,
   MintMaxVoteWeightSource,
+  MintMaxVoteWeightSourceType,
   SetRealmAuthorityAction,
   VoteThreshold,
   VoteThresholdType,
@@ -71,6 +72,19 @@ import {
 // identity — borsh schemas are keyed by class, so a structurally identical
 // object from another spl-governance copy fails to serialize.
 export { MintMaxVoteWeightSource };
+
+/**
+ * TEST ONLY (D-014): an Absolute max community vote weight, so quorum % is taken
+ * against this fixed amount instead of the full supply — a small holder can pass
+ * a proposal without buying a supply fraction. `rawTokens` is the base-unit
+ * amount (6dp). NEVER use in production (it makes the DAO trivially passable).
+ */
+export function absoluteMaxVoteWeight(rawTokens: bigint): MintMaxVoteWeightSource {
+  return new MintMaxVoteWeightSource({
+    type: MintMaxVoteWeightSourceType.Absolute,
+    value: new BN(rawTokens.toString()),
+  });
+}
 
 const PROGRAM_VERSION = 3;
 /** Voting duration. Not in the spec's tier table; see DECISIONS.md D-012. */

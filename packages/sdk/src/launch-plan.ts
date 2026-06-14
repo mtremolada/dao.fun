@@ -20,7 +20,11 @@ import {
 } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { buildCreateTreasuryIx, deriveTreasuryPdas } from "./treasury";
-import { buildCreateDaoIxs, type CouncilSetup } from "./governance";
+import {
+  buildCreateDaoIxs,
+  MintMaxVoteWeightSource,
+  type CouncilSetup,
+} from "./governance";
 import { deriveGovernanceChainFromMint } from "./pda";
 import type { GovernanceMode, GovernanceParams, TreasuryRef } from "./types";
 
@@ -64,6 +68,12 @@ export interface LaunchPlanRequest {
   launchFeeLamports?: bigint;
   prefundLamports?: bigint;
   baseVotingTimeSeconds?: number;
+  /**
+   * Max community vote weight source (D-014). Defaults to FULL_SUPPLY_FRACTION
+   * (production: quorum % is of the whole supply). TEST runs may pass an
+   * Absolute so a small holder can meet quorum without buying a supply fraction.
+   */
+  communityMaxVoteWeightSource?: MintMaxVoteWeightSource;
   /** Required iff mode == "council"; carries the ephemeral council mint pubkey. */
   council?: CouncilSetup;
 }
@@ -108,6 +118,9 @@ export async function buildLaunchPlan(
     ...(req.council ? { council: req.council } : {}),
     ...(req.baseVotingTimeSeconds !== undefined
       ? { baseVotingTimeSeconds: req.baseVotingTimeSeconds }
+      : {}),
+    ...(req.communityMaxVoteWeightSource !== undefined
+      ? { communityMaxVoteWeightSource: req.communityMaxVoteWeightSource }
       : {}),
     // pump create_v2 mints are always Token-2022 (D-004) — drop the VSR addin
     // + retarget the token program so create-dao executes (AUDIT F-1).

@@ -65,7 +65,10 @@ import {
   SQUADS_V4_PROGRAM_ID,
 } from "../../packages/sdk/src/constants";
 import { resolveGovernanceParams } from "../../packages/sdk/src/matrix";
-import { buildCreateDaoIxs } from "../../packages/sdk/src/governance";
+import {
+  buildCreateDaoIxs,
+  type MintMaxVoteWeightSource,
+} from "../../packages/sdk/src/governance";
 import { buildCreateTreasuryIx } from "../../packages/sdk/src/treasury";
 import { buildProposeIxs } from "../../packages/sdk/src/proposal";
 import { deriveGovernanceChainFromMint } from "../../packages/sdk/src/pda";
@@ -378,6 +381,7 @@ export async function mintRent(ctx: ProgramTestContext): Promise<bigint> {
 export async function createDao(
   ctx: ProgramTestContext,
   mode: GovernanceMode,
+  opts: { communityMaxVoteWeightSource?: MintMaxVoteWeightSource } = {},
 ): Promise<Dao> {
   const payer = ctx.payer;
   const voter = Keypair.generate();
@@ -483,6 +487,9 @@ export async function createDao(
       : {}),
     baseVotingTimeSeconds: BASE_VOTING_TIME_S,
     communityVoterWeightAddin: null, // no-addin realm (D-013 MVP fallback)
+    ...(opts.communityMaxVoteWeightSource !== undefined
+      ? { communityMaxVoteWeightSource: opts.communityMaxVoteWeightSource }
+      : {}),
   });
   expect(dao.realm.toBase58()).toBe(chain.realm.toBase58());
   expect(dao.nativeTreasury.toBase58()).toBe(chain.nativeTreasury.toBase58());

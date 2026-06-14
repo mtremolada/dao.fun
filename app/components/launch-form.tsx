@@ -162,9 +162,13 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
 
   // TEST MODE params (insecure; only rendered when NEXT_PUBLIC_TEST_MODE=1).
   const [testQuorum, setTestQuorum] = useState("1");
-  const [testThreshold, setTestThreshold] = useState("1000");
-  const [testVotingSec, setTestVotingSec] = useState("600");
+  const [testThreshold, setTestThreshold] = useState("1");
+  // 3600s is the spl-governance program minimum — lower is rejected on chain.
+  const [testVotingSec, setTestVotingSec] = useState("3600");
   const [testHoldUp, setTestHoldUp] = useState("0");
+  // Absolute max community vote weight (whole tokens). Quorum % is taken against
+  // THIS instead of the full supply, so any small holding clears it (D-014).
+  const [testMaxWeight, setTestMaxWeight] = useState("1000");
 
   const [steps, setSteps] = useState<LaunchStepState[]>([]);
   const [launching, setLaunching] = useState(false);
@@ -368,9 +372,12 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           ...(TEST_MODE
             ? {
                 baseVotingTimeSeconds: Number(testVotingSec),
-                // pump tokens are 6dp; the threshold is a raw token count.
+                // pump tokens are 6dp; thresholds/weights are raw token counts.
                 proposalThresholdTokensOverride: BigInt(
                   Math.floor(Number(testThreshold) * 1e6),
+                ),
+                communityMaxVoteWeightAbsoluteRaw: BigInt(
+                  Math.floor(Number(testMaxWeight) * 1e6),
                 ),
               }
             : {}),
@@ -484,6 +491,18 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
               value={testQuorum}
               onChange={(e) => setTestQuorum(e.target.value)}
             />
+            <label htmlFor="test-maxweight">
+              Max vote weight (whole tokens) — quorum % is of THIS, so any small
+              holding passes
+            </label>
+            <input
+              id="test-maxweight"
+              data-testid="test-maxweight"
+              type="number"
+              min={1}
+              value={testMaxWeight}
+              onChange={(e) => setTestMaxWeight(e.target.value)}
+            />
             <label htmlFor="test-threshold">
               Proposal threshold (whole tokens to create a proposal)
             </label>
@@ -495,12 +514,14 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
               value={testThreshold}
               onChange={(e) => setTestThreshold(e.target.value)}
             />
-            <label htmlFor="test-voting">Voting window (seconds)</label>
+            <label htmlFor="test-voting">
+              Voting window (seconds — 3600 is the on-chain minimum)
+            </label>
             <input
               id="test-voting"
               data-testid="test-voting"
               type="number"
-              min={60}
+              min={3600}
               value={testVotingSec}
               onChange={(e) => setTestVotingSec(e.target.value)}
             />

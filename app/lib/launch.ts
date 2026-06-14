@@ -26,6 +26,7 @@ import {
   extraSignersFor,
   type LaunchTxGroup,
 } from "@daofun/sdk/launch-plan";
+import { absoluteMaxVoteWeight } from "@daofun/sdk/governance";
 import {
   computeContentCommitment,
   type EnhancedListingContent,
@@ -78,6 +79,12 @@ export interface LaunchInput {
    * of the tier %-of-supply floor, so a tiny holding can create proposals.
    */
   proposalThresholdTokensOverride?: bigint;
+  /**
+   * TEST ONLY (D-014): cap the max community vote weight at this absolute amount
+   * (raw, 6dp), so quorum % is taken against it instead of the full supply — a
+   * ~$1 holding can then meet quorum and pass a proposal.
+   */
+  communityMaxVoteWeightAbsoluteRaw?: bigint;
 }
 
 export interface LaunchStepState {
@@ -187,6 +194,13 @@ export async function runLaunch(
       : {}),
     ...(input.baseVotingTimeSeconds !== undefined
       ? { baseVotingTimeSeconds: input.baseVotingTimeSeconds }
+      : {}),
+    ...(input.communityMaxVoteWeightAbsoluteRaw !== undefined
+      ? {
+          communityMaxVoteWeightSource: absoluteMaxVoteWeight(
+            input.communityMaxVoteWeightAbsoluteRaw,
+          ),
+        }
       : {}),
   });
 
