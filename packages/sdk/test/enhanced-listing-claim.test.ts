@@ -21,7 +21,7 @@ function makeClaim(
     mint: Keypair.generate().publicKey,
     contentCommitment: "a".repeat(64),
     payer: Keypair.generate().publicKey,
-    claimedLamports: 1_500_000_000n,
+    claimedUsdc: 1_500_000_000n,
     paymentTxSig: "1".repeat(88),
     paymentTimestamp: 1_800_000_000,
     ...over,
@@ -64,7 +64,7 @@ describe("verifyClaimSignature (proves control of the paying wallet)", () => {
     // inflate the amount after signing
     expect(
       verifyClaimSignature(
-        { ...claim, claimedLamports: claim.claimedLamports + 1n },
+        { ...claim, claimedUsdc: claim.claimedUsdc + 1n },
         sig,
       ),
     ).toBe(false);

@@ -62,12 +62,12 @@ export interface LaunchInput {
   launchFee?: { treasury: string; lamports: bigint };
   /**
    * Opt-in DEX-paid bounty (enhanced listing, D-036), set pre-launch. NO funds
-   * move at launch: the DAO just COMMITS to the listing content (hashed here) and
-   * a reimbursement ceiling. A community member later pays DEX Screener and is
-   * reimbursed by a capped DAO vote (INV-12). Purely additive — it does not
-   * touch the on-chain launch plan.
+   * move at launch: the DAO just COMMITS to the listing content (hashed here). A
+   * community member later pays DEX Screener and is reimbursed in USDC by a DAO
+   * vote — no per-launch cap (the listing is a fixed-price product). Purely
+   * additive — it does not touch the on-chain launch plan.
    */
-  enhancedListing?: { feeCapLamports: bigint; content: EnhancedListingContent };
+  enhancedListing?: { content: EnhancedListingContent };
 }
 
 export interface LaunchStepState {
@@ -86,11 +86,12 @@ export interface LaunchResult {
   nativeTreasury: string;
   signatures: string[];
   /**
-   * Present iff the launch set a DEX-paid bounty (D-036). The commitment +
-   * cap are what the later reimbursement claim/vote is checked against;
-   * feeCapLamports is a decimal string so the result stays JSON-serializable.
+   * Present iff the launch set a DEX-paid bounty (D-036). The commitment is
+   * what the later reimbursement claim/vote is checked against (the USDC payout
+   * amount is the doer's verified DEX Screener payment, bounded by the protocol
+   * known-cost ceiling — there is no per-launch cap).
    */
-  enhancedListing?: { contentCommitment: string; feeCapLamports: string };
+  enhancedListing?: { contentCommitment: string };
 }
 
 /** Real-supply proposal threshold (the form preview uses a placeholder supply). */
@@ -222,7 +223,6 @@ export async function runLaunch(
             contentCommitment: computeContentCommitment(
               input.enhancedListing.content,
             ),
-            feeCapLamports: input.enhancedListing.feeCapLamports.toString(),
           },
         }
       : {}),

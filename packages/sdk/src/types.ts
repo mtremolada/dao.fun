@@ -33,14 +33,13 @@ export interface DaoConfig {
 
 /**
  * Enhanced-listing config committed at launch (D-036). No funds move at launch;
- * a community member later pays DEX Screener and is reimbursed by a DAO vote,
- * capped at feeCapLamports (INV-12). `content` is hashed into contentCommitment
- * (computeContentCommitment) so only the committed assets can be submitted.
+ * a community member later pays DEX Screener and is reimbursed in USDC by a DAO
+ * vote, bounded by the known-cost protocol ceiling (no per-launch cap). `content`
+ * is hashed into contentCommitment so only the committed assets can be submitted.
  */
 export interface EnhancedListingConfig {
   enabled: boolean;
   target: EnhancedListingTarget; // "dex-screener"
-  feeCapLamports: bigint; // reimbursement ceiling (INV-12)
   contentCommitment: string; // sha256 over `content`
   content: EnhancedListingContent;
 }
@@ -56,7 +55,7 @@ export interface EnhancedListingReceipt {
   dexScreenerUrl: string; // the live Enhanced Token Info page
   paymentTxSig: string; // the doer's on-chain payment to DEX Screener
   doer: PublicKey; // the proven payer wallet that was reimbursed
-  claimedLamports: bigint; // actual amount reimbursed (<= feeCapLamports)
+  claimedUsdc: bigint; // USDC base units reimbursed (<= known-cost ceiling)
   submittedAt: number; // unix seconds
 }
 

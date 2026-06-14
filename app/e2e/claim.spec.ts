@@ -29,7 +29,7 @@ const CHALLENGE = [
   `mint: ${MINT}`,
   `content: ${CONTENT}`,
   `reimburse-to: ${ADDRESS}`,
-  `amount-lamports: ${AMOUNT}`,
+  `amount-usdc: ${AMOUNT}`,
   `payment-tx: ${TXSIG}`,
   `payment-ts: ${TS}`,
 ].join("\n");

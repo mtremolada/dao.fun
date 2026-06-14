@@ -22,6 +22,7 @@ import {
 import {
   NATIVE_MINT,
   TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
   createBurnInstruction,
   createSyncNativeInstruction,
   createTransferInstruction,
@@ -47,8 +48,10 @@ import {
   createSetGovernanceConfig,
 } from "@solana/spl-governance";
 import {
+  MAX_LISTING_REIMBURSEMENT_USDC,
   PUMP_AMM_PROGRAM_ID,
   SPL_GOVERNANCE_PROGRAM_ID,
+  USDC_MINT,
 } from "./constants";
 import { TIER_FLOORS, holdUpFloorSeconds } from "./matrix";
 import type { GovernanceMode, MarketCapTier } from "./types";
@@ -96,46 +99,63 @@ export function buildGrantIxs(p: GrantParams): TransactionInstruction[] {
 }
 
 export interface EnhancedListingReimbursementParams {
-  /** The DAO's Squads vault (the payer; signs via the custody chain). */
+  /** The DAO's Squads vault (owns the source USDC ATA; signs via custody). */
   vault: PublicKey;
   /** The proven payer ("doer") wallet that gets reimbursed (recipient). */
   doer: PublicKey;
-  /** Actual lamports the doer paid DEX Screener (from their receipt). */
-  claimedLamports: bigint;
-  /** Ceiling the DAO committed to at launch — claims above it are refused (INV-12). */
-  feeCapLamports: bigint;
-  /** Vault balance at proposal build time (re-checked by simulation, 12.3). */
-  vaultBalanceLamports: bigint;
-  rentFloorLamports?: bigint;
+  /** USDC base units (6dp) the doer provably paid DEX Screener (the verified outflow). */
+  usdcAmount: bigint;
+  /** Vault's USDC-ATA balance at build time (re-checked by simulation, 12.3). */
+  vaultUsdcBalance: bigint;
+  /** Override the USDC mint (tests); defaults to canonical mainnet USDC. */
+  usdcMint?: PublicKey;
+  /** Override the protocol over-payment ceiling (tests); defaults to the known list price. */
+  maxReimbursementUsdc?: bigint;
 }
 
 /**
  * Reimburse a community member who paid DEX Screener for the token's Enhanced
- * Token Info (D-036). This is a `grant` (a single SystemProgram.transfer) with
- * ONE extra bound: the payout can never exceed the fee cap the DAO committed to
- * at launch (INV-12). Reusing `grant` keeps the fixed action menu (spec 6.8)
- * and the Guarded proposal-gate (D-030) untouched — no new menu row, no
- * whitelist change. The recipient is the proven payer wallet; the proof (a
- * signature from that wallet over the claim, matched to the on-chain payment)
- * is verified off-chain by the claim service and by voters before approval.
+ * Token Info (D-036) — paid in USDC, the same asset the doer spent. A single
+ * SPL token transfer from the vault's USDC ATA to the doer's, authorized by the
+ * vault (its custody chain signs). The doer's USDC ATA is assumed to exist
+ * (ATA creation is permissionless and stays OUTSIDE the proposal, D-019).
+ *
+ * No per-launch cap: Enhanced Token Info is a fixed-price product, so the
+ * launcher never defines a ceiling. The on-chain over-payment guard is the
+ * KNOWN-COST protocol ceiling (MAX_LISTING_REIMBURSEMENT_USDC) — it replaces
+ * the old per-DAO INV-12 cap while keeping the treasury protected from an
+ * inflated claim. The exact amount is the doer's verified on-chain payment.
  */
 export function buildBountyReimbursementIxs(
   p: EnhancedListingReimbursementParams,
 ): TransactionInstruction[] {
-  if (p.claimedLamports > p.feeCapLamports) {
+  const ceiling = p.maxReimbursementUsdc ?? MAX_LISTING_REIMBURSEMENT_USDC;
+  if (p.usdcAmount <= 0n) {
+    throw new Error("enhanced-listing: reimbursement amount must be positive");
+  }
+  if (p.usdcAmount > ceiling) {
     throw new Error(
-      `enhanced-listing: claim ${p.claimedLamports} exceeds the committed fee cap ${p.feeCapLamports} (INV-12)`,
+      `enhanced-listing: claim ${p.usdcAmount} exceeds the known-cost ceiling ${ceiling} (USDC base units)`,
     );
   }
-  return buildGrantIxs({
-    vault: p.vault,
-    recipient: p.doer,
-    lamports: p.claimedLamports,
-    vaultBalanceLamports: p.vaultBalanceLamports,
-    ...(p.rentFloorLamports !== undefined
-      ? { rentFloorLamports: p.rentFloorLamports }
-      : {}),
-  });
+  if (p.usdcAmount > p.vaultUsdcBalance) {
+    throw new Error(
+      `enhanced-listing: claim ${p.usdcAmount} exceeds vault USDC balance ${p.vaultUsdcBalance} — fund the treasury with USDC`,
+    );
+  }
+  const mint = p.usdcMint ?? USDC_MINT;
+  const vaultAta = getAssociatedTokenAddressSync(mint, p.vault, true);
+  const doerAta = getAssociatedTokenAddressSync(mint, p.doer, false);
+  return [
+    createTransferInstruction(
+      vaultAta,
+      doerAta,
+      p.vault,
+      p.usdcAmount,
+      [],
+      TOKEN_PROGRAM_ID,
+    ),
+  ];
 }
 
 export interface BurnParams {

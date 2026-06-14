@@ -33,8 +33,9 @@ export interface EnhancedListingClaim {
   contentCommitment: string;
   /** The wallet that paid DEX Screener — the signer AND the reimbursement recipient. */
   payer: PublicKey;
-  /** Lamports requested; the builder enforces <= the committed cap (INV-12). */
-  claimedLamports: bigint;
+  /** USDC base units (6dp) requested — the doer's verified DEX Screener payment;
+   *  the builder enforces <= the known-cost protocol ceiling. */
+  claimedUsdc: bigint;
   /**
    * The claimant's on-chain payment transaction signature. Binding it here is
    * what resolves competing claims: the backend checks this tx was sent FROM
@@ -59,7 +60,7 @@ export function buildClaimChallenge(claim: EnhancedListingClaim): string {
     `mint: ${claim.mint.toBase58()}`,
     `content: ${claim.contentCommitment}`,
     `reimburse-to: ${claim.payer.toBase58()}`,
-    `amount-lamports: ${claim.claimedLamports.toString()}`,
+    `amount-usdc: ${claim.claimedUsdc.toString()}`,
     `payment-tx: ${claim.paymentTxSig}`,
     `payment-ts: ${claim.paymentTimestamp}`,
   ].join("\n");
@@ -99,7 +100,7 @@ export interface ClaimSubmission {
   mint: string;
   contentCommitment: string;
   payer: string;
-  claimedLamports: string;
+  claimedUsdc: string;
   paymentTxSig: string;
   paymentTimestamp: number;
   /** base64 ed25519 signature over buildClaimChallenge(claim). */
@@ -148,13 +149,13 @@ export function decodeClaimSubmission(raw: unknown): {
     throw new Error("claim submission: contentCommitment must be 64 hex chars");
   }
 
-  const lamports = r["claimedLamports"];
-  if (typeof lamports !== "string" || !/^\d+$/.test(lamports)) {
-    throw new Error("claim submission: claimedLamports must be a decimal string");
+  const usdc = r["claimedUsdc"];
+  if (typeof usdc !== "string" || !/^\d+$/.test(usdc)) {
+    throw new Error("claim submission: claimedUsdc must be a decimal string");
   }
-  const claimedLamports = BigInt(lamports);
-  if (claimedLamports <= 0n) {
-    throw new Error("claim submission: claimedLamports must be positive");
+  const claimedUsdc = BigInt(usdc);
+  if (claimedUsdc <= 0n) {
+    throw new Error("claim submission: claimedUsdc must be positive");
   }
 
   const paymentTxSig = r["paymentTxSig"];
@@ -189,7 +190,7 @@ export function decodeClaimSubmission(raw: unknown): {
       mint,
       contentCommitment,
       payer,
-      claimedLamports,
+      claimedUsdc,
       paymentTxSig,
       paymentTimestamp,
     },
@@ -209,7 +210,7 @@ export function encodeClaimSubmission(
     mint: claim.mint.toBase58(),
     contentCommitment: claim.contentCommitment,
     payer: claim.payer.toBase58(),
-    claimedLamports: claim.claimedLamports.toString(),
+    claimedUsdc: claim.claimedUsdc.toString(),
     paymentTxSig: claim.paymentTxSig,
     paymentTimestamp: claim.paymentTimestamp,
     signatureBase64: Buffer.from(signature).toString("base64"),

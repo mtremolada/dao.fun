@@ -148,7 +148,6 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
 
   // DEX-paid bounty (enhanced listing, D-036) — opt-in, set pre-launch.
   const [elEnabled, setElEnabled] = useState(false);
-  const [elFeeCap, setElFeeCap] = useState("");
   const [elDescription, setElDescription] = useState("");
   const [elBanner, setElBanner] = useState<File | null>(null);
   const [elBannerUrl, setElBannerUrl] = useState("");
@@ -192,7 +191,6 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         ? {
             enhancedListing: {
               enabled: true,
-              feeCapSol: elFeeCap,
               description: elDescription,
               bannerProvided: elBanner !== null,
               ...(elTwitter.trim() ? { twitter: elTwitter.trim() } : {}),
@@ -213,7 +211,6 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     effQuorum,
     effSovereign,
     elEnabled,
-    elFeeCap,
     elDescription,
     elBanner,
     elTwitter,
@@ -310,7 +307,6 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           { step: label, status: "done" },
         ]);
         enhancedListing = {
-          feeCapLamports: BigInt(Math.floor(Number(elFeeCap) * 1e9)),
           content: {
             bannerCid,
             description: elDescription.trim(),
@@ -379,9 +375,7 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           <div className="summary-card" data-testid="launch-bounty">
             <div className="row">
               <span>DEX-paid bounty</span>
-              <span>
-                cap {Number(result.enhancedListing.feeCapLamports) / 1e9} SOL
-              </span>
+              <span>USDC reimbursement</span>
             </div>
             <CopyAddr
               label="Listing commitment"
@@ -389,8 +383,8 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
             />
             <p className="muted">
               Committed at launch. When someone pays for the DexScreener
-              listing, they claim a capped reimbursement against this commitment
-              via a DAO vote.
+              listing, they claim a USDC reimbursement of what they paid against
+              this commitment via a DAO vote.
             </p>
           </div>
         )}
@@ -625,22 +619,13 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         <span>
           Set a <b>DEX-paid bounty</b> now: commit to a DexScreener Enhanced
           Token Info listing (banner + socials). <b>No SOL moves at launch</b> —
-          whoever later pays for the listing is reimbursed by a DAO vote, capped
-          at the amount you set here.
+          whoever later pays for the DexScreener listing is reimbursed in{" "}
+          <b>USDC</b> by a DAO vote (the listing is a fixed-price product, so
+          there&apos;s no cap to set).
         </span>
       </div>
       {elEnabled && (
         <>
-          <label htmlFor="el-fee-cap">Reimbursement cap (SOL)</label>
-          <input
-            id="el-fee-cap"
-            data-testid="el-fee-cap"
-            type="number"
-            min={0}
-            step="0.01"
-            value={elFeeCap}
-            onChange={(e) => setElFeeCap(e.target.value)}
-          />
           <label htmlFor="el-banner">Listing banner image</label>
           <input
             id="el-banner"

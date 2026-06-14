@@ -32,7 +32,7 @@ export interface ClaimInput {
   /** The content the DAO committed to at launch (sha256 hex). */
   contentCommitment: string;
   /** Capped reimbursement in lamports (decimal string). */
-  claimedLamports: string;
+  claimedUsdc: string;
   /** From the DEX Screener order; binds the claim to a moment in time. */
   paymentTimestamp: number;
   /** The payer-supplied on-chain payment transaction signature. */
@@ -68,8 +68,8 @@ function toClaim(input: ClaimInput, payer: string): EnhancedListingClaim {
   if (!HEX_64.test(input.contentCommitment)) {
     throw new Error("content commitment must be 64 hex characters");
   }
-  const claimedLamports = BigInt(input.claimedLamports); // throws on non-numeric
-  if (claimedLamports <= 0n) throw new Error("amount must be positive");
+  const claimedUsdc = BigInt(input.claimedUsdc); // throws on non-numeric
+  if (claimedUsdc <= 0n) throw new Error("amount must be positive");
   if (!Number.isInteger(input.paymentTimestamp) || input.paymentTimestamp <= 0) {
     throw new Error("payment timestamp must be a positive integer");
   }
@@ -79,7 +79,7 @@ function toClaim(input: ClaimInput, payer: string): EnhancedListingClaim {
     mint,
     contentCommitment: input.contentCommitment,
     payer: new PublicKey(payer),
-    claimedLamports,
+    claimedUsdc,
     paymentTxSig,
     paymentTimestamp: input.paymentTimestamp,
   };

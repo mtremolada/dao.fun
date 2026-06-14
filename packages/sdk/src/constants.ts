@@ -34,3 +34,16 @@ export const MERKLE_DISTRIBUTOR_PROGRAM_ID = new PublicKey(
 export const GATE_PROGRAM_ID = new PublicKey(
   "3QgQJ4EufHygGPMSBg4tD1Jzi1tEfyrFH4yXH3w8pBvg",
 );
+
+// Canonical mainnet USDC mint (Circle, 6 decimals) — the asset DEX-paid bounty
+// reimbursements are paid in (D-036 amendment: refund in USDC, not SOL).
+export const USDC_MINT = new PublicKey(
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+);
+export const USDC_DECIMALS = 6;
+// Known-cost ceiling for a DEX Screener "Enhanced Token Info" reimbursement, in
+// USDC base units. The product is a FIXED-price listing ($299 promo / $499
+// list), so the launcher never defines a per-DAO cap — this protocol ceiling is
+// the on-chain over-payment guard instead (replaces the per-launch INV-12 cap).
+// Set above the list price to absorb price changes without bricking claims.
+export const MAX_LISTING_REIMBURSEMENT_USDC = 600_000_000n; // 600 USDC

@@ -25,7 +25,7 @@ function makeClaim(over: Partial<EnhancedListingClaim> = {}): EnhancedListingCla
     mint: Keypair.generate().publicKey,
     contentCommitment: "a".repeat(64),
     payer: payer.publicKey,
-    claimedLamports: 1_500_000_000n,
+    claimedUsdc: 1_500_000_000n,
     paymentTxSig: "1".repeat(88),
     paymentTimestamp: 1_800_000_000,
     ...over,
@@ -53,7 +53,7 @@ describe("encode/decodeClaimSubmission round-trip", () => {
     expect(out.mint.equals(claim.mint)).toBe(true);
     expect(out.payer.equals(claim.payer)).toBe(true);
     expect(out.contentCommitment).toBe(claim.contentCommitment);
-    expect(out.claimedLamports).toBe(claim.claimedLamports);
+    expect(out.claimedUsdc).toBe(claim.claimedUsdc);
     expect(out.paymentTxSig).toBe(claim.paymentTxSig);
     expect(out.paymentTimestamp).toBe(claim.paymentTimestamp);
     expect(verifyClaimSignature(out, signature)).toBe(true);
@@ -91,10 +91,10 @@ describe("decodeClaimSubmission requires BOTH proofs and fails closed", () => {
       decodeClaimSubmission(submission({ contentCommitment: "xyz" })),
     ).toThrow(/contentCommitment/);
     expect(() =>
-      decodeClaimSubmission(submission({ claimedLamports: "0" })),
+      decodeClaimSubmission(submission({ claimedUsdc: "0" })),
     ).toThrow(/positive/);
     expect(() =>
-      decodeClaimSubmission(submission({ claimedLamports: "1.5" })),
+      decodeClaimSubmission(submission({ claimedUsdc: "1.5" })),
     ).toThrow(/decimal/);
     expect(() =>
       decodeClaimSubmission(submission({ paymentTimestamp: -1 })),
@@ -135,7 +135,7 @@ describe("verifyClaimSubmissionSignature (client-side ownership feedback)", () =
     const wire = encodeClaimSubmission(claim, sign(claim));
     // inflate the amount: the signature no longer covers the wire claim
     expect(
-      verifyClaimSubmissionSignature({ ...wire, claimedLamports: "9999999999" }),
+      verifyClaimSubmissionSignature({ ...wire, claimedUsdc: "9999999999" }),
     ).toBe(false);
   });
 });

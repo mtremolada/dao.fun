@@ -8,12 +8,17 @@
  * untouched.
  */
 import { describe, expect, it } from "vitest";
-import { Keypair, SystemProgram } from "@solana/web3.js";
+import { Keypair } from "@solana/web3.js";
+import {
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import {
   computeContentCommitment,
   type EnhancedListingContent,
 } from "../src/enhanced-listing";
 import { buildBountyReimbursementIxs } from "../src/actions";
+import { MAX_LISTING_REIMBURSEMENT_USDC, USDC_MINT } from "../src/constants";
 
 const baseContent: EnhancedListingContent = {
   bannerCid: "bafybeibanner",
@@ -71,67 +76,67 @@ describe("computeContentCommitment (tamper-evident, INV-9 lineage)", () => {
   });
 });
 
-describe("buildBountyReimbursementIxs (capped grant to the proven payer, INV-12)", () => {
+describe("buildBountyReimbursementIxs (USDC payout to the proven payer, no per-launch cap)", () => {
   const vault = Keypair.generate().publicKey;
   const doer = Keypair.generate().publicKey;
+  // $299 in USDC base units (6dp) — a typical Enhanced Token Info payment.
+  const PAID = 299_000_000n;
 
-  it("builds exactly one SystemProgram transfer of the claimed amount to the doer", () => {
+  it("builds exactly one USDC SPL transfer from the vault ATA to the doer ATA", () => {
     const ixs = buildBountyReimbursementIxs({
       vault,
       doer,
-      claimedLamports: 1_500_000_000n,
-      feeCapLamports: 2_000_000_000n,
-      vaultBalanceLamports: 5_000_000_000n,
+      usdcAmount: PAID,
+      vaultUsdcBalance: 1_000_000_000n,
     });
     expect(ixs).toHaveLength(1);
     const ix = ixs[0]!;
-    expect(ix.programId.equals(SystemProgram.programId)).toBe(true);
-    expect(ix.keys[0]!.pubkey.equals(vault)).toBe(true);
-    expect(ix.keys[1]!.pubkey.equals(doer)).toBe(true);
-    expect(ix.keys).toHaveLength(2); // no accounts outside the declared set
-    expect(ix.data.readBigUInt64LE(4)).toBe(1_500_000_000n);
+    expect(ix.programId.equals(TOKEN_PROGRAM_ID)).toBe(true);
+    // SPL Transfer keys: [source, destination, owner/authority]
+    expect(
+      ix.keys[0]!.pubkey.equals(
+        getAssociatedTokenAddressSync(USDC_MINT, vault, true),
+      ),
+    ).toBe(true);
+    expect(
+      ix.keys[1]!.pubkey.equals(
+        getAssociatedTokenAddressSync(USDC_MINT, doer, false),
+      ),
+    ).toBe(true);
+    expect(ix.keys[2]!.pubkey.equals(vault)).toBe(true);
+    expect(ix.keys[2]!.isSigner).toBe(true);
+    // SPL Transfer data: tag(1 byte = 3) + amount(u64 LE)
+    expect(ix.data[0]).toBe(3);
+    expect(ix.data.readBigUInt64LE(1)).toBe(PAID);
   });
 
-  it("refuses a claim above the committed fee cap (INV-12)", () => {
+  it("refuses a claim above the known-cost protocol ceiling (over-payment guard)", () => {
     expect(() =>
       buildBountyReimbursementIxs({
         vault,
         doer,
-        claimedLamports: 2_000_000_001n,
-        feeCapLamports: 2_000_000_000n,
-        vaultBalanceLamports: 5_000_000_000n,
+        usdcAmount: MAX_LISTING_REIMBURSEMENT_USDC + 1n,
+        vaultUsdcBalance: 10_000_000_000n,
       }),
-    ).toThrow(/fee cap/);
+    ).toThrow(/known-cost ceiling/);
   });
 
-  it("inherits the grant bounds: zero, over-balance, and rent-floor strip (D-009)", () => {
+  it("refuses a non-positive amount and a claim above the vault USDC balance", () => {
     expect(() =>
       buildBountyReimbursementIxs({
         vault,
         doer,
-        claimedLamports: 0n,
-        feeCapLamports: 2_000_000_000n,
-        vaultBalanceLamports: 5_000_000_000n,
+        usdcAmount: 0n,
+        vaultUsdcBalance: 1_000_000_000n,
       }),
     ).toThrow(/positive/);
     expect(() =>
       buildBountyReimbursementIxs({
         vault,
         doer,
-        claimedLamports: 1_000n,
-        feeCapLamports: 2_000_000_000n,
-        vaultBalanceLamports: 500n,
+        usdcAmount: PAID,
+        vaultUsdcBalance: 1_000n, // treasury holds almost no USDC
       }),
-    ).toThrow(/exceeds vault balance/);
-    expect(() =>
-      buildBountyReimbursementIxs({
-        vault,
-        doer,
-        claimedLamports: 900_000n,
-        feeCapLamports: 2_000_000_000n,
-        vaultBalanceLamports: 1_000_000n,
-        rentFloorLamports: 890_880n,
-      }),
-    ).toThrow(/rent floor/);
+    ).toThrow(/vault USDC balance/);
   });
 });

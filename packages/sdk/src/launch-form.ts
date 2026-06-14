@@ -42,11 +42,12 @@ export interface LaunchFormInput {
   /**
    * Opt-in DEX Screener Enhanced Token Info (D-036), available in any mode.
    * Plain types only (this is the client-safe subpath); the launch orchestrator
-   * turns feeCapSol into lamports and the uploaded banner into an IPFS CID.
+   * turns the uploaded banner into an IPFS CID. No fee cap — Enhanced Token Info
+   * is a fixed-price product, so the reimbursement (paid in USDC) is bounded by
+   * the known-cost protocol ceiling, not a per-launch number.
    */
   enhancedListing?: {
     enabled: boolean;
-    feeCapSol: string;
     description: string;
     bannerProvided: boolean;
     twitter?: string;
@@ -170,10 +171,10 @@ export function validateLaunchForm(
     }
   }
 
-  // Enhanced DEX listing (D-036): opt-in in any mode. Only the data the
-  // launcher must supply now is checked; the fee is paid later by a community
-  // member and reimbursed by a capped DAO vote (INV-12), so there is no spend
-  // to validate here — just the committed content shape and the fee ceiling.
+  // Enhanced DEX listing (D-036): opt-in in any mode. Only the committed
+  // content the launcher must supply now is checked. No fee cap to validate —
+  // the listing is a fixed-price product, paid later by a community member and
+  // reimbursed in USDC, bounded on-chain by the known-cost ceiling.
   const el = input.enhancedListing;
   if (el?.enabled) {
     if (!el.bannerProvided) {
@@ -181,12 +182,6 @@ export function validateLaunchForm(
     }
     if (!el.description || el.description.trim().length === 0) {
       errors.push("Enhanced DEX listing needs a description.");
-    }
-    const cap = Number(el.feeCapSol);
-    if (!Number.isFinite(cap) || cap <= 0) {
-      errors.push(
-        "Enhanced DEX listing fee cap must be a positive number of SOL.",
-      );
     }
   }
 

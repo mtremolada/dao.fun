@@ -50,17 +50,17 @@ test("DEX-paid bounty is opt-in pre-launch: the checkbox reveals the fields and 
   await expect(submit).toBeEnabled();
 
   // fields hidden until opted in
-  await expect(page.getByTestId("el-fee-cap")).toBeHidden();
+  await expect(page.getByTestId("el-banner")).toBeHidden();
 
   // opting in reveals the fields and, while incomplete, blocks the launch
   await page.getByTestId("enhanced-listing-toggle").check();
-  await expect(page.getByTestId("el-fee-cap")).toBeVisible();
+  await expect(page.getByTestId("el-banner")).toBeVisible();
   await expect(submit).toBeDisabled();
   await expect(page.getByTestId("form-errors")).toContainText(/banner/i);
 
   // unchecking it clears the requirement again (bounty is optional)
   await page.getByTestId("enhanced-listing-toggle").uncheck();
-  await expect(page.getByTestId("el-fee-cap")).toBeHidden();
+  await expect(page.getByTestId("el-banner")).toBeHidden();
   await expect(submit).toBeEnabled();
 });
 

@@ -19,7 +19,7 @@ export function ListingClaimScreen() {
   const q = useSearchParams();
   const mint = q.get("mint") ?? "";
   const contentCommitment = q.get("content") ?? "";
-  const claimedLamports = q.get("amount") ?? "";
+  const claimedUsdc = q.get("amount") ?? "";
   const paymentTimestamp = Number(q.get("ts") ?? "");
   const verifyUrl = q.get("verifyUrl") ?? undefined;
 
@@ -28,7 +28,7 @@ export function ListingClaimScreen() {
   const [state, setState] = useState<ClaimState | null>(null);
 
   const missing =
-    !mint || !contentCommitment || !claimedLamports || !paymentTimestamp;
+    !mint || !contentCommitment || !claimedUsdc || !paymentTimestamp;
 
   async function onSubmit() {
     if (!sender) {
@@ -36,7 +36,7 @@ export function ListingClaimScreen() {
       return;
     }
     await submitListingClaim(
-      { mint, contentCommitment, claimedLamports, paymentTimestamp, paymentTxSig: txSig },
+      { mint, contentCommitment, claimedUsdc, paymentTimestamp, paymentTxSig: txSig },
       { sender, onState: setState, ...(verifyUrl ? { verifyUrl } : {}) },
     );
   }
@@ -68,7 +68,7 @@ export function ListingClaimScreen() {
         Mint: {mint}
       </p>
       <p className="muted" data-testid="claim-amount">
-        Reimbursement (lamports): {claimedLamports}
+        Reimbursement (USDC, base units): {claimedUsdc}
       </p>
 
       {!sender ? (

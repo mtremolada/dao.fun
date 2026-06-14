@@ -94,7 +94,7 @@ function makeClaim(over: Partial<EnhancedListingClaim> = {}): EnhancedListingCla
     mint,
     contentCommitment: "a".repeat(64),
     payer: Keypair.generate().publicKey,
-    claimedLamports: 1_500_000_000n,
+    claimedUsdc: 1_500_000_000n,
     paymentTxSig: "sig",
     paymentTimestamp: 1_800_000_000,
     ...over,

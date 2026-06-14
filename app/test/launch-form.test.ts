@@ -127,7 +127,6 @@ describe("validateLaunchForm — floors are floors (spec 6.7)", () => {
 describe("validateLaunchForm — enhanced DEX listing (D-033)", () => {
   const enabled = (over: Record<string, unknown> = {}) => ({
     enabled: true,
-    feeCapSol: "1.6",
     description: "A community token.",
     bannerProvided: true,
     ...over,
@@ -165,7 +164,7 @@ describe("validateLaunchForm — enhanced DEX listing (D-033)", () => {
     ).toBe(true);
   });
 
-  it("requires a banner, a description, and a positive fee cap", () => {
+  it("requires a banner and a description (no fee cap — fixed-price product)", () => {
     const base = {
       mode: "cypherpunk" as const,
       tier: "micro" as const,
@@ -183,14 +182,6 @@ describe("validateLaunchForm — enhanced DEX listing (D-033)", () => {
         enhancedListing: enabled({ description: "   " }),
       }).errors.join(),
     ).toMatch(/description/i);
-    for (const bad of ["0", "-1", "abc", ""]) {
-      expect(
-        validateLaunchForm({
-          ...base,
-          enhancedListing: enabled({ feeCapSol: bad }),
-        }).errors.join(),
-      ).toMatch(/fee cap/i);
-    }
   });
 
   it("ignores the section when disabled or absent (regression)", () => {
@@ -203,7 +194,6 @@ describe("validateLaunchForm — enhanced DEX listing (D-033)", () => {
           enabled: false,
           bannerProvided: false,
           description: "",
-          feeCapSol: "0",
         }),
       }).ok,
     ).toBe(true);

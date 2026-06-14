@@ -28,7 +28,7 @@ const payer = Keypair.generate();
 const input: ClaimInput = {
   mint: Keypair.generate().publicKey.toBase58(),
   contentCommitment: "a".repeat(64),
-  claimedLamports: "1500000000",
+  claimedUsdc: "1500000000",
   paymentTimestamp: 1_800_000_000,
   paymentTxSig: "1".repeat(88),
 };
@@ -111,7 +111,7 @@ describe("submitListingClaim", () => {
     expect(noTx.error).toMatch(/transaction signature/);
 
     const badAmount = await submitListingClaim(
-      { ...input, claimedLamports: "0" },
+      { ...input, claimedUsdc: "0" },
       { sender: sender(), signMessage: signWith(payer) },
     );
     expect(badAmount.phase).toBe("error");
