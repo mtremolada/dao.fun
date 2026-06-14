@@ -836,6 +836,214 @@ wire create_proposal validation. Until then, Guarded mode stays Stage 3
 WIP and the MVP ships Council + Cypherpunk only (unchanged from the spec
 scope).
 
+## D-033 — Option A SHIPPED: Guarded mode = gate front door (creation exclusivity verified, then built end to end) (2026-06-12)
+
+Operator decision: "try option A" then "implement A end to end" (this
+session). Both halves done, tests-first throughout, everything on the
+real GovER5 binary in bankrun.
+
+**The spike (tests/stage3-guarded-spike.integration.test.ts) — the
+D-032 "UNVERIFIED RISK" is resolved, all five fork-semantics questions
+answered YES on the deployed binary:**
+
+1. `minCommunityTokensToCreateProposal = u64::MAX` refuses creation for
+   a whale who DEPOSITED the entire community supply — and for the
+   whale's governance delegate (same error code: it is the weight
+   check; no loophole). u64::MAX is unreachable rather than relying on
+   any "disabled" special-case: no real deposit or VSR weight (digit
+   shift 0, max 1x lockup multiplier) can reach it.
+2. A COUNCIL TokenOwnerRecord can author a proposal whose VOTING
+   population is the COMMUNITY mint; the community passes it; it
+   executes. This is the gate's creation seat.
+3. With the gate seat holding H+1 council tokens against
+   `minCouncilTokensToCreateProposal = H+1`, no human member (1 token)
+   can author — and even ALL H humans pooled stay below the bar, so
+   exclusivity is structural, not behavioral. Humans keep the veto.
+4. Council veto on a gate-authored community proposal works with the
+   threshold percent ADJUSTED for the gate seat's share of the 2H+1
+   council supply (1-of-2 humans at 20% < 30% does not tip; 2-of-2 at
+   40% does, under Strict council tipping).
+5. Realm authority parks on a NON-SIGNING PDA via
+   SetRealmAuthority(SetUnchecked); the old authority is locked out
+   (0x234 Invalid Authority for Realm).
+
+**The build (proposal-gate v2 + SDK; proven by
+tests/stage3-guarded.integration.test.ts end to end):**
+
+- **Ceremony (buildCreateDaoIxs, mode "guarded")**: council REQUIRED
+  (spec 12.2 veto column); council mint mints 1/human + H+1 to the gate
+  PDA's ATA, then null authority; realm-level
+  minCommunityWeightToCreateGovernance AND the governance's
+  minCommunityTokensToCreateProposal welded to u64::MAX; minCouncil =
+  H+1; councilVeto = `guardedVetoPercent(H, nominal)` (chosen STRICTLY
+  between the k*-1 and k* human-vote shares, so it is correct under
+  either >=/> comparison semantics — property-tested for H 1..20 x
+  nominal 1..100); realm authority -> gate PDA (SetUnchecked); new
+  `gateSetup` group: gate `initialize` (immutable config: mints,
+  requester threshold, mode, whitelist) + `deposit_council` (gate CPIs
+  DepositGoverningTokens signing as its own token owner — H+1 into its
+  TOR, Membership type: never withdrawable).
+- **Gate program v2 instructions** (all CPI layouts pinned from
+  @solana/spl-governance 0.3.28 — the client every GATE 1 suite proved
+  against this exact binary — and re-proven here by use):
+  `guard_create_proposal` (requester signer pays everything and must
+  hold >= the tier proposal threshold of community tokens in a token
+  account; pinned single-choice Approve + deny option; ProposalMeta PDA
+  records the requester), `guard_insert_transaction` (while guarded:
+  the D-030 validation engine runs on the EXACT borsh
+  Vec<InstructionData> bytes forwarded to the governance program — no
+  reserialization between validation and storage; refuses off-menu
+  outer programs, unwraps the Squads vaultTransactionCreate message and
+  refuses off-menu INNER programs, refuses buffered messages and ALTs,
+  and HARD-REFUSES any leg targeting the governance program itself —a
+  SetGovernanceConfig/SetRealmConfig leg is how a winning vote would
+  re-open the front door; the gate program itself is always admissible
+  so the voted ratchet can ride), `guard_sign_off`/`guard_cancel`
+  (requester-gated pass-throughs; the gate owns every proposal so these
+  are the only path), `release_realm_authority` (refused while guarded;
+  after a voted ratchet it permissionlessly hands the realm to its own
+  governance via SetChecked).
+- **The exit story (proven in one test run)**: voted ratchet leg
+  (direct leg, governance PDA signs through execution) -> gate mode
+  council; `release_realm_authority` -> realm authority == governance;
+  arbitrary (previously off-menu) inserts now pass the gate (12.2:
+  council admits "menu + arbitrary"); a voted SetGovernanceConfig
+  restores minCommunityTokensToCreateProposal and the whale creates
+  DIRECTLY — the realm converges on a standard MVP council DAO with a
+  vestigial gate. No exit-template machinery needed.
+
+**Honest limits / consequences (documented, not hidden):**
+
+- `setParam` is UNAVAILABLE while guarded (it is a SetGovernanceConfig
+  leg, which the gate hard-refuses). Re-admitting it safely needs
+  on-chain floor-validation of the config bytes — already on the GATE 3
+  "byte-enforced menu" road (D-030 honest limits). Available again
+  post-ratchet.
+- spl-governance caps outstanding proposals per owner TOR (~10); the
+  gate TOR owns ALL guarded proposals, so a guarded realm has a
+  realm-wide cap on simultaneously-active proposals. Cancel/finalize
+  releases slots (guard_cancel proven). Acceptable for the product;
+  revisit only if real DAOs hit it.
+- The requester check reads a TOKEN ACCOUNT balance (holdings), not
+  locked/VSR weight — deliberate: on VSR realms governance deposits sit
+  in the VSR vault so TOR deposits are 0, and creation-spam economics
+  only need skin, not lockup. Works uniformly on no-addin and VSR
+  realms (the gate's council TOR needs no voter-weight record because
+  the council token config has no addin).
+- Gate `initialize` is first-come per realm PDA. A front-runner who
+  initializes "our" gate between ceremony transactions makes the
+  ceremony's gateSetup FAIL LOUDLY (init collision) — launch aborts
+  visibly, nothing custodied; relaunch with a fresh mint. Folds away
+  entirely with the single-tx launch-coordinator (spec 6.9).
+- Buffered Squads chains (account-spanning messages) remain refused in
+  guarded mode — large inner sets must split across proposals.
+  buildGateProposeIxs throws instead of building the buffered wrap.
+
+Suites: stage3-guarded-spike (binary semantics evidence), stage3-guarded
+(end-to-end lifecycle incl. bypass attempts), stage3-gate (v1 engine +
+ratchet still green on the v2 artifact), packages/sdk/test/gate.test.ts
+(veto arithmetic property tests + wire-format round-trip). tsc is now
+clean repo-wide (pre-existing RawMint literal-type errors in action-amm
+fixed per operator instruction "the bar is no errors").
+
+## D-034 — Consolidation onto the live static dapp + GitHub Pages go-live (2026-06-13)
+
+The work scattered across three sibling branches (all off `919c98a`) is
+merged onto the deployed static-dapp lineage and made live, per operator
+instruction ("ship everything we coded incl. the gate, make it live on
+Pages"; "no current DAOs active — just make sure it works"):
+
+- **From `audit-execution-oaj5aa`**: the browser-safe SDK
+  (`sha256.ts` replacing `node:crypto` across artifact-hash /
+  execution-adapter / merkle-distributor / vsr / gate, so the SDK bundles
+  for the static client), `chain-reader.ts` (RpcChainReader — the INV-9
+  recompute from the AUTHORITATIVE on-chain tx count, anomaly detection),
+  `decode.ts` (INV-10 effects decoder, rug-flagging MintTo/SetAuthority/
+  unknown), `verify.ts` (verifyDao buyer-trust primitive), plus
+  `governance-tx.ts` / `launch-plan.ts` / `snapshot.ts` and the audit
+  test suites + AUDIT-FINDINGS.md.
+- **From `option-a-exploration-p6iybh`**: Guarded mode end to end
+  (D-033) — proposal-gate v2, `gate.ts`, the guarded ceremony, prod
+  wiring, and the stage3-guarded suites.
+- **`governance.ts` was hand-synthesized** to carry BOTH lineages: the
+  Token-2022 retargeting (D-013/F-1 — the live app launches Token-2022
+  pump mints) AND the guarded ceremony (gate seat, welded front door,
+  realm authority → gate PDA). Verified on real binaries: gate1-matrix
+  (Token-2022 launches) and stage3-guarded (gate ceremony) BOTH green in
+  the same suite run (17 integration files / 31 tests).
+- **UI re-implemented on the static Phantom shell** (the old
+  server-architecture app files were dropped in the merge): proposal page
+  recomputes the INV-9 hash in-browser ("verified against chain" badge),
+  decodes effects, surfaces anomalies, and cranks permissionless
+  execution; dashboard verifies custody + config (verifyDao) and exposes
+  a permissionless collect-fees button; launch has a realm-squat guard
+  (AUDIT-D) and deep-links to the verify dashboard.
+
+**Deployment**: `claude/zen-cori-t9td4x` added to `deploy-pages.yml`
+triggers so a push publishes the static export to
+`https://mtremolada.github.io/dao.fun/`. Reads ride the user's
+RPC/wallet (public mainnet default + `?rpc=` override) — no server, no
+secret, per operator ("the users have RPCs in wallets when they
+connect").
+
+**SAFETY LINE held (not improvised):** Guarded ships as integrated,
+real-binary-tested CODE, but the custom `proposal-gate` program is NOT
+deployed to mainnet and Guarded stays UNSELECTABLE in the public UI.
+Putting strangers' treasuries through unaudited custom code violates the
+spec's hard rule (no mainnet custom program before GATE 3's external
+audit) and Section 11 (no agent-generated mainnet upgrade key). The
+mainnet gate-program deploy is the operator + audit step; everything that
+rides ONLY audited deployed programs (Council/Cypherpunk/Sovereign
+launch, deposit, vote, execute, collect, verify) is live now.
+
+Green at go-live: sdk 181 + backend 89 + app 23 unit; 17 integration
+files / 31 tests on real binaries; root + app tsc + eslint clean; static
+export builds.
+
+## D-035 — Final launch-path audit: the app now drives the TESTED plan; Guarded deploy made turnkey (2026-06-13)
+
+Operator asked to (a) make the Guarded mainnet deploy ready + noted as
+pending a funded wallet, and (b) audit that the front end actually launches
+DAOs with the chosen settings. Findings + fixes:
+
+- **BUG (would have failed every real launch): `runLaunch` did not pass
+  `communityTokenProgram`.** pump `create_v2` mints are Token-2022 (D-004),
+  but the app called `buildCreateDaoIxs` without it, so the realm-create tx
+  used the classic Token program for the Token-2022 holding accounts — an
+  on-chain failure AFTER the launcher already paid for the treasury + coin.
+  The tested `buildLaunchPlan` always passed it; the app's hand-rolled path
+  did not. (The client launch was never money-tested — PR note: "the first
+  real launch is the live test".)
+- **Fix = delegate, don't duplicate.** `runLaunch` now builds
+  `buildLaunchPlan` (the exact sequence `launch-plan-selfservice` proves
+  end-to-end on the real binaries) and signs+sends its groups via the wallet.
+  The app therefore inherits: Token-2022 retargeting, F-3 fee-LAST (a failed
+  launch never debits the launcher for an ungovernable token — the old app
+  charged the fee 2nd), F-12 council-before-realm, the advance-derivation
+  assertion (INV-7), and the realm-squat guard (AUDIT-D). Settings flow
+  verified: the slider-resolved GovernanceParams (quorum/hold-up/veto) pass
+  straight into the on-chain GovernanceConfig; the proposal threshold is
+  recomputed from the real pump supply at launch (form preview uses a
+  placeholder). `buildLaunchPlan` extended to also emit the guarded
+  council+gate groups (flag-gated; unit + integration green).
+- **Sliders (UI):** governance settings are range inputs whose MIN is the
+  mode×tier floor, so a sub-floor value is structurally unreachable — no
+  after-the-fact floor rejection. (`@daofun/sdk/launch-plan` added as a
+  browser subpath export.)
+- **Guarded deploy is turnkey, pending the operator's wallet.**
+  `programs/proposal-gate/DEPLOY.md` + `scripts/deploy-gate.sh`: generate the
+  program keypair, pin declare_id, build SBF, deploy (upgradeable to an
+  operator key, or `--final` immutable), then pin `GATE_PROGRAM_ID`, rebuild
+  the fixture, set repo var `NEXT_PUBLIC_GUARDED_ENABLED=1`. NOT executed —
+  needs a funded deployer (~3 SOL) + the upgrade-authority decision, and the
+  program is unaudited (deliberate GATE 3 override, operator's call). Guarded
+  stays unselectable until then (selecting it without the program live would
+  brick the DAO at gate-init).
+
+Green: sdk 181 + backend 89 + app 23 unit; 17 integration files / 31 tests on
+real binaries; root + app tsc + eslint clean; static export builds with the
+guarded flag off AND on.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

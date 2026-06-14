@@ -35,6 +35,8 @@ const proposalState: ProposalChainState = {
   holdUpSeconds: 0,
   chainHash: "a".repeat(64),
   publishedArtifactHash: "a".repeat(64),
+  instructionSetComplete: true,
+  singleOption: true,
   vetoVoteWeight: "0",
   vetoed: false,
 };

@@ -122,6 +122,8 @@ describe("action menu: buyback on the curve (real binaries, bankrun)", () => {
         global,
         bondingCurveAccountInfo: curveInfo,
         bondingCurve: curve,
+        // the vault's pre-created token ATA (AUDIT F-5)
+        userTokenAccountInfo: toInfo((await ctx.banksClient.getAccount(vaultAta))!),
       });
       // fee recipients must not end below the rent floor (D-009)
       await prefundMissingWritables(ctx, inner);

@@ -28,3 +28,9 @@ export const SQUADS_V4_PROGRAM_ID = new PublicKey(
 export const MERKLE_DISTRIBUTOR_PROGRAM_ID = new PublicKey(
   "mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv",
 );
+// proposal-gate (ours, Stage 3 — spec 6.9). Matches programs/proposal-gate
+// declare_id; the production id is regenerated at first devnet deploy
+// (D-029 key-handling rules).
+export const GATE_PROGRAM_ID = new PublicKey(
+  "3QgQJ4EufHygGPMSBg4tD1Jzi1tEfyrFH4yXH3w8pBvg",
+);

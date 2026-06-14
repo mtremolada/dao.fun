@@ -363,6 +363,11 @@ export interface Dao {
   councilMint: PublicKey | null;
   councilMember: Keypair;
   councilTor: PublicKey | null;
+  /** All human council members (council: 1; guarded: 2). [0] == councilMember. */
+  councilMembers: Keypair[];
+  councilTors: PublicKey[];
+  /** Guarded only: the gate PDA (realm authority + creation seat). */
+  gate: PublicKey | null;
 }
 
 export async function mintRent(ctx: ProgramTestContext): Promise<bigint> {
@@ -376,7 +381,13 @@ export async function createDao(
 ): Promise<Dao> {
   const payer = ctx.payer;
   const voter = Keypair.generate();
-  const councilMember = Keypair.generate();
+  // Guarded needs >1 human so the veto-vs-creation split is exercised.
+  const councilMembers =
+    mode === "guarded"
+      ? [Keypair.generate(), Keypair.generate()]
+      : [Keypair.generate()];
+  const councilMember = councilMembers[0]!;
+  const hasCouncil = mode === "council" || mode === "guarded";
   const mint = Keypair.generate();
   const councilMintKp = Keypair.generate();
   const createKey = Keypair.generate();
@@ -393,11 +404,13 @@ export async function createDao(
         toPubkey: voter.publicKey,
         lamports: 1_000_000_000,
       }),
-      SystemProgram.transfer({
-        fromPubkey: payer.publicKey,
-        toPubkey: councilMember.publicKey,
-        lamports: 1_000_000_000,
-      }),
+      ...councilMembers.map((m) =>
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: m.publicKey,
+          lamports: 1_000_000_000,
+        }),
+      ),
       SystemProgram.createAccount({
         fromPubkey: payer.publicKey,
         newAccountPubkey: mint.publicKey,
@@ -456,12 +469,14 @@ export async function createDao(
     payer: payer.publicKey,
     mode,
     params,
-    ...(mode === "council"
+    ...(hasCouncil
       ? {
           council: {
             mint: councilMintKp.publicKey,
-            members: [councilMember.publicKey],
-            vetoThresholdPercent: 50,
+            members: councilMembers.map((m) => m.publicKey),
+            // Guarded: nominal HUMAN percent (the builder adjusts for the
+            // gate seat's council share) — 100 == unanimous humans.
+            vetoThresholdPercent: mode === "guarded" ? 100 : 50,
             mintRentLamports: BigInt(rentLamports),
           },
         }
@@ -473,14 +488,22 @@ export async function createDao(
   expect(dao.nativeTreasury.toBase58()).toBe(chain.nativeTreasury.toBase58());
 
   // Execution order is the builder's contract: council mint first (the
-  // realm registers it), then realm, then governance.
+  // realm registers it), then realm, then governance, then (guarded) the
+  // gate ceremony.
   if (dao.groups.council.length > 0) {
     await send(ctx, dao.groups.council, [councilMintKp]);
   }
   await send(ctx, dao.groups.realmSetup, []);
   await send(ctx, dao.groups.governanceSetup, []);
+  if (dao.groups.gateSetup.length > 0) {
+    await send(ctx, dao.groups.gateSetup, []);
+  }
 
   // Voting power: deposit the full supply (no-addin: deposit == weight).
+  // Guarded: keep the gate's requester threshold UNdeposited — the gate
+  // checks a token-account balance, and the voter doubles as requester.
+  const depositAmount =
+    mode === "guarded" ? SUPPLY - params.proposalThresholdTokens : SUPPLY;
   const depositIxs: TransactionInstruction[] = [];
   await withDepositGoverningTokens(
     depositIxs,
@@ -492,7 +515,7 @@ export async function createDao(
     voter.publicKey,
     voter.publicKey,
     payer.publicKey,
-    new BN(SUPPLY.toString()),
+    new BN(depositAmount.toString()),
   );
   await send(ctx, depositIxs, [voter]);
   const voterTor = await getTokenOwnerRecordAddress(
@@ -502,35 +525,41 @@ export async function createDao(
     voter.publicKey,
   );
 
-  // Council membership: deposit the 1 council token the ceremony minted.
-  let councilTor: PublicKey | null = null;
-  if (mode === "council") {
-    const memberAta = getAssociatedTokenAddressSync(
-      councilMintKp.publicKey,
-      councilMember.publicKey,
-      true,
-    );
-    const ixs: TransactionInstruction[] = [];
-    await withDepositGoverningTokens(
-      ixs,
-      SPL_GOVERNANCE_PROGRAM_ID,
-      PROGRAM_VERSION,
-      dao.realm,
-      memberAta,
-      councilMintKp.publicKey,
-      councilMember.publicKey,
-      councilMember.publicKey,
-      payer.publicKey,
-      new BN(1),
-    );
-    await send(ctx, ixs, [councilMember]);
-    councilTor = await getTokenOwnerRecordAddress(
-      SPL_GOVERNANCE_PROGRAM_ID,
-      dao.realm,
-      councilMintKp.publicKey,
-      councilMember.publicKey,
-    );
+  // Council membership: deposit the 1 council token per member the
+  // ceremony minted (Membership type — never withdrawable).
+  const councilTors: PublicKey[] = [];
+  if (hasCouncil) {
+    for (const member of councilMembers) {
+      const memberAta = getAssociatedTokenAddressSync(
+        councilMintKp.publicKey,
+        member.publicKey,
+        true,
+      );
+      const ixs: TransactionInstruction[] = [];
+      await withDepositGoverningTokens(
+        ixs,
+        SPL_GOVERNANCE_PROGRAM_ID,
+        PROGRAM_VERSION,
+        dao.realm,
+        memberAta,
+        councilMintKp.publicKey,
+        member.publicKey,
+        member.publicKey,
+        payer.publicKey,
+        new BN(1),
+      );
+      await send(ctx, ixs, [member]);
+      councilTors.push(
+        await getTokenOwnerRecordAddress(
+          SPL_GOVERNANCE_PROGRAM_ID,
+          dao.realm,
+          councilMintKp.publicKey,
+          member.publicKey,
+        ),
+      );
+    }
   }
+  const councilTor = councilTors[0] ?? null;
 
   // Fund: vault gets the lamports the proposals will sweep; treasury gets
   // its floor + Squads execution rent (D-016).
@@ -561,9 +590,12 @@ export async function createDao(
     params,
     voter,
     voterTor,
-    councilMint: mode === "council" ? councilMintKp.publicKey : null,
+    councilMint: hasCouncil ? councilMintKp.publicKey : null,
     councilMember,
     councilTor,
+    councilMembers,
+    councilTors,
+    gate: dao.gate,
   };
 }
 
@@ -678,6 +710,8 @@ export async function castCommunityYes(
   ctx: ProgramTestContext,
   dao: Dao,
   proposal: PublicKey,
+  /** Gate-authored proposals are owned by the gate's council TOR. */
+  proposalOwnerTor?: PublicKey,
 ) {
   const ixs: TransactionInstruction[] = [];
   await withCastVote(
@@ -687,7 +721,7 @@ export async function castCommunityYes(
     dao.realm,
     dao.governance,
     proposal,
-    dao.voterTor,
+    proposalOwnerTor ?? dao.voterTor,
     dao.voterTor,
     dao.voter.publicKey,
     dao.mint,
@@ -706,7 +740,11 @@ export async function castCouncilVeto(
   ctx: ProgramTestContext,
   dao: Dao,
   proposal: PublicKey,
+  memberIndex = 0,
+  /** Gate-authored proposals are owned by the gate's council TOR. */
+  proposalOwnerTor?: PublicKey,
 ) {
+  const member = dao.councilMembers[memberIndex]!;
   const ixs: TransactionInstruction[] = [];
   await withCastVote(
     ixs,
@@ -715,9 +753,9 @@ export async function castCouncilVeto(
     dao.realm,
     dao.governance,
     proposal,
-    dao.voterTor, // proposal owner's record
-    dao.councilTor!,
-    dao.councilMember.publicKey,
+    proposalOwnerTor ?? dao.voterTor, // proposal owner's record
+    dao.councilTors[memberIndex]!,
+    member.publicKey,
     dao.councilMint!, // the VETOING token is the council mint (D-011)
     new Vote({
       voteType: VoteKind.Veto,
@@ -727,13 +765,15 @@ export async function castCouncilVeto(
     }),
     ctx.payer.publicKey,
   );
-  await send(ctx, ixs, [dao.councilMember]);
+  await send(ctx, ixs, [member]);
 }
 
 export async function finalizeAfterVotingWindow(
   ctx: ProgramTestContext,
   dao: Dao,
   proposal: PublicKey,
+  /** Gate-authored proposals are owned by the gate's council TOR. */
+  proposalOwnerTor?: PublicKey,
 ): Promise<ProposalState> {
   await warpSeconds(ctx, BASE_VOTING_TIME_S + 10);
   const ixs: TransactionInstruction[] = [];
@@ -744,7 +784,7 @@ export async function finalizeAfterVotingWindow(
     dao.realm,
     dao.governance,
     proposal,
-    dao.voterTor,
+    proposalOwnerTor ?? dao.voterTor,
     dao.mint,
   );
   await send(ctx, ixs, []);

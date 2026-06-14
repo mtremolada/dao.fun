@@ -1,39 +1,18 @@
 /**
- * Client-side governance transaction builders (no server). The browser
- * reads the proposal/realm context over the user's RPC and assembles the
- * SAME spl-governance instructions the backend used to; the connected
- * wallet then signs AND sends through its own RPC. The wallet is the only
- * fee-payer/signer on every tx built here.
+ * Client-side governance tx builders — thin adapters over the SDK's TESTED
+ * resolvers (`@daofun/sdk/governance-tx`), which read the token program from
+ * the mint's owner and apply the Token-2022 deposit adaptation (D-013/F-7).
+ * pump community mints are Token-2022, so the previous hand-rolled classic
+ * path would have FAILED on-chain — these resolvers are proven against the
+ * real governance binary (wallet-vote + audit-f7 integration tests). The
+ * connected wallet is the only fee-payer/signer.
  */
-import BN from "bn.js";
 import { Connection, PublicKey, Transaction } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import {
-  Governance,
-  Vote,
-  VoteChoice,
-  VoteKind,
-  getGovernanceAccount,
-  getProposal,
-  getTokenOwnerRecordAddress,
-  withCastVote,
-  withDepositGoverningTokens,
-} from "@solana/spl-governance";
-import { SPL_GOVERNANCE_PROGRAM_ID } from "./chain";
+import { resolveCastVoteTx, resolveDepositTx } from "@daofun/sdk/governance-tx";
+import { base64ToBytes } from "./wallet-standard";
 
-const PROGRAM_VERSION = 3;
-
-async function finalize(
-  ixs: Transaction["instructions"],
-  wallet: PublicKey,
-  connection: Connection,
-): Promise<Transaction> {
-  const tx = new Transaction().add(...ixs);
-  tx.feePayer = wallet;
-  tx.recentBlockhash = (
-    await connection.getLatestBlockhash("confirmed")
-  ).blockhash;
-  return tx;
+function deserialize(txBase64: string): Transaction {
+  return Transaction.from(base64ToBytes(txBase64));
 }
 
 export async function buildCastVoteTx(
@@ -42,51 +21,12 @@ export async function buildCastVoteTx(
   wallet: PublicKey,
   approve: boolean,
 ): Promise<Transaction> {
-  // realm/governance/mint/proposer-record all come from chain state — the
-  // caller supplies only (proposal, wallet, approve).
-  const prop = await getProposal(connection, proposal);
-  const governance = await getGovernanceAccount(
-    connection,
-    prop.account.governance,
-    Governance,
-  );
-  const realm = governance.account.realm;
-  const mint = prop.account.governingTokenMint;
-  const voterTor = await getTokenOwnerRecordAddress(
-    SPL_GOVERNANCE_PROGRAM_ID,
-    realm,
-    mint,
-    wallet,
-  );
-  const vote = approve
-    ? new Vote({
-        voteType: VoteKind.Approve,
-        approveChoices: [new VoteChoice({ rank: 0, weightPercentage: 100 })],
-        deny: undefined,
-        veto: undefined,
-      })
-    : new Vote({
-        voteType: VoteKind.Deny,
-        approveChoices: undefined,
-        deny: true,
-        veto: undefined,
-      });
-  const ixs: Transaction["instructions"] = [];
-  await withCastVote(
-    ixs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
-    realm,
-    prop.account.governance,
+  const { txBase64 } = await resolveCastVoteTx(connection, {
     proposal,
-    prop.account.tokenOwnerRecord,
-    voterTor,
     wallet,
-    mint,
-    vote,
-    wallet,
-  );
-  return finalize(ixs, wallet, connection);
+    approve,
+  });
+  return deserialize(txBase64);
 }
 
 export async function buildDepositTx(
@@ -95,24 +35,13 @@ export async function buildDepositTx(
   governingTokenMint: PublicKey,
   wallet: PublicKey,
   amount: bigint,
-  tokenProgram?: PublicKey,
 ): Promise<Transaction> {
   if (amount <= 0n) throw new Error("deposit: amount must be positive");
-  const source = tokenProgram
-    ? getAssociatedTokenAddressSync(governingTokenMint, wallet, false, tokenProgram)
-    : getAssociatedTokenAddressSync(governingTokenMint, wallet);
-  const ixs: Transaction["instructions"] = [];
-  await withDepositGoverningTokens(
-    ixs,
-    SPL_GOVERNANCE_PROGRAM_ID,
-    PROGRAM_VERSION,
+  const { txBase64 } = await resolveDepositTx(connection, {
     realm,
-    source,
     governingTokenMint,
     wallet,
-    wallet,
-    wallet,
-    new BN(amount.toString()),
-  );
-  return finalize(ixs, wallet, connection);
+    amount,
+  });
+  return deserialize(txBase64);
 }

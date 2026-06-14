@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Keypair, SystemProgram } from "@solana/web3.js";
 import { computeInstructionSetHash } from "../src/artifacts";
-import { SqliteArtifactStore } from "../src/sqlite-store";
+import { SqliteArtifactStore, SqliteLaunchStore } from "../src/sqlite-store";
+import { runLaunch, type LaunchStep } from "../src/launch-machine";
 
 const a = Keypair.generate().publicKey;
 const b = Keypair.generate().publicKey;
@@ -78,5 +79,61 @@ describe("SqliteArtifactStore", () => {
     expect(() => SqliteArtifactStore.fromEnv("postgres://nope")).toThrow(
       /sqlite:/,
     );
+  });
+});
+
+describe("SqliteLaunchStore", () => {
+  function launchDbPath(): string {
+    return join(mkdtempSync(join(tmpdir(), "launches-")), "launches.db");
+  }
+
+  it("persists launch state across instances; a crashed run resumes only the missing steps", async () => {
+    const path = launchDbPath();
+    const ran: string[] = [];
+    const stepA: LaunchStep = {
+      name: "a",
+      run: async () => {
+        ran.push("a");
+        return ["sig-a"];
+      },
+    };
+    const failingB: LaunchStep = {
+      name: "b",
+      run: async () => {
+        ran.push("b-fail");
+        throw new Error("boom");
+      },
+    };
+
+    const store1 = new SqliteLaunchStore(path);
+    const failed = await runLaunch("L1", [stepA, failingB], store1);
+    expect(failed.status).toBe("failed");
+    expect(failed.failedStep).toBe("b");
+    expect(failed.completedSteps["a"]).toEqual(["sig-a"]);
+    store1.close();
+
+    // A fresh process/store loads the persisted state and re-runs ONLY b.
+    const store2 = new SqliteLaunchStore(path);
+    const okB: LaunchStep = {
+      name: "b",
+      run: async () => {
+        ran.push("b-ok");
+        return ["sig-b"];
+      },
+    };
+    const done = await runLaunch("L1", [stepA, okB], store2);
+    expect(done.status).toBe("complete");
+    expect(done.completedSteps).toEqual({ a: ["sig-a"], b: ["sig-b"] });
+    store2.close();
+
+    // a ran once, b failed once then succeeded — a was NOT re-run on resume.
+    expect(ran).toEqual(["a", "b-fail", "b-ok"]);
+  });
+
+  it("parses the LAUNCH_STORE env form and rejects other schemes", () => {
+    const store = SqliteLaunchStore.fromEnv(`sqlite:${launchDbPath()}`);
+    expect(store).toBeInstanceOf(SqliteLaunchStore);
+    store.close();
+    expect(() => SqliteLaunchStore.fromEnv("redis://nope")).toThrow(/sqlite:/);
   });
 });

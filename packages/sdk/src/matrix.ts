@@ -71,8 +71,51 @@ export function holdUpFloorSeconds(
     case "sovereign":
       return 0;
     case "guarded":
-      throw new Error("guarded mode ships at Stage 3 (proposal-gate program)");
+      // Spec 12.2: tier floor at maximum strictness.
+      return floor;
   }
+}
+
+/**
+ * On a guarded realm the gate seat holds H+1 of the 2H+1 council tokens,
+ * so a "nominal" human veto threshold (percent of the H humans) must be
+ * mapped to an on-chain percent of the full council supply. Returns an
+ * integer percent p such that k* = ceil(H*nominal/100) human vetoes
+ * strictly cross it and k*-1 strictly do not — strict on both sides, so
+ * the result is correct under either >=-or-> program semantics
+ * (empirically pinned by the guarded integration suite). Lives here (not
+ * gate.ts) so the browser-bundled launch form can validate without chain
+ * deps.
+ */
+export function guardedVetoPercent(
+  humanCount: number,
+  nominalPercent: number,
+): number {
+  if (!Number.isInteger(humanCount) || humanCount < 1 || humanCount > 49) {
+    throw new Error("guardedVetoPercent: humanCount must be 1..49");
+  }
+  if (
+    !Number.isInteger(nominalPercent) ||
+    nominalPercent < 1 ||
+    nominalPercent > 100
+  ) {
+    throw new Error("guardedVetoPercent: nominalPercent must be 1..100");
+  }
+  const k = Math.max(1, Math.ceil((humanCount * nominalPercent) / 100));
+  const supply = 2 * humanCount + 1;
+  const pLow = Math.floor(((k - 1) * 100) / supply) + 1;
+  const pHigh = Math.ceil((k * 100) / supply) - 1;
+  if (pLow > pHigh) {
+    throw new Error(
+      "guardedVetoPercent: no unambiguous integer threshold exists for this council size",
+    );
+  }
+  return Math.floor((pLow + pHigh) / 2);
+}
+
+/** How many council tokens the gate seat holds/needs: H+1. */
+export function gateSeatCouncilTokens(humanCount: number): number {
+  return humanCount + 1;
 }
 
 export interface ResolveParams {
@@ -112,7 +155,11 @@ export function resolveGovernanceParams(p: ResolveParams): GovernanceParams {
       vetoEnabled = false;
       break;
     case "guarded":
-      throw new Error("guarded mode ships at Stage 3 (proposal-gate program)");
+      // Spec 12.2: strictest hold-up, veto REQUIRED (the human council
+      // keeps the veto while the gate holds the creation seat — D-033).
+      holdUpSeconds = holdUpFloorSeconds("guarded", p.tier);
+      vetoEnabled = true;
+      break;
   }
 
   // Checked math (INV-6): bigint ops cannot overflow; guard against a zero

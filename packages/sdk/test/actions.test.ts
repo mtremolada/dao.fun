@@ -173,6 +173,13 @@ describe("buyback (curve venue — the token's own bonding curve, spec 6.8)", ()
         lamports: 1,
         data: Buffer.alloc(0),
       },
+      // the vault's pre-created token ATA (non-null -> no ATA-create ix)
+      userTokenAccountInfo: {
+        executable: false,
+        owner: Keypair.generate().publicKey,
+        lamports: 1,
+        data: Buffer.alloc(0),
+      },
       ...overrides,
     } as Parameters<typeof buildBuybackIxs>[0]);
   }
