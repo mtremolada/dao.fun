@@ -39,6 +39,21 @@ export interface LaunchFormInput {
     /** Sovereign confirm #2: "this DAO can drain itself the moment a vote passes" */
     canDrainImmediately?: boolean;
   };
+  /**
+   * Opt-in DEX Screener Enhanced Token Info (D-036), available in any mode.
+   * Plain types only (this is the client-safe subpath); the launch orchestrator
+   * turns feeCapSol into lamports and the uploaded banner into an IPFS CID.
+   */
+  enhancedListing?: {
+    enabled: boolean;
+    feeCapSol: string;
+    description: string;
+    bannerProvided: boolean;
+    twitter?: string;
+    telegram?: string;
+    website?: string;
+    discord?: string;
+  };
 }
 
 export interface LaunchFormResult {
@@ -152,6 +167,26 @@ export function validateLaunchForm(
       input.sovereignHoldUpSeconds < 0
     ) {
       errors.push("Sovereign requires an explicit hold-up of 0 or more seconds.");
+    }
+  }
+
+  // Enhanced DEX listing (D-036): opt-in in any mode. Only the data the
+  // launcher must supply now is checked; the fee is paid later by a community
+  // member and reimbursed by a capped DAO vote (INV-12), so there is no spend
+  // to validate here — just the committed content shape and the fee ceiling.
+  const el = input.enhancedListing;
+  if (el?.enabled) {
+    if (!el.bannerProvided) {
+      errors.push("Enhanced DEX listing needs a banner image.");
+    }
+    if (!el.description || el.description.trim().length === 0) {
+      errors.push("Enhanced DEX listing needs a description.");
+    }
+    const cap = Number(el.feeCapSol);
+    if (!Number.isFinite(cap) || cap <= 0) {
+      errors.push(
+        "Enhanced DEX listing fee cap must be a positive number of SOL.",
+      );
     }
   }
 

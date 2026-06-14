@@ -1,4 +1,8 @@
 import type { Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import type {
+  EnhancedListingContent,
+  EnhancedListingTarget,
+} from "./enhanced-listing";
 
 // Spec Section 4. "guarded" ships at Stage 3 (proposal-gate program).
 export type GovernanceMode = "council" | "cypherpunk" | "sovereign" | "guarded";
@@ -23,6 +27,37 @@ export interface DaoConfig {
   councilMembers?: PublicKey[]; // required iff mode == "council"
   councilVetoThresholdPercent?: number; // iff council
   sovereignHoldUpSeconds?: number; // iff sovereign; >= 0; double-confirmed
+  /** Opt-in DEX Screener Enhanced Token Info, paid via community reimbursement (D-036). */
+  enhancedListing?: EnhancedListingConfig;
+}
+
+/**
+ * Enhanced-listing config committed at launch (D-036). No funds move at launch;
+ * a community member later pays DEX Screener and is reimbursed by a DAO vote,
+ * capped at feeCapLamports (INV-12). `content` is hashed into contentCommitment
+ * (computeContentCommitment) so only the committed assets can be submitted.
+ */
+export interface EnhancedListingConfig {
+  enabled: boolean;
+  target: EnhancedListingTarget; // "dex-screener"
+  feeCapLamports: bigint; // reimbursement ceiling (INV-12)
+  contentCommitment: string; // sha256 over `content`
+  content: EnhancedListingContent;
+}
+
+export type EnhancedListingStatus =
+  | "open" // committed at launch; no claim yet
+  | "claim-pending-vote"
+  | "approved-awaiting-funds" // voted; keeper executes once the vault is funded
+  | "live"
+  | "disabled";
+
+export interface EnhancedListingReceipt {
+  dexScreenerUrl: string; // the live Enhanced Token Info page
+  paymentTxSig: string; // the doer's on-chain payment to DEX Screener
+  doer: PublicKey; // the proven payer wallet that was reimbursed
+  claimedLamports: bigint; // actual amount reimbursed (<= feeCapLamports)
+  submittedAt: number; // unix seconds
 }
 
 export interface GovernanceParams {
@@ -49,6 +84,8 @@ export interface LaunchResult {
   txSignatures: string[];
   mintAuthorityNull: boolean; // must be true (INV-5)
   predictedPdasMatched: boolean; // must be true (advance rule)
+  /** Present iff the launch opted into an enhanced listing (D-036). */
+  enhancedListing?: { contentCommitment: string; status: EnhancedListingStatus };
 }
 
 export interface SweepResult {

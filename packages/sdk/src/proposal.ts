@@ -16,11 +16,18 @@
  * (D-016): the native treasury must hold execution rent headroom before
  * the proposal executes — the launch flow prefunds it.
  */
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 import {
+  ComputeBudgetProgram,
+  PublicKey,
+  TransactionInstruction,
+} from "@solana/web3.js";
+import {
+  InstructionExecutionStatus,
+  ProposalState,
   VoteType,
   createInstructionData,
   withCreateProposal,
+  withExecuteTransaction,
   withInsertTransaction,
   withSignOffProposal,
 } from "@solana/spl-governance";
@@ -176,4 +183,111 @@ export async function buildProposeIxs(
     buffered,
     groups: { create, inserts, signOff },
   };
+}
+
+/**
+ * Claim lifecycle as seen from a passed (or not-yet-passed) proposal:
+ * - not-ready : still Draft/SigningOff/Voting — the vote has not carried.
+ * - rejected  : Defeated/Vetoed/Cancelled — it will never be claimable.
+ * - claimable : Succeeded/Executing — the verified beneficiary may pull it.
+ * - claimed   : Completed — every leg already executed.
+ */
+export type ClaimStatus = "not-ready" | "rejected" | "claimable" | "claimed";
+
+export interface ExecuteLeg {
+  /** The ProposalTransaction PDA (getProposalTransactionAddress, option 0, index i). */
+  proposalTransaction: PublicKey;
+  /**
+   * The wrapped instruction this leg runs — re-read from the on-chain
+   * ProposalTransaction so the executed effect is the one the DAO voted on
+   * (INV-9), not anything the caller re-supplied.
+   */
+  instruction: TransactionInstruction;
+  /** On-chain execution status; Success means this leg already ran. */
+  executionStatus: InstructionExecutionStatus;
+}
+
+export interface BuildExecuteParams {
+  governance: PublicKey;
+  proposal: PublicKey;
+  /** Current on-chain ProposalState — the vote gate. */
+  state: ProposalState;
+  /** One per ProposalTransaction, in execution order (the Squads chain is ordered). */
+  legs: ExecuteLeg[];
+  programVersion?: number;
+  /**
+   * CU limit per execute tx. Governance execute -> Squads execute -> the inner
+   * CPIs stack past the 200k default; the mainnet GATE-1 runs used 400k.
+   */
+  computeUnitLimit?: number;
+}
+
+export interface BuildExecuteResult {
+  status: ClaimStatus;
+  /** One transaction per not-yet-executed leg; empty unless status is "claimable". */
+  groups: TransactionInstruction[][];
+}
+
+const DEFAULT_EXECUTE_CU = 400_000;
+
+/** Map an on-chain ProposalState to the claim lifecycle (no chain reads). */
+export function proposalClaimStatus(state: ProposalState): ClaimStatus {
+  switch (state) {
+    case ProposalState.Succeeded:
+    case ProposalState.Executing:
+    case ProposalState.ExecutingWithErrors:
+      return "claimable";
+    case ProposalState.Completed:
+      return "claimed";
+    case ProposalState.Defeated:
+    case ProposalState.Vetoed:
+    case ProposalState.Cancelled:
+      return "rejected";
+    default: // Draft, SigningOff, Voting
+      return "not-ready";
+  }
+}
+
+/**
+ * Turn a PASSED proposal into the claim transactions that execute it — the
+ * execute counterpart to buildProposeIxs. This is the entire enforcement of
+ * "reimbursement is claimable only after a passing vote": no Succeeded state,
+ * no claim tx. It is also idempotent (already-executed legs are skipped, so a
+ * partially-claimed proposal resumes cleanly) and reuses the exact
+ * withExecuteTransaction path proven against the deployed fork by the bankrun
+ * integration suite and the mainnet gate runs.
+ *
+ * Anyone may submit these (governance execution is permissionless once
+ * Succeeded); the verified beneficiary is already baked into the inner
+ * transfer the DAO voted on, so the funds can only land where the proposal
+ * said. Send the groups in order — the Squads custody chain is ordered.
+ */
+export async function buildExecuteProposalIxs(
+  p: BuildExecuteParams,
+): Promise<BuildExecuteResult> {
+  const status = proposalClaimStatus(p.state);
+  if (status !== "claimable") return { status, groups: [] };
+
+  const version = p.programVersion ?? PROGRAM_VERSION;
+  const units = p.computeUnitLimit ?? DEFAULT_EXECUTE_CU;
+  const groups: TransactionInstruction[][] = [];
+  for (const leg of p.legs) {
+    // Idempotent resume: a leg the chain already executed is never re-run.
+    if (leg.executionStatus === InstructionExecutionStatus.Success) continue;
+    const exec: TransactionInstruction[] = [];
+    await withExecuteTransaction(
+      exec,
+      SPL_GOVERNANCE_PROGRAM_ID,
+      version,
+      p.governance,
+      p.proposal,
+      leg.proposalTransaction,
+      [createInstructionData(leg.instruction)],
+    );
+    groups.push([
+      ComputeBudgetProgram.setComputeUnitLimit({ units }),
+      ...exec,
+    ]);
+  }
+  return { status: "claimable", groups };
 }

@@ -23,6 +23,10 @@ import { detectProposalAnomalies, type ChainReader } from "./chain-reader";
 import type { HolderSnapshotSource } from "./holder-snapshot";
 import type { GovernanceTxSource } from "./tx-builder";
 import type { TokenLaunchInput } from "./launch-steps";
+import {
+  toListingClaimVerificationWire,
+  type ListingClaimVerifying,
+} from "./enhanced-listing-source";
 
 export interface ApiDeps {
   launchStore: LaunchStore;
@@ -39,6 +43,8 @@ export interface ApiDeps {
   snapshot?: HolderSnapshotSource;
   /** Unsigned-tx builder for browser signing (D-028); /chain/txs/* 501 when absent. */
   txs?: GovernanceTxSource;
+  /** Payer-submitted listing-claim verifier (D-037); /chain/listing-claims/* 501 when absent. */
+  listingClaim?: ListingClaimVerifying;
   /**
    * Bearer token guarding the MUTATING, server-funded routes (POST /launches,
    * POST /snapshots). `/launches` spends the server's launcher wallet, so it
@@ -339,6 +345,31 @@ async function handle(
         ? json(res, 200, dashboard)
         : json(res, 404, { error: "not found" });
     }
+  }
+
+  // Payer-submitted listing-claim verification (D-037): the payer hands over
+  // BOTH the wallet signature and the payment tx hash; the verifier composes
+  // ownership + on-chain payment + delivery into one verdict. Optional — the
+  // serverless app verifies the signature client-side and treats this as an
+  // authoritative on-chain enhancement.
+  if (
+    req.method === "POST" &&
+    segments[0] === "chain" &&
+    segments[1] === "listing-claims" &&
+    segments[2] === "verify" &&
+    segments.length === 3
+  ) {
+    if (!deps.listingClaim) {
+      return json(res, 501, { error: "listing-claim verifier not configured" });
+    }
+    let body: unknown;
+    try {
+      body = await readBody(req);
+    } catch {
+      return json(res, 400, { error: "invalid JSON body" });
+    }
+    const verdict = await deps.listingClaim.verifyClaim(body);
+    return json(res, 200, toListingClaimVerificationWire(verdict));
   }
 
   return json(res, 404, { error: "not found" });

@@ -1044,6 +1044,87 @@ Green: sdk 181 + backend 89 + app 23 unit; 17 integration files / 31 tests on
 real binaries; root + app tsc + eslint clean; static export builds with the
 guarded flag off AND on.
 
+## D-036 — Enhanced-listing reimbursement bounty: claimable only after a passing vote (2026-06-14)
+
+(Built on a sibling branch off the same base as D-033..D-035; rebased onto
+this trunk. NOTE: these four entries were originally numbered D-033..D-036
+on that branch — renumbered to D-036..D-039 here because the trunk already
+used D-033..D-035 for Guarded/Option-A/go-live. Code comment references were
+remapped to match.)
+
+The enhanced-listing product: a launch may opt into a paid DEX Screener
+Enhanced Token Info page; the DAO commits to the exact content at launch
+(`computeContentCommitment`, sha256 hex, pinned as the proposal
+`descriptionLink`, INV-9-style tamper-evidence) and reimburses the payer out
+of the treasury — but ONLY after the DAO votes to.
+
+- SDK: `computeContentCommitment` (browser-safe, @noble/hashes) +
+  `EnhancedListingConfig`/`EnhancedListingContent` types + opt-in validation
+  in `validateLaunchForm`; `buildBountyReimbursementIxs` (a capped `grant` —
+  INV-12 caps the transfer at the committed fee, reusing the fixed action
+  menu + the Guarded gate, no new whitelist row).
+- The claim EXECUTION reuses the trunk's existing permissionless execute
+  path (`app/lib/execute.ts` + proposal-screen), gated on Succeeded + hold-up;
+  the on-chain `ExecuteTransaction` is the real gate, so nothing pays out
+  before a pass and never above the cap. (The sibling branch's parallel
+  claim-execution module was dropped in favour of the trunk's.)
+- Verification primitives: `verifyClaimSignature` (SDK, ed25519 over a
+  canonical challenge binding mint/content/payer/amount/tx/timestamp);
+  `OnChainPaymentVerifier` + `DexScreenerOrdersSource` (backend, optional).
+
+## D-037 — Payer submits BOTH proofs themselves (wallet signature + tx hash) (2026-06-14)
+
+The payment tx hash is PUBLIC on-chain, so it is worthless alone; it is only
+trusted PAIRED with a fresh wallet signature over the bound challenge
+(proving control of the paying wallet, which a public hash does not). Both
+are REQUIRED.
+
+- SDK (browser-safe `enhanced-listing-claim` subpath): `ClaimSubmission` wire
+  type + `decodeClaimSubmission` (fail-closed on the first malformed field) +
+  `encodeClaimSubmission` + `verifyClaimSubmissionSignature`.
+- App (serverless): new `solana:signMessage` capability on BOTH active sender
+  paths (injected provider — the path the app prefers + the e2e exercises —
+  and the wallet-standard sender); `lib/listing-claim` builds the challenge,
+  the wallet signs it, the submission is assembled + verified locally, and
+  POSTed to a verifier only when a URL is configured; `/claim` page
+  (query-driven, deep-linkable from the launch artifact).
+- Backend (optional): `ListingClaimVerifier` composes ownership + on-chain
+  payment + delivery into one verdict; `POST /chain/listing-claims/verify`
+  (501 when unconfigured). The serverless app does not require it — it checks
+  the signature client-side and treats this as an authoritative enhancement.
+
+## D-038 — Don't gate on the payment destination; verify timestamp + amount, community checks the rest (2026-06-14)
+
+DEX Screener settles through Helio, whose Solana recipient is NOT a stable
+address, so a destination allowlist would false-reject legitimate payments.
+`OnChainPaymentVerifier.ok = signerMatches && amountSufficient &&
+withinTimeWindow` (ownership + amount + time only); the payment `recipients`
+(accounts other than the payer that gained lamports) are surfaced
+informationally so the DAO can check "the rest" before voting. Safe because
+delivery (an approved tokenProfile order) already proves the listing is live,
+ownership binds the payout to the payer, and INV-12 caps the reimbursement.
+
+## D-039 — Every token's DAO is reconstructable from chain alone; serverless proposal discovery (2026-06-14)
+
+A token's votes, proposals and DEX-paid bounties must survive launch with no
+server and nothing lost. The realm/governance/treasury are deterministic PDAs
+from the mint (`deriveGovernanceChainFromMint`); the one missing piece was
+proposal DISCOVERY, which previously needed an address handed in.
+
+- App `lib/chain.ts`: `daoFromMint(mint)` derives the addresses OFFLINE;
+  `listProposals(connection, mint)` enumerates EVERY proposal of the token's
+  governance straight from the program (`getProposalsByGovernance`) — votes +
+  bounty reimbursements — with name/state/claim-status, sorted.
+- `/dao?mint=` shows the derived addresses (no RPC) + the on-chain proposal
+  list, each row deep-linking to `/proposal?id=`; the legacy `?realm=&vault=`
+  treasury view (verify panel / collect / sweeps / vote power / deposit) is
+  preserved unchanged. A token's DAO is now 100% reconstructable from chain
+  given only the mint, with zero server-persisted state.
+
+Integration evidence (rebased onto the trunk): sdk 216 + backend 107 + app 36
+unit, 13 app e2e (incl. payer-submits-both + deterministic discovery with a
+dead RPC); full tsc + eslint clean; static export builds.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011

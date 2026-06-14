@@ -20,6 +20,11 @@ interface SolanaProvider {
     tx: Transaction,
   ): Promise<{ signature: string } | string>;
   signTransaction?(tx: Transaction): Promise<Transaction>;
+  /** Phantom/Solflare: ed25519-sign raw bytes; returns the 64-byte signature. */
+  signMessage?(
+    message: Uint8Array,
+    display?: "utf8" | "hex",
+  ): Promise<{ signature: Uint8Array } | Uint8Array>;
 }
 
 function injectedWindow(): Record<string, unknown> | undefined {
@@ -66,6 +71,14 @@ export function senderFromProvider(
         return connection.sendRawTransaction(signed.serialize());
       }
       throw new Error(`${address} cannot sign transactions`);
+    },
+    async signMessage(message: Uint8Array) {
+      if (typeof provider.signMessage !== "function") {
+        throw new Error(`${address} cannot sign messages`);
+      }
+      const r = await provider.signMessage(message, "utf8");
+      const signature = r instanceof Uint8Array ? r : r.signature;
+      return signature instanceof Uint8Array ? signature : new Uint8Array(signature);
     },
   };
 }

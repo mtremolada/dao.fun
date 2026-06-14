@@ -124,6 +124,99 @@ describe("validateLaunchForm — floors are floors (spec 6.7)", () => {
   });
 });
 
+describe("validateLaunchForm — enhanced DEX listing (D-033)", () => {
+  const enabled = (over: Record<string, unknown> = {}) => ({
+    enabled: true,
+    feeCapSol: "1.6",
+    description: "A community token.",
+    bannerProvided: true,
+    ...over,
+  });
+
+  it("accepts a valid enhanced listing on a cypherpunk launch", () => {
+    const r = validateLaunchForm({
+      mode: "cypherpunk",
+      tier: "micro",
+      confirmations: { noVetoIrreversible: true },
+      enhancedListing: enabled(),
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("is available across council and sovereign too", () => {
+    expect(
+      validateLaunchForm({
+        mode: "council",
+        tier: "small",
+        councilMembers: [member()],
+        councilVetoThresholdPercent: 60,
+        confirmations: {},
+        enhancedListing: enabled(),
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateLaunchForm({
+        mode: "sovereign",
+        tier: "micro",
+        sovereignHoldUpSeconds: 0,
+        confirmations: { noVeto: true, canDrainImmediately: true },
+        enhancedListing: enabled(),
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("requires a banner, a description, and a positive fee cap", () => {
+    const base = {
+      mode: "cypherpunk" as const,
+      tier: "micro" as const,
+      confirmations: { noVetoIrreversible: true },
+    };
+    expect(
+      validateLaunchForm({
+        ...base,
+        enhancedListing: enabled({ bannerProvided: false }),
+      }).errors.join(),
+    ).toMatch(/banner/i);
+    expect(
+      validateLaunchForm({
+        ...base,
+        enhancedListing: enabled({ description: "   " }),
+      }).errors.join(),
+    ).toMatch(/description/i);
+    for (const bad of ["0", "-1", "abc", ""]) {
+      expect(
+        validateLaunchForm({
+          ...base,
+          enhancedListing: enabled({ feeCapSol: bad }),
+        }).errors.join(),
+      ).toMatch(/fee cap/i);
+    }
+  });
+
+  it("ignores the section when disabled or absent (regression)", () => {
+    expect(
+      validateLaunchForm({
+        mode: "cypherpunk",
+        tier: "micro",
+        confirmations: { noVetoIrreversible: true },
+        enhancedListing: enabled({
+          enabled: false,
+          bannerProvided: false,
+          description: "",
+          feeCapSol: "0",
+        }),
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateLaunchForm({
+        mode: "cypherpunk",
+        tier: "micro",
+        confirmations: { noVetoIrreversible: true },
+      }).ok,
+    ).toBe(true);
+  });
+});
+
 describe("hashBadge (INV-9 surface)", () => {
   it("verified iff the recomputed chain hash equals the artifact hash", () => {
     expect(hashBadge("abc", "abc")).toBe("verified");
