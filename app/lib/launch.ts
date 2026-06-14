@@ -68,6 +68,16 @@ export interface LaunchInput {
    * additive — it does not touch the on-chain launch plan.
    */
   enhancedListing?: { content: EnhancedListingContent };
+  /**
+   * TEST ONLY (gated behind NEXT_PUBLIC_TEST_MODE): shorten the community voting
+   * window so a mainnet smoke test finalizes in minutes, not the 3-day default.
+   */
+  baseVotingTimeSeconds?: number;
+  /**
+   * TEST ONLY: set the exact proposal-threshold token count (raw, 6dp) instead
+   * of the tier %-of-supply floor, so a tiny holding can create proposals.
+   */
+  proposalThresholdTokensOverride?: bigint;
 }
 
 export interface LaunchStepState {
@@ -96,6 +106,16 @@ export interface LaunchResult {
 
 /** Real-supply proposal threshold (the form preview uses a placeholder supply). */
 function realParams(input: LaunchInput): GovernanceParams {
+  // TEST ONLY: an explicit tiny threshold so a small holding can propose.
+  if (input.proposalThresholdTokensOverride !== undefined) {
+    return {
+      ...input.params,
+      proposalThresholdTokens:
+        input.proposalThresholdTokensOverride > 0n
+          ? input.proposalThresholdTokensOverride
+          : 1n,
+    };
+  }
   const bps = BigInt(TIER_FLOORS[input.tier].proposalThresholdSupplyBps);
   const raw = (PUMP_TOTAL_SUPPLY * bps) / 10_000n;
   return {
@@ -164,6 +184,9 @@ export async function runLaunch(
           protocolTreasury: new PublicKey(input.launchFee.treasury),
           launchFeeLamports: input.launchFee.lamports,
         }
+      : {}),
+    ...(input.baseVotingTimeSeconds !== undefined
+      ? { baseVotingTimeSeconds: input.baseVotingTimeSeconds }
       : {}),
   });
 

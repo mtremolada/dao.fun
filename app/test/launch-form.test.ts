@@ -231,3 +231,26 @@ describe("executeButtonState (INV-3 surface)", () => {
     expect(at.remainingSeconds).toBe(0);
   });
 });
+
+describe("validateLaunchForm — TEST MODE (sub-floor, gated)", () => {
+  const subFloor = {
+    mode: "cypherpunk" as const,
+    tier: "micro" as const,
+    confirmations: { noVetoIrreversible: true },
+    // micro floors are 72h hold-up / 25% quorum — both undercut here
+    overrides: { holdUpSeconds: 0, quorumPercent: 1 },
+  };
+
+  it("rejects sub-floor overrides by default (production safety holds)", () => {
+    const r = validateLaunchForm(subFloor);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join()).toMatch(/below the micro tier floor/);
+  });
+
+  it("accepts sub-floor overrides only when testMode is set, and reflects them", () => {
+    const r = validateLaunchForm(subFloor, { testMode: true });
+    expect(r.ok).toBe(true);
+    expect(r.params?.holdUpSeconds).toBe(0);
+    expect(r.params?.quorumPercent).toBe(1);
+  });
+});

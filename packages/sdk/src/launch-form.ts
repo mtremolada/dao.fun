@@ -71,6 +71,13 @@ export interface LaunchFormOptions {
    * guarded stays unselectable.
    */
   guardedEnabled?: boolean;
+  /**
+   * TEST ONLY — allows sub-floor governance params (tiny quorum / hold-up) so a
+   * mainnet smoke test is cheap to drive solo. NEVER set in production: a
+   * sub-floor DAO is insecure (a small holder can pass + drain it). Gated behind
+   * NEXT_PUBLIC_TEST_MODE in the app, off by default.
+   */
+  testMode?: boolean;
 }
 
 const MAX_COUNCIL = 10;
@@ -202,12 +209,14 @@ export function validateLaunchForm(
   }
 
   // Overrides may only tighten. Sovereign is exempt from floors by design
-  // (its hold-up was already validated above).
+  // (its hold-up was already validated above). TEST MODE allows sub-floor
+  // overrides on ANY mode so a mainnet smoke test is cheap to drive solo.
   const floors = TIER_FLOORS[input.tier];
-  if (input.overrides && input.mode !== "sovereign") {
+  const allowSubFloor = opts.testMode === true;
+  if (input.overrides && (input.mode !== "sovereign" || allowSubFloor)) {
     const { holdUpSeconds, quorumPercent } = input.overrides;
     if (holdUpSeconds !== undefined) {
-      if (holdUpSeconds < params.holdUpSeconds) {
+      if (!allowSubFloor && holdUpSeconds < params.holdUpSeconds) {
         errors.push(
           `Hold-up ${holdUpSeconds}s is below the ${input.tier} tier floor (${params.holdUpSeconds}s).`,
         );
@@ -216,7 +225,7 @@ export function validateLaunchForm(
       }
     }
     if (quorumPercent !== undefined) {
-      if (quorumPercent < floors.quorumPercent) {
+      if (!allowSubFloor && quorumPercent < floors.quorumPercent) {
         errors.push(
           `Quorum ${quorumPercent}% is below the ${input.tier} tier floor (${floors.quorumPercent}%).`,
         );

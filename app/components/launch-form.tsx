@@ -40,6 +40,10 @@ const FEE_LAMPORTS = BigInt(process.env.NEXT_PUBLIC_LAUNCH_FEE_LAMPORTS || "0");
 // ONLY after the program is deployed — otherwise a guarded launch bricks the
 // DAO at the gate-init step.
 const GUARDED_ENABLED = process.env.NEXT_PUBLIC_GUARDED_ENABLED === "1";
+// TEST MODE (off in production): unlocks sub-floor governance params so a
+// mainnet smoke test is cheap + fast to drive solo. NEVER enable on the public
+// deployment — a sub-floor DAO is insecure (a tiny holder can pass + drain it).
+const TEST_MODE = process.env.NEXT_PUBLIC_TEST_MODE === "1";
 
 function fmtDuration(s: number): string {
   if (s <= 0) return "0 — instant";
@@ -156,6 +160,12 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [elWebsite, setElWebsite] = useState("");
   const [elDiscord, setElDiscord] = useState("");
 
+  // TEST MODE params (insecure; only rendered when NEXT_PUBLIC_TEST_MODE=1).
+  const [testQuorum, setTestQuorum] = useState("1");
+  const [testThreshold, setTestThreshold] = useState("1000");
+  const [testVotingSec, setTestVotingSec] = useState("600");
+  const [testHoldUp, setTestHoldUp] = useState("0");
+
   const [steps, setSteps] = useState<LaunchStepState[]>([]);
   const [launching, setLaunching] = useState(false);
   const [result, setResult] = useState<LaunchResult | null>(null);
@@ -183,10 +193,18 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         ? { sovereignHoldUpSeconds: effSovereign }
         : {}),
       // Overrides only ever tighten; the slider min IS the floor, so these
-      // are always valid (sovereign is exempt — no overrides).
-      ...(mode !== "sovereign"
-        ? { overrides: { holdUpSeconds: effHoldUp, quorumPercent: effQuorum } }
-        : {}),
+      // are always valid (sovereign is exempt — no overrides). TEST MODE feeds
+      // sub-floor overrides on any mode (validateLaunchForm allows them).
+      ...(TEST_MODE
+        ? {
+            overrides: {
+              holdUpSeconds: Number(testHoldUp),
+              quorumPercent: Number(testQuorum),
+            },
+          }
+        : mode !== "sovereign"
+          ? { overrides: { holdUpSeconds: effHoldUp, quorumPercent: effQuorum } }
+          : {}),
       ...(elEnabled
         ? {
             enhancedListing: {
@@ -210,6 +228,8 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
     effHoldUp,
     effQuorum,
     effSovereign,
+    testHoldUp,
+    testQuorum,
     elEnabled,
     elDescription,
     elBanner,
@@ -221,7 +241,11 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   ]);
 
   const validated = useMemo(
-    () => validateLaunchForm(form, { guardedEnabled: GUARDED_ENABLED }),
+    () =>
+      validateLaunchForm(form, {
+        guardedEnabled: GUARDED_ENABLED,
+        testMode: TEST_MODE,
+      }),
     [form],
   );
   const metadataReady =
@@ -341,6 +365,15 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           ...(FEE_TREASURY && FEE_LAMPORTS > 0n
             ? { launchFee: { treasury: FEE_TREASURY, lamports: FEE_LAMPORTS } }
             : {}),
+          ...(TEST_MODE
+            ? {
+                baseVotingTimeSeconds: Number(testVotingSec),
+                // pump tokens are 6dp; the threshold is a raw token count.
+                proposalThresholdTokensOverride: BigInt(
+                  Math.floor(Number(testThreshold) * 1e6),
+                ),
+              }
+            : {}),
         },
         (s) => setSteps((prev) => [...prev.filter((p) => p.step !== s.step), s]),
       );
@@ -429,6 +462,60 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           on-chain accounts. Beta — try a small amount first.
         </span>
       </div>
+
+      {TEST_MODE && (
+        <div className="notice" data-testid="test-mode" style={{ borderColor: "crimson" }}>
+          <span className="ficon" aria-hidden="true">
+            🧪
+          </span>
+          <div style={{ width: "100%" }}>
+            <p style={{ marginTop: 0 }}>
+              <b style={{ color: "crimson" }}>TEST MODE — INSECURE.</b> These
+              sub-floor settings let a tiny holding pass &amp; execute proposals
+              so you can smoke-test on mainnet cheaply. <b>Never</b> use this for
+              a real DAO — anyone could drain it.
+            </p>
+            <label htmlFor="test-quorum">Quorum (% of supply to pass)</label>
+            <input
+              id="test-quorum"
+              data-testid="test-quorum"
+              type="number"
+              min={1}
+              value={testQuorum}
+              onChange={(e) => setTestQuorum(e.target.value)}
+            />
+            <label htmlFor="test-threshold">
+              Proposal threshold (whole tokens to create a proposal)
+            </label>
+            <input
+              id="test-threshold"
+              data-testid="test-threshold"
+              type="number"
+              min={0}
+              value={testThreshold}
+              onChange={(e) => setTestThreshold(e.target.value)}
+            />
+            <label htmlFor="test-voting">Voting window (seconds)</label>
+            <input
+              id="test-voting"
+              data-testid="test-voting"
+              type="number"
+              min={60}
+              value={testVotingSec}
+              onChange={(e) => setTestVotingSec(e.target.value)}
+            />
+            <label htmlFor="test-holdup">Hold-up (seconds, 0 = instant)</label>
+            <input
+              id="test-holdup"
+              data-testid="test-holdup"
+              type="number"
+              min={0}
+              value={testHoldUp}
+              onChange={(e) => setTestHoldUp(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
 
       <h2>Token</h2>
       <label htmlFor="coin-name">Coin name</label>
