@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push to the same ref supersedes older in-flight runs, so a rapid
+# series of pushes doesn't leave stale (pre-fix) runs reporting red on main.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     runs-on: ubuntu-latest

@@ -10,7 +10,7 @@
     "build": "pnpm -r run build",
     "test": "vitest run && pnpm -r run test",
     "test:unit": "vitest run --exclude 'tests/**/*.integration.test.ts' && pnpm -r run test:unit",
-    "test:integration": "vitest run tests --testTimeout=120000 --no-file-parallelism",
+    "test:integration": "vitest run tests",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
     "init-wallets": "tsx scripts/init-wallets.ts",
