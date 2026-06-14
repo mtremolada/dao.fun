@@ -167,8 +167,9 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
   const [testVotingSec, setTestVotingSec] = useState("3600");
   const [testHoldUp, setTestHoldUp] = useState("0");
   // Absolute max community vote weight (whole tokens). Quorum % is taken against
-  // THIS instead of the full supply, so any small holding clears it (D-014).
-  const [testMaxWeight, setTestMaxWeight] = useState("1000");
+  // THIS instead of the full supply, so any small holding clears it (D-014). At
+  // 1 token, 1% quorum == 0.01 token to pass — effectively zero.
+  const [testMaxWeight, setTestMaxWeight] = useState("1");
 
   const [steps, setSteps] = useState<LaunchStepState[]>([]);
   const [launching, setLaunching] = useState(false);
