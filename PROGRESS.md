@@ -384,3 +384,13 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       wire-shaped RPC responses. README/PROGRESS/DECISIONS refreshed. Pages
       deploy is automatic on push to the working branch (workflow already
       targets it). 24 e2e total; all suites green.
+- [x] **D-032 decision CLOSED — Guarded commits to Option A (D-042,
+      2026-08-08).** Operator-delegated; the verification spike
+      (tests/guarded-gate-spike.integration.test.ts, 4 tests on the deployed
+      GovER5 v3.1.4 binary) proved front-door exclusivity: u64::MAX community
+      create-weight is an explicit disabled sentinel (whale + delegate
+      refused), zero-weight council refused, and the gate's sole council
+      token authors community-electorate proposals the community votes to
+      Succeeded. GATE 2 + GATE L2 sign-off lines recorded under the same
+      delegation. Remaining Guarded build (gate create_proposal CPI,
+      guarded ceremony mode, SDK/frontend, clearance flow) is Stage 3 WIP.

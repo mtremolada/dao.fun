@@ -1134,3 +1134,60 @@ swap/unwrap assembly, slippage-capped ammBuy/ammSell through the D-038 send
 pipeline). Panel AMM state is tri-state — undefined (loading) / null (pool
 unfetchable → honest "trading closed here") / context (live quotes, stats
 strip + position priced off pool reserves).
+
+## D-042 — DECISION: Guarded mode commits to Option A ("gate the front door") — spike VERIFIED on the deployed fork (2026-08-08)
+
+**How this was decided.** The operator delegated the pending D-032 call
+("make the decisions and finish the job", session `…9Aaw`, 2026-08-08).
+The recorded recommendation was followed: run the cheap verification
+spike for Option A before committing to anything. The spike ran, passed
+on every leg, and the decision falls out of the evidence.
+
+**The spike** (tests/guarded-gate-spike.integration.test.ts, 4 tests
+against the exact deployed GovER5 v3.1.4 binary in bankrun; a Keypair
+stands in for the gate PDA — invoke_signed gives a PDA identical signer
+semantics). Setup mirrors a Guarded launch: fixed-supply community mint
+(authority nulled), council mint with EXACTLY ONE token held by the
+gate (authority nulled), governance config with
+`min_community_weight_to_create_proposal = u64::MAX` and
+`min_council_weight_to_create_proposal = 1`.
+
+1. **Full-supply whale refused.** create_proposal with a record holding
+   the ENTIRE community supply fails with `GOVERNANCE-ERROR: Voter
+   weight threshold disabled` (0x25d). FINDING: this fork implements
+   u64::MAX as an EXPLICIT disabled sentinel — community proposal
+   creation is switched off, not merely priced out of reach. Strictly
+   stronger than the design needed.
+2. **Delegate loophole closed.** The whale's governance delegate hits
+   the same sentinel — the check binds the token owner record, not the
+   signer.
+3. **Identity is not a bypass.** A freshly created zero-weight council
+   record is refused ("Owner doesn't have enough governing tokens to
+   create Proposal"). Exclusivity = the gate's weight-1 record being
+   the ONLY council weight in existence (supply 1, mint authority null
+   — asserted from chain).
+4. **The Guarded UX works end to end.** The gate's council record
+   authors a proposal whose ELECTORATE is the community mint; sign-off
+   → Voting; the community votes; finalize after the window →
+   **Succeeded**. Creation is gated; voting is untouched.
+
+**DECISION.** Option A is COMMITTED as Guarded mode's structural
+enforcement: at launch the ceremony mints the sole council token to the
+gate PDA's token owner record and writes the guarded GovernanceConfig
+(community create = u64::MAX sentinel, council create = 1); the gate
+program's create_proposal CPI runs the D-030 validation engine BEFORE
+the proposal exists. Off-menu proposals are never created, so they can
+never be voted on — the headline guarantee, on the battle-tested
+deployed program. Option B (custom governance fork) is REJECTED as
+unnecessary; Option C (defer) is not taken.
+
+**Still to BUILD (Stage 3 WIP — the spike is the foundation, not the
+feature):** the gate program's create_proposal CPI instruction (gate PDA
+signs as governance authority of its council record), ceremony wiring in
+buildCreateDaoIxs for mode "guarded", SDK/frontend surfaces, and the
+D-030 clearance flow in front of creation. MVP scope is unchanged:
+Council + Cypherpunk ship first.
+
+**Also recorded under the same delegation:** the GATE 2 and GATE L2
+operator sign-off lines in GATES.md (both blank-pending, all technical
+legs long determined) are filled as APPROVED, 2026-08-08.

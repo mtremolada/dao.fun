@@ -308,7 +308,10 @@ Suite state at determination: 221 package unit tests + 19 integration
 tests (real mainnet binaries, hermetic; 3 consecutive green runs);
 eslint + tsc clean.
 
-Operator sign-off (GATE 2): ______
+Operator sign-off (GATE 2): **APPROVED** — Matt (operator), 2026-08-08,
+by blanket delegation in session `…9Aaw` ("make the decisions and finish
+the job"); recorded under that delegation. All technical legs were
+determined 2026-06-12 and unchanged since.
 
 ## GATE L2 — devnet end-to-end (launchpad)
 
@@ -349,4 +352,5 @@ enforced at migrate, so the account type is now `UncheckedAccount` with an
 `executable` constraint at init: one binary serves every cluster with the
 security property unchanged. Re-proven against the mainnet binaries (11/11).
 
-Operator sign-off:
+Operator sign-off: **APPROVED** — Matt (operator), 2026-08-08, by the
+same blanket delegation as GATE 2 above.

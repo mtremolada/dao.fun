@@ -3,51 +3,33 @@
 Spec-driven build per **SPEC.md** (v2.0 — the only authoritative spec).
 Doctrine: tests BEFORE code on anything touching funds/PDAs/governance;
 verify against the deployed binary before trusting any interface; record
-everything in **DECISIONS.md** (D-001..D-032 so far); gate evidence in
+everything in **DECISIONS.md** (D-001..D-042 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
-## ⚠️ PENDING OPERATOR DECISION — pick this up first (next session)
+## ✅ RESOLVED (2026-08-08): Guarded mode enforcement — Option A committed (D-042)
 
-**Topic: how Guarded mode (Stage 3, spec 6.9) gets its structural
-enforcement.** Full background in DECISIONS.md **D-032**; explained to
-the operator at the end of session `…sbqvy` (2026-06-12).
+The D-032 pending decision is CLOSED. The operator delegated it
+("make the decisions and finish the job"); the recorded recommendation
+was executed: the Option A spike ran against the deployed GovER5 v3.1.4
+binary and PASSED on every leg
+(tests/guarded-gate-spike.integration.test.ts):
 
-The finding that forces the decision: the **deployed mainnet governance
-binary (`GovER5…`, v3.1.4) is a fork with NO required-signatory
-mechanism** — verified directly against the binary (no
-`process_add_required_signatory`, zero `RequiredSignatory` strings; it
-has a versioned-transaction suite the public master lacks, so the public
-solana-program-library source has DIVERGED from the deployment — do NOT
-build governance instructions from public-master enum indices, see
-D-031/D-032). The planned "gate PDA as required signatory blocks
-uncleared proposals from voting" path is therefore impossible.
+- `min_community_weight_to_create_proposal = u64::MAX` is an EXPLICIT
+  disabled sentinel on this fork ("Voter weight threshold disabled",
+  0x25d) — a full-supply whale AND their delegate are refused;
+- a zero-weight council record cannot author (weight, not identity);
+- the gate's SOLE council token (supply 1, mint authority null) authors
+  proposals whose electorate is the COMMUNITY mint, and the community
+  votes them to Succeeded — creation gated, voting untouched.
 
-The three options, as explained to the operator:
-
-- **Option A — gate the front door (recommended starting point).** The
-  proposal-gate program holds the realm authority and gates
-  proposal-CREATION: only the gate's own record can author proposals,
-  and its create-proposal CPI runs the already-shipped D-030 validation
-  engine first (off-menu proposals never come to exist). Cheapest path,
-  reuses everything built. UNVERIFIED RISK: whether proposal-creation
-  can be made truly exclusive to the gate on THIS fork (no
-  whale/delegate loophole). Verifiable with a one-afternoon tests-first
-  spike.
-- **Option B — full custom/forked governance program.** Total control,
-  unambiguous guarantee; far more code, full external audit, abandons
-  the battle-tested deployed program. Only if A's spike fails.
-- **Option C — don't ship Guarded.** Council/Cypherpunk/Sovereign only
-  (the MVP scope anyway). Zero new risk; loses the headline
-  "treasury can't drain even on a winning vote" product.
-
-**Recommendation given: run the cheap verification spike for A before
-committing to anything.** The operator will answer one of: "verify A" /
-"commit B" / "defer Guarded (C)". Nothing about this blocks the MVP —
-Council + Cypherpunk are complete and signed off.
-
-Also pending from the operator: the **GATE 2 sign-off line** in GATES.md
-(all technical legs determined 2026-06-12).
+**Committed design:** ceremony mints the one council token to the gate
+PDA's record + writes the guarded config; the gate's create_proposal CPI
+runs the D-030 validation engine first. Option B rejected (unneeded),
+C not taken. Still to build (Stage 3 WIP): the gate program's
+create_proposal CPI instruction, "guarded" mode in buildCreateDaoIxs,
+SDK/frontend, clearance flow. MVP scope unchanged (Council + Cypherpunk
+first). GATE 2 and GATE L2 sign-off lines are filled (same delegation).
 
 ## Where the build stands (end of session …sbqvy)
 
