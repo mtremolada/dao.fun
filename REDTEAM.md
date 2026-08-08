@@ -160,6 +160,47 @@ not already do — and both are hash-pinned and hold-up-gated.
    badge. Operators running real funds should pin a trusted RPC
    (env spec).
 
+## 6. Launchpad public-surface threats (devnet dapp)
+
+New attack surface from hosting the launchpad publicly. Each is dispositioned;
+the on-chain program invariants (no withdraw path, INV-VAULT-PDA-ONLY,
+INV-MINT-MATCH, INV-CPI-PINNED, INV-LP-BURNED, INV-FEE-SNAPSHOT) are proven by
+tests/launchpad-*.integration.test.ts against the real binaries and are not
+restated here.
+
+- **6.1 RPC-proxy abuse.** `POST /rpc/devnet` could be used as someone's free
+  Helius quota. Mitigation: method allowlist (no getProgramAccounts/airdrop),
+  per-IP token bucket, and a SEPARATE Helius key from the indexer's — worst
+  case the proxy key is exhausted and the browser falls back to public devnet
+  RPC; the indexer is unaffected. (packages/backend/test/launchpad.test.ts.)
+- **6.2 Airdrop draining.** The faucet endpoint could be drained. Mitigation:
+  server-side only, per-IP + per-pubkey cooldown + global daily cap; on 429 the
+  UI deep-links to faucet.solana.com. Worst case: our airdrop quota burns, UX
+  degrades to the public faucet.
+- **6.3 Metadata-upload abuse.** 8 MiB route cap, MIME allowlist (no SVG —
+  script-injection vector), sharp re-encode kills polyglot files, ≤100 KiB
+  output keeps Turbo/self-host free, per-IP limits, volume quota on the fallback
+  dir. Assets served read-only with ACAO:* (explorer requirement).
+- **6.4 Clickjacking.** The #1 wallet-dapp attack (invisible iframe over the
+  confirm button). `frame-ancestors 'none'` + `X-Frame-Options: DENY` enforced
+  from day one in next.config.mjs, before any soak.
+- **6.5 Wrong-cluster broadcast.** A wallet on mainnet signing a devnet tx.
+  Mitigated by the send pipeline (D-038): sign-only + broadcast to OUR devnet
+  RPC by default, chains preflight, and landing verification — a tx can never
+  silently land on mainnet, and the user gets explicit "enable Testnet Mode"
+  guidance. Residual: the user must set their wallet to devnet; the UI tells
+  them how per wallet.
+- **6.6 CORS / SSE exhaustion.** Exact-origin CORS (no credentials); `/meta/*`
+  is deliberately `*` and read-only. SSE has a per-IP connection cap + heartbeat
+  GC.
+- **6.7 Spam coin creation.** On-chain and permissionless by design — accepted;
+  board ranking / "new" decay is the mitigation surface, not a gate.
+- **6.8 Closed-source CPMM / lock-program upgrade risk.** Raydium's CPMM is
+  upgradeable (~quarterly). Residual: monitored via the deploy-slot watch in
+  RUNBOOK; migration reads `create_pool_fee` live, and the graduation suite is
+  re-run against a fresh dump on any slot change. We do NOT depend on the
+  closed-source LP-lock program (LP is burned, not locked — operator decision).
+
 ## Verdict
 
 No capture path found on simulated micro-tier in either MVP mode that

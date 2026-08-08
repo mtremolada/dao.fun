@@ -1,0 +1,11 @@
+# Railway service config for the launchpad backend (RUNBOOK E1).
+# Volume must be mounted at /data via the dashboard; sleep/serverless OFF.
+[build]
+builder = "NIXPACKS"
+buildCommand = "pnpm install --frozen-lockfile && pnpm -r build"
+
+[deploy]
+startCommand = "node packages/backend/dist/server.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"

@@ -1009,3 +1009,69 @@ bounds.
   binary; ix layouts validated end-to-end by the bankrun VSR leg
   (createVoter / createDepositEntry / deposit / updateVoterWeightRecord);
   Token-2022 registrar rejection re-confirmed on clean evidence
+
+## D-036 — Graduation unblocked: sol-vault + hand-built CPMM CPI (2026-08-08)
+
+`migrate` is proven end to end on the real Raydium binary (both mint
+orderings). Two blockers, both found only by running it on real binaries:
+
+- **"sum of account balances ... do not match".** The raise lived inside the
+  program-owned `BondingCurve` account and moved by hand-edited lamports.
+  Fixed by the spec'd SYSTEM-owned `["sol-vault", mint]` PDA (SPEC-LAUNCHPAD
+  §2.1): buy pays in, sell/migrate pay out, every leg a signed
+  `system_program::transfer` the runtime balances by construction. The
+  `debit`/`credit` helpers are deleted. INV-SOL-CONSERVATION strengthened to
+  assert the raise physically sits in the sol vault; the curve account never
+  holds a lamport of it.
+- **Raydium `RequireEqViolated` on `pool_state.is_signer`.** The
+  `raydium-cpmm-cpi` crate declares `pool_state` as a non-signer, so its
+  generated CPI can only seed Raydium's CANONICAL pool PDA. We seed OUR
+  unsquattable `["cpmm-pool", mint]` PDA (decision A8), which the deployed
+  program requires to sign. Fixed by hand-building the `initialize`
+  instruction (`initialize_cpmm_pool`) with `pool_state` + `creator` as signer
+  metas and `invoke_signed`. Account order/flags mirror the deployed
+  Initialize context exactly (verified against the crate source).
+
+## D-037 — Launchpad SDK/backend/keeper architecture (2026-08-08)
+
+- **SDK is canonical, harness delegates.** `packages/sdk/src/launchpad/*` holds
+  the browser-safe builders/PDAs/state-decoders/event-codec/error-map/cluster
+  selection; `tests/helpers/launchpad-harness.ts` now DELEGATES to them, so the
+  bankrun integration suites (real binaries) are the SDK's own proof — drift is
+  structurally impossible. Cluster Raydium `authority` is DERIVED per cluster
+  (devnet ≠ mainnet), closing the devnet-trap of passing mainnet's authority.
+- **Indexer: polling behind an injected `TxSource`.** getSignaturesForAddress
+  cursor + getParsedTransaction; decode emit_cpi INNER-INSTRUCTION bytes (logs
+  are truncatable), tolerant of unknown discriminators (upgrade rule),
+  idempotent by (signature, ix_index) so a rollback re-scan never double-counts
+  (D-026 doctrine: no public-RPC websockets/gPA from datacenter IPs).
+- **One service.** server.ts composes HTTP + indexer + keeper + SSE; the keeper
+  is fee-payer-only and treats losing the migrate race as success. sqlite via
+  node:sqlite; candles aggregated at read time.
+
+## D-038 — Frontend send pipeline: the devnet broadcast trap (2026-08-08)
+
+Research verdict (deploy-research): `signAndSendTransaction` broadcasts on the
+WALLET's selected network; the wallet-standard `chain` param does NOT force
+routing. The only dapp-deterministic devnet path is **signTransaction +
+dapp-side `sendRawTransaction` to OUR RPC**. `app/lib/tx-sender.ts` makes that
+the default on non-mainnet builds, with: an `account.chains` preflight
+(necessary-not-sufficient), pre-simulation that decodes program errors before
+the wallet sees them, and **landing verification** — polling OUR RPC for the
+signature, so a tx that never appears before blockhash expiry becomes a
+`wrong-cluster` error instead of a silent mainnet send. Expiry asks for a
+rebuild, never a re-sign under a live blockhash.
+
+## D-039 — Public deploy topology (2026-08-08)
+
+Vercel (Next SSR frontend) + Railway (one always-on Node service: API +
+indexer + keeper + SSE, sqlite on a volume) — the pump.fun/raydium pattern
+(browser → api.* origin directly via `NEXT_PUBLIC_API_URL` + exact-origin CORS;
+SSE direct, never through a Vercel rewrite). Browser RPC goes through our
+server-side proxy (Helius key hidden, method-allowlisted, per-IP token bucket)
+with `api.devnet.solana.com` as client fallback; a SECOND Helius key isolates
+the indexer from browser-proxy abuse. Token metadata self-hosts on the Railway
+volume (optional sharp 512×512 webp), served with ACAO:* + immutable cache;
+`pump.fun/api/ipfs` is dead for third parties and is not used. Program id is
+env-driven (minted at first devnet deploy; scaffold until then). Full deploy +
+ops steps in RUNBOOK.md.

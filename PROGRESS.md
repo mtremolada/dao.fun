@@ -328,7 +328,19 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       indexer behind a TxSource seam, sqlite store, board/coin/trades/candles,
       SSE hub, metadata upload (self-host + optional sharp), allowlisted RPC
       proxy, rate-limited airdrop, exact-origin CORS. All injected/testable.
-- [ ] L5 — frontend board + coin page + native launch flow
+- [x] **L5 — frontend board + coin page + native launch flow** (app/; 8 new
+      unit tests, 31 app total). /board (New/Graduating/Graduated, SSE-live),
+      /coin?mint= (progress, trades, buy/sell panel), /create (image→metadata→
+      create_coin). The load-bearing piece is `app/lib/tx-sender.ts`: the
+      devnet send pipeline (sign-only + broadcast to OUR RPC + landing
+      verification) that resolves the wallet-broadcast trap (D-038). Wallets
+      widened to all Wallet Standard wallets; security headers + devnet banner +
+      disclaimer + equal-prominence nav. DEFERRED polish: dynamic OG images,
+      Playwright e2e specs.
+- [~] **Public deploy prep (D/E/F)** — code + scripts + docs COMPLETE, operator
+      runs the deploy: RUNBOOK.md (program→devnet, Railway, Vercel, ops),
+      scripts/launchpad-init-devnet.ts + scripts/gate-l2-devnet.ts,
+      Procfile/railway.toml/vercel.json, DECISIONS D-036..D-039, REDTEAM §6.
 - [x] **L6 — keeper graduation crank + creator-fee sweep**
       (packages/keeper/src/graduation.ts; 6 tests). Permissionless, idempotent,
       per-item isolated; inlined into server.ts for the single-service deploy.
