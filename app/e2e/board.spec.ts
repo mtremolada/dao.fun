@@ -41,7 +41,9 @@ test("a locally-known coin renders from chain with live progress, and links to i
   await expect(card).toContainText("50%");
 
   await card.click();
-  await expect(page).toHaveURL(new RegExp(`/coin\\?mint=${MINT.toBase58()}`));
+  // First client navigation to /coin compiles the route on demand in next
+  // dev — under parallel workers that can exceed the 5s expect default.
+  await expect(page).toHaveURL(new RegExp(`/coin\\?mint=${MINT.toBase58()}`), { timeout: 30_000 });
   await expect(page.getByRole("heading", { name: "Gate Coin" })).toBeVisible();
 });
 

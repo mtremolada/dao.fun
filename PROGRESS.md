@@ -356,3 +356,22 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       per-item isolated; inlined into server.ts for the single-service deploy.
 - [x] GATE L1 (hermetic) → [x] GATE L2 (devnet, 2026-08-08) → [ ] GATE L3
       (operator go/no-go, mainnet — out of scope)
+- [x] **Terminal T1–T3 — /coin is a trading terminal** (2026-08-08). Shared
+      candle aggregation in @daofun/sdk (backend store delegates to it);
+      chain-direct trade indexer (curve-PDA signatures → inner-ix event
+      decode, localStorage cursor); lightweight-charts candles+volume with
+      MCap/Price modes and local re-bucketing; stats strip; trades / top
+      traders / info tabs; position card (avg cost, unrealized/realized
+      PnL); trade-panel presets + live balances.
+- [x] **Terminal T4 — post-graduation swaps (D-041)**. SDK Raydium surface:
+      packed PoolState/AmmConfig decoders, ceil/floor-exact
+      `cpmmSwapBaseInputQuote`, fee-adjusted `cpmmPoolReserves`, hand-built
+      13-account `swap_base_input`. Proven by
+      tests/launchpad-cpmm-swap.integration.test.ts: graduate → swap with
+      minimum_amount_out == quote (exact both directions, both mint
+      orderings, fee-adjusted sell leg, +1-lamport refusal) on the deployed
+      binary. App: lib/amm-actions.ts wrap→swap→unwrap; trade panel goes AMM
+      when migrated (tri-state pool load), stats/position price from pool
+      reserves. Suites now: 188 sdk + 76 backend + 25 keeper + 45 app unit,
+      39 integration, 22 e2e; eslint+tsc clean.
+- [ ] **Terminal T5 — AMM-path e2e + docs + deploy refresh.**

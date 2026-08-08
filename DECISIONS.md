@@ -1101,3 +1101,36 @@ a same-origin `/__rpc` path Playwright intercepts (no CORS, un-stubbed calls
 decoders read, a faithful wallet-standard fake exposes the sign-only feature,
 and the buy/create specs run the REAL pipeline — real web3 Connection, real
 serialization, real mint co-signing — end to end in the browser.
+
+## D-041 — In-terminal swaps on the graduated Raydium pool (2026-08-08)
+
+**Decision:** when a coin migrates, the /coin trade panel keeps working by
+swapping on the CPMM pool directly from the browser — wrap SOL →
+`swap_base_input` → unwrap — instead of dead-ending at "trading closed."
+SDK grows a Raydium surface (`packages/sdk/src/launchpad/raydium.ts`):
+packed-layout decoders (`decodeCpmmPool` — zero_copy(unsafe) ⇒ NO struct
+padding, 637 bytes exactly; `decodeCpmmAmmConfig` — borsh, 236 bytes), quote
+math (`cpmmSwapBaseInputQuote`: trade fee CEILs off the input, constant-
+product output FLOORs — both favor the pool), fee-adjusted reserves
+(`cpmmPoolReserves`: vault balance MINUS accrued protocol+fund fees — quoting
+raw vault balances overquotes and the program's own slippage check rejects
+the swap), and a hand-built 13-account `swap_base_input` builder.
+
+**Proof (house rule D-031/D-034 — the binary, not the repo):**
+tests/launchpad-cpmm-swap.integration.test.ts graduates a coin end-to-end,
+then swaps with `minimum_amount_out` set EQUAL to the SDK quote: one lamport
+under and the deployed binary aborts, one over and the balance assertion
+fails. The wSOL→coin→wSOL round trip runs in both mint orderings; the sell
+leg only matches because reserves are fee-adjusted (first swap parks fees in
+the vault); the +1-lamport probe is refused with ExceededSlippage and logs
+`Left: <ours> Right: <ours+1>` — the deployed program computing exactly our
+number. Decoder offsets are asserted against a PoolState the real
+`initialize` wrote. Two ops facts pinned: pools open at open_time=now+1
+(warp 2s before swapping in bankrun), and the app reads the CPMM program id
+from the pool account's OWNER — no cluster table to drift.
+
+**App:** lib/amm-actions.ts (fetch context in 2 RPC calls, quotes, wrap/
+swap/unwrap assembly, slippage-capped ammBuy/ammSell through the D-038 send
+pipeline). Panel AMM state is tri-state — undefined (loading) / null (pool
+unfetchable → honest "trading closed here") / context (live quotes, stats
+strip + position priced off pool reserves).

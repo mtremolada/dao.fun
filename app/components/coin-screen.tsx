@@ -22,6 +22,15 @@ import {
 } from "../lib/launchpad-api";
 import { fetchCoinFromChain, rememberCoin } from "../lib/chain-coin";
 import { candlesFromTrades, watchTrades } from "../lib/chain-trades";
+import {
+  ammBuy,
+  ammSell,
+  ammSpotPriceSol,
+  fetchAmmContext,
+  quoteAmmBuy,
+  quoteAmmSell,
+  type AmmContext,
+} from "../lib/amm-actions";
 import { computePosition, topTraders } from "../lib/position";
 import { useWallet } from "./wallet-provider";
 import { makeSigningWallet } from "../lib/signing-wallet";
@@ -48,8 +57,16 @@ const RESOLUTIONS: { label: string; seconds: number }[] = [
 
 /* ---------------------------------------------------------------- stats -- */
 
-function StatsStrip({ coin, candles }: { coin: CoinView; candles: Candle[] }) {
-  const spot = spotPriceSol(BigInt(coin.virtualSol), BigInt(coin.virtualToken));
+function StatsStrip({
+  coin,
+  candles,
+  ammSpot,
+}: {
+  coin: CoinView;
+  candles: Candle[];
+  ammSpot: number | null;
+}) {
+  const spot = ammSpot ?? spotPriceSol(BigInt(coin.virtualSol), BigInt(coin.virtualToken));
   const last = candles[candles.length - 1];
   const dayAgo = (last?.time ?? 0) - 86_400;
   const ref = candles.filter((c) => c.time <= dayAgo).at(-1) ?? candles[0];
@@ -148,13 +165,15 @@ function PositionCard({
   trades,
   walletTokens,
   address,
+  ammSpot,
 }: {
   coin: CoinView;
   trades: TradeView[];
   walletTokens: bigint | null;
   address: string;
+  ammSpot: number | null;
 }) {
-  const spot = spotPriceSol(BigInt(coin.virtualSol), BigInt(coin.virtualToken));
+  const spot = ammSpot ?? spotPriceSol(BigInt(coin.virtualSol), BigInt(coin.virtualToken));
   const pos = useMemo(() => computePosition(trades, address, spot), [trades, address, spot]);
   const held = walletTokens ?? pos.tokens;
   if (held === 0n && pos.realizedLamports === 0) return null;
@@ -188,11 +207,13 @@ function PositionCard({
 
 function TradePanel({
   coin,
+  amm,
   solBalance,
   tokenBalance,
   onConfirmed,
 }: {
   coin: CoinView;
+  amm: AmmContext | null | undefined;
   solBalance: number | null;
   tokenBalance: bigint | null;
   onConfirmed: () => void;
@@ -202,21 +223,28 @@ function TradePanel({
   const [amount, setAmount] = useState("");
   const [slippageBps, setSlippage] = useState(100);
   const [state, setState] = useState<SendState | null>(null);
+  const onAmm = coin.migrated && amm != null;
 
   const quote = useMemo(() => {
     try {
       if (!amount || Number(amount) <= 0) return null;
       if (side === "buy") {
         const budget = BigInt(Math.floor(Number(amount) * 1e9));
+        if (onAmm) {
+          const tokensOut = quoteAmmBuy(amm, budget);
+          if (tokensOut <= 0n) return null;
+          return { out: `${TOKENS(tokensOut)} ${coin.symbol}`, tokensOut, cost: budget };
+        }
         const q = quoteBuy(coin, budget);
         return { out: `${TOKENS(q.tokensOut)} ${coin.symbol}`, tokensOut: q.tokensOut, cost: q.cost };
       }
       const tokens = BigInt(Math.floor(Number(amount) * 1e6));
-      return { out: `${SOL(quoteSell(coin, tokens))} SOL`, tokenAmount: tokens };
+      const net = onAmm ? quoteAmmSell(amm, tokens) : quoteSell(coin, tokens);
+      return { out: `${SOL(net)} SOL`, tokenAmount: tokens, net };
     } catch {
       return null;
     }
-  }, [amount, side, coin]);
+  }, [amount, side, coin, amm, onAmm]);
 
   async function submit() {
     if (!wallet || !account) return;
@@ -230,11 +258,28 @@ function TradePanel({
       },
     };
     try {
-      if (side === "buy" && quote?.tokensOut) {
-        await buy(coin, { tokensOut: quote.tokensOut, maxSolCost: quote.cost!, slippageBps }, ctx);
-      } else if (side === "sell" && quote?.tokenAmount) {
-        const net = quoteSell(coin, quote.tokenAmount);
-        await sell(coin, { tokenAmount: quote.tokenAmount, minSolOutput: net, slippageBps }, ctx);
+      if (side === "buy" && quote?.tokensOut && quote.cost !== undefined) {
+        if (onAmm) {
+          await ammBuy(
+            coin,
+            { lamportsIn: quote.cost, minTokensOut: quote.tokensOut, slippageBps },
+            ctx,
+            amm,
+          );
+        } else {
+          await buy(coin, { tokensOut: quote.tokensOut, maxSolCost: quote.cost, slippageBps }, ctx);
+        }
+      } else if (side === "sell" && quote?.tokenAmount && quote.net !== undefined) {
+        if (onAmm) {
+          await ammSell(
+            coin,
+            { tokensIn: quote.tokenAmount, minLamportsOut: quote.net, slippageBps },
+            ctx,
+            amm,
+          );
+        } else {
+          await sell(coin, { tokenAmount: quote.tokenAmount, minSolOutput: quote.net, slippageBps }, ctx);
+        }
       }
     } catch (e) {
       setState({ phase: "failed", reason: "rpc-error", message: (e as Error).message });
@@ -242,7 +287,7 @@ function TradePanel({
   }
 
   const busy = state !== null && !["confirmed", "failed"].includes(state.phase);
-  const disabled = coin.complete || coin.migrated;
+  const disabled = (coin.complete || coin.migrated) && !onAmm;
 
   const buyPresets = [0.1, 0.5, 1];
   const maxBuy = solBalance !== null ? Math.max(0, (solBalance - 20_000_000) / 1e9) : null;
@@ -256,9 +301,20 @@ function TradePanel({
         <button className={`tab ${side === "sell" ? "active" : ""}`} onClick={() => setSide("sell")} data-testid="side-sell">Sell</button>
       </div>
       {disabled ? (
-        <p className="muted">Trading closed — this curve has {coin.migrated ? "graduated to Raydium" : "completed"}.</p>
+        <p className="muted">
+          {!coin.migrated
+            ? "Curve complete — graduation to Raydium is pending."
+            : amm === undefined
+              ? "Loading the Raydium pool…"
+              : "Trading closed here — this curve has graduated to Raydium."}
+        </p>
       ) : (
         <>
+          {onAmm && (
+            <p className="muted small" data-testid="amm-note">
+              Graduated — trading on the Raydium pool ({Number(amm.tradeFeeRate) / 10_000}% fee).
+            </p>
+          )}
           <label className="field">
             <span>{side === "buy" ? "Amount (SOL)" : `Amount (${coin.symbol})`}</span>
             <input
@@ -461,6 +517,8 @@ export function CoinScreen() {
   const mint = params.get("mint");
   const { account } = useWallet();
   const [coin, setCoin] = useState<CoinView | null>(null);
+  // undefined = not loaded yet; null = pool unavailable; object = tradable.
+  const [amm, setAmm] = useState<AmmContext | null | undefined>(undefined);
   const [trades, setTrades] = useState<TradeView[]>([]);
   const [apiCandles, setApiCandles] = useState<Candle[] | null>(null);
   const [solBalance, setSolBalance] = useState<number | null>(null);
@@ -542,10 +600,27 @@ export function CoinScreen() {
     };
   }, [mint, account, tick]);
 
+  // The Raydium pool context, once graduated — quotes, spot price, and the
+  // swap accounts all come from this one fetch.
+  useEffect(() => {
+    if (!coin?.migrated) {
+      setAmm(undefined);
+      return;
+    }
+    let live = true;
+    fetchAmmContext(getConnection(), coin)
+      .then((a) => live && setAmm(a))
+      .catch(() => live && setAmm(null));
+    return () => {
+      live = false;
+    };
+  }, [coin, tick]);
+
   const candles = useMemo(
     () => apiCandles ?? candlesFromTrades(trades, 60),
     [apiCandles, trades],
   );
+  const ammSpot = amm ? ammSpotPriceSol(amm) : null;
 
   if (!mint) return <div className="errors">No coin specified.</div>;
   if (error) return <div className="errors">Could not load this coin: {error}</div>;
@@ -577,15 +652,27 @@ export function CoinScreen() {
           </p>
         </div>
 
-        <StatsStrip coin={coin} candles={candles} />
+        <StatsStrip coin={coin} candles={candles} ammSpot={ammSpot} />
         <ChartCard candles={candles} />
         <ActivityTabs coin={coin} trades={trades} myAddress={account?.address ?? null} />
       </div>
 
       <aside className="coin-side">
-        <TradePanel coin={coin} solBalance={solBalance} tokenBalance={walletTokens} onConfirmed={refresh} />
+        <TradePanel
+          coin={coin}
+          amm={amm}
+          solBalance={solBalance}
+          tokenBalance={walletTokens}
+          onConfirmed={refresh}
+        />
         {account && (
-          <PositionCard coin={coin} trades={trades} walletTokens={walletTokens} address={account.address} />
+          <PositionCard
+            coin={coin}
+            trades={trades}
+            walletTokens={walletTokens}
+            address={account.address}
+            ammSpot={ammSpot}
+          />
         )}
       </aside>
     </div>
