@@ -58,6 +58,7 @@ import {
   mintSupply,
   readCurve,
   sellIx,
+  solVaultPda,
   startLaunchpadCtx,
   tokenBalance,
 } from "./helpers/launchpad-harness";
@@ -189,6 +190,16 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
         true,
       );
 
+      // The raise lives in the system-owned sol vault, NOT the curve account.
+      // Capture the vault's rent floor (its balance when realSol is still 0)
+      // and the curve account's own rent, then assert after every trade that
+      // the vault holds exactly rentFloor + realSol and the curve account
+      // never accumulates a lamport of the raise (INV-SOL-CONSERVATION, and
+      // the whole point of the sol-vault redesign).
+      const solVault = solVaultPda(mint.publicKey);
+      const solVaultFloor = BigInt(await balance(ctx, solVault));
+      const curveAccountRent = BigInt(await balance(ctx, curvePda(mint.publicKey)));
+
       // A few buys of different sizes, each checked against the model to
       // the lamport before moving on.
       for (const amount of [
@@ -241,6 +252,14 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
         expect(onChain.virtualToken).toBe(model.virtualToken);
         expect(onChain.realSol).toBe(model.realSol);
         expect(onChain.realToken).toBe(model.realToken);
+        // The physical lamports back the accounting number, and they sit in
+        // the sol vault — the curve account is untouched by the raise.
+        expect(BigInt(await balance(ctx, solVault))).toBe(
+          solVaultFloor + model.realSol,
+        );
+        expect(BigInt(await balance(ctx, curvePda(mint.publicKey)))).toBe(
+          curveAccountRent,
+        );
       }
 
       // ...then sell part of it back.
@@ -271,6 +290,10 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
       const after = await readCurve(ctx, mint.publicKey);
       expect(after.realSol).toBe(model.realSol - sQuote.grossSol);
       expect(after.realToken).toBe(model.realToken + sellAmount);
+      // Proceeds came out of the sol vault; it still holds exactly the raise.
+      expect(BigInt(await balance(ctx, solVault))).toBe(
+        solVaultFloor + (model.realSol - sQuote.grossSol),
+      );
     },
     TEST_TIMEOUT,
   );
@@ -322,24 +345,14 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
    * Run for both mint orderings.
    */
   for (const belowWsol of [false, true]) {
-    // SKIPPED — graduation is not yet proven. `migrate` reaches the first
-    // lamport move and the runtime rejects the instruction with "sum of
-    // account balances before and after instruction do not match".
-    //
-    // Leading hypothesis, and the next thing to try: the curve holds its
-    // SOL inside the program-owned BondingCurve account, so migrate moves
-    // it to the (system-owned) migration authority by direct lamport
-    // arithmetic. SPEC-LAUNCHPAD §2.1 specifies a SEPARATE system-owned
-    // `["sol-vault", mint]` PDA precisely so every SOL movement goes
-    // through system_program::transfer with invoke_signed and no manual
-    // lamport bookkeeping exists in migrate at all. Implementing the vault
-    // as specified is the fix to attempt before any further patching.
-    //
-    // Everything up to completion IS proven by the tests above, and the
-    // CPMM side is independently verified in
+    // Graduation, proven end to end. The raise moves through the system-owned
+    // `["sol-vault", mint]` PDA (SPEC-LAUNCHPAD §2.1): every SOL leg is a
+    // signed system_program::transfer, so the "sum of account balances ...
+    // do not match" rejection that once blocked this is gone by construction.
+    // The CPMM side is independently verified in
     // tests/launchpad-cpmm-verify.integration.test.ts (pool creation, LP
     // accounting, the 192,156,720-lamport cost, both mint orderings).
-    it.skip(
+    it(
       `completes and graduates a coin whose mint sorts ${belowWsol ? "below" : "above"} wSOL`,
       async () => {
         const mint = grindMint(belowWsol);

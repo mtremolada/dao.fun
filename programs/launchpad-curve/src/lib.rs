@@ -22,6 +22,8 @@
 //! path does not exist to misuse.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::program_pack::Pack;
 use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
@@ -33,7 +35,7 @@ use anchor_spl::token::{
     self, burn, close_account, mint_to, set_authority, spl_token::instruction::AuthorityType,
     sync_native, Burn, CloseAccount, Mint, MintTo, SetAuthority, SyncNative, Token, TokenAccount,
 };
-use raydium_cpmm_cpi::{cpi as cpmm_cpi, program::RaydiumCpmm};
+use raydium_cpmm_cpi::program::RaydiumCpmm;
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
@@ -73,6 +75,13 @@ pub const COIN_DECIMALS: u8 = 6;
 
 pub const CONFIG_SEED: &[u8] = b"config";
 pub const CURVE_SEED: &[u8] = b"bonding-curve";
+/// The raise lives in a SEPARATE system-owned PDA, not inside the
+/// program-owned curve account. That is what lets every SOL movement be a
+/// `system_program::transfer` — the runtime balances those by construction,
+/// whereas hand-editing a program-owned account's lamports and then handing
+/// it to a system-transfer CPI is the "sum of account balances ... do not
+/// match" rejection that blocked graduation (SPEC-LAUNCHPAD §2.1).
+pub const SOL_VAULT_SEED: &[u8] = b"sol-vault";
 pub const CREATOR_VAULT_SEED: &[u8] = b"creator-vault";
 pub const MIGRATION_AUTHORITY_SEED: &[u8] = b"migration-authority";
 pub const POOL_SEED: &[u8] = b"cpmm-pool";
@@ -190,20 +199,27 @@ pub mod launchpad_curve {
             None,
         )?;
 
-        // Top the creator's fee vault up to the rent floor. Fee crumbs are
-        // far below it on early trades, and the runtime rejects any
-        // transaction that leaves an account under-funded (D-009), so
-        // without this the first buy of every new coin would fail.
+        // Bring both system-owned PDAs into existence at the rent floor. The
+        // runtime rejects any transaction that leaves an account under-funded
+        // (D-009), and early fee crumbs / the first lamports of the raise are
+        // far below it, so a coin whose vaults did not already exist would
+        // fail on its first trade. Creating them with a system transfer also
+        // makes them system-owned, which is what lets the program later move
+        // their lamports by signing a `system_program::transfer` for the PDA.
         let rent_floor = Rent::get()?.minimum_balance(0);
-        let vault = ctx.accounts.creator_vault.to_account_info();
-        let missing = rent_floor.saturating_sub(vault.lamports());
-        if missing > 0 {
-            transfer_from_user(
-                &ctx.accounts.system_program,
-                &ctx.accounts.payer,
-                &vault,
-                missing,
-            )?;
+        for vault in [
+            ctx.accounts.creator_vault.to_account_info(),
+            ctx.accounts.sol_vault.to_account_info(),
+        ] {
+            let missing = rent_floor.saturating_sub(vault.lamports());
+            if missing > 0 {
+                transfer_from_user(
+                    &ctx.accounts.system_program,
+                    &ctx.accounts.payer,
+                    &vault,
+                    missing,
+                )?;
+            }
         }
 
         let curve = &mut ctx.accounts.bonding_curve;
@@ -249,11 +265,13 @@ pub mod launchpad_curve {
         require!(quote.total_cost <= max_sol_cost, LaunchpadError::SlippageExceeded);
 
         // SOL in first: the curve is never short against tokens it has
-        // already handed out.
+        // already handed out. The raise lands in the system-owned sol vault,
+        // not the curve account, so it can later leave by a signed system
+        // transfer rather than hand-edited lamports.
         transfer_from_user(
             &ctx.accounts.system_program,
             &ctx.accounts.user,
-            &ctx.accounts.bonding_curve.to_account_info(),
+            &ctx.accounts.sol_vault.to_account_info(),
             quote.curve_cost,
         )?;
         transfer_from_user(
@@ -336,16 +354,37 @@ pub mod launchpad_curve {
             token_amount,
         )?;
 
-        // The curve account is program-owned, so its lamports move by direct
-        // arithmetic rather than a system CPI. Credits to accounts we do not
-        // own are always permitted; only the debit needs ownership.
-        let curve_info = ctx.accounts.bonding_curve.to_account_info();
-        debit(&curve_info, quote.gross_sol)?;
-        credit(&ctx.accounts.user.to_account_info(), quote.net_sol)?;
-        credit(&ctx.accounts.fee_recipient, quote.protocol_fee)?;
-        credit(&ctx.accounts.creator_vault, quote.creator_fee)?;
-
+        // Proceeds come out of the system-owned sol vault, which signs each
+        // leg for its own PDA. gross_sol == net_sol + protocol_fee +
+        // creator_fee, and gross_sol <= real_sol (a holder can never sell out
+        // more than the curve took in), so the vault never drops below its
+        // rent floor.
         let mint_key = ctx.accounts.mint.key();
+        let sol_vault = ctx.accounts.sol_vault.to_account_info();
+        let sol_vault_seeds: &[&[u8]] =
+            &[SOL_VAULT_SEED, mint_key.as_ref(), &[ctx.bumps.sol_vault]];
+        transfer_signed(
+            &ctx.accounts.system_program,
+            &sol_vault,
+            &ctx.accounts.user.to_account_info(),
+            quote.net_sol,
+            sol_vault_seeds,
+        )?;
+        transfer_signed(
+            &ctx.accounts.system_program,
+            &sol_vault,
+            &ctx.accounts.fee_recipient,
+            quote.protocol_fee,
+            sol_vault_seeds,
+        )?;
+        transfer_signed(
+            &ctx.accounts.system_program,
+            &sol_vault,
+            &ctx.accounts.creator_vault,
+            quote.creator_fee,
+            sol_vault_seeds,
+        )?;
+
         let curve = &mut ctx.accounts.bonding_curve;
         curve.apply_sell(token_amount, &quote)?;
 
@@ -400,30 +439,33 @@ pub mod launchpad_curve {
             &[ctx.bumps.migration_authority],
         ];
 
-        // Move the curve's entire balance to the migration authority, which
-        // is system-owned precisely because Raydium pays its fee with a
-        // system transfer FROM the pool creator.
-        let curve_info = ctx.accounts.bonding_curve.to_account_info();
+        // Move the raise out of the system-owned sol vault: the pool's SOL
+        // side plus Raydium's overhead go to the migration authority (also
+        // system-owned, because Raydium pays its fee with a system transfer
+        // FROM the pool creator), and the graduation fee goes straight to the
+        // protocol. A signed system transfer creates the migration authority
+        // and funds it in one move — no hand-edited lamports anywhere.
         let migration_info = ctx.accounts.migration_authority.to_account_info();
-        // Bring the authority into existence through the system program
-        // before touching its balance by hand. Crediting an account the
-        // runtime has never seen created leaves the instruction's lamport
-        // ledger unbalanced; a rent-floor transfer from the payer both
-        // creates it and keeps it rent-exempt while it holds the raise.
-        let migration_rent = Rent::get()?.minimum_balance(0);
-        if migration_info.lamports() < migration_rent {
-            transfer_from_user(
-                &ctx.accounts.system_program,
-                &ctx.accounts.payer,
-                &migration_info,
-                migration_rent - migration_info.lamports(),
-            )?;
-        }
+        let sol_vault = ctx.accounts.sol_vault.to_account_info();
+        let sol_vault_seeds: &[&[u8]] =
+            &[SOL_VAULT_SEED, mint_key.as_ref(), &[ctx.bumps.sol_vault]];
         let total = pool_sol
             .checked_add(overhead)
             .ok_or(LaunchpadError::MathOverflow)?;
-        debit(&curve_info, total)?;
-        credit(&migration_info, total)?;
+        transfer_signed(
+            &ctx.accounts.system_program,
+            &sol_vault,
+            &migration_info,
+            total,
+            sol_vault_seeds,
+        )?;
+        transfer_signed(
+            &ctx.accounts.system_program,
+            &sol_vault,
+            &ctx.accounts.fee_recipient,
+            graduation_fee,
+            sol_vault_seeds,
+        )?;
 
         // Wrap the pool's SOL side: Raydium pulls liquidity from token
         // accounts only, native lamports are used for the fee alone.
@@ -484,44 +526,40 @@ pub mod launchpad_curve {
         // their doc comments): Raydium re-derives both from pool_state and
         // the mint it expects, so a caller that mixes them up is refused
         // there rather than silently building a mirrored pool.
-        cpmm_cpi::initialize(
-            CpiContext::new_with_signer(
-                ctx.accounts.cpmm_program.to_account_info(),
-                cpmm_cpi::accounts::Initialize {
-                    creator: migration_info.clone(),
-                    amm_config: ctx.accounts.cpmm_amm_config.to_account_info(),
-                    authority: ctx.accounts.cpmm_authority.to_account_info(),
-                    pool_state: ctx.accounts.pool_state.to_account_info(),
-                    token_0_mint,
-                    token_1_mint,
-                    lp_mint: ctx.accounts.cpmm_lp_mint.to_account_info(),
-                    creator_token_0,
-                    creator_token_1,
-                    creator_lp_token: ctx.accounts.migration_lp.to_account_info(),
-                    token_0_vault: ctx.accounts.cpmm_token_0_vault.to_account_info(),
-                    token_1_vault: ctx.accounts.cpmm_token_1_vault.to_account_info(),
-                    create_pool_fee: ctx.accounts.cpmm_create_pool_fee.to_account_info(),
-                    observation_state: ctx.accounts.cpmm_observation_state.to_account_info(),
-                    token_program: ctx.accounts.token_program.to_account_info(),
-                    token_0_program: ctx.accounts.token_program.to_account_info(),
-                    token_1_program: ctx.accounts.token_program.to_account_info(),
-                    associated_token_program: ctx
-                        .accounts
-                        .associated_token_program
-                        .to_account_info(),
-                    system_program: ctx.accounts.system_program.to_account_info(),
-                    rent: ctx.accounts.rent.to_account_info(),
-                },
-                &[
-                    migration_seeds,
-                    &[POOL_SEED, mint_key.as_ref(), &[ctx.bumps.pool_state]],
-                ],
-            ),
+        //
+        // Built by hand rather than through the CPI crate's generated
+        // `initialize`: our pool account is OUR PDA, not Raydium's canonical
+        // one, and the deployed program requires any non-canonical pool to be
+        // a signer. The crate declares `pool_state` as a plain account, so the
+        // generated helper emits a non-signer meta and Raydium's
+        // `require_eq!(pool_state.is_signer, true)` rejects it. Setting the
+        // meta ourselves and signing with `invoke_signed` is the only way to
+        // seed OUR unsquattable pool address (SPEC-LAUNCHPAD, decision A8).
+        let pool_seeds: &[&[u8]] =
+            &[POOL_SEED, mint_key.as_ref(), &[ctx.bumps.pool_state]];
+        initialize_cpmm_pool(
+            &ctx.accounts.cpmm_program.to_account_info(),
+            &migration_info,
+            &ctx.accounts.cpmm_amm_config.to_account_info(),
+            &ctx.accounts.cpmm_authority.to_account_info(),
+            &ctx.accounts.pool_state.to_account_info(),
+            &token_0_mint,
+            &token_1_mint,
+            &ctx.accounts.cpmm_lp_mint.to_account_info(),
+            &creator_token_0,
+            &creator_token_1,
+            &ctx.accounts.migration_lp.to_account_info(),
+            &ctx.accounts.cpmm_token_0_vault.to_account_info(),
+            &ctx.accounts.cpmm_token_1_vault.to_account_info(),
+            &ctx.accounts.cpmm_create_pool_fee.to_account_info(),
+            &ctx.accounts.cpmm_observation_state.to_account_info(),
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.associated_token_program.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.rent.to_account_info(),
             amount_0,
             amount_1,
-            // Any timestamp at or before now is clamped by Raydium to
-            // now + 1, so the pool opens immediately.
-            0,
+            &[migration_seeds, pool_seeds],
         )?;
 
         // Burn every LP token we hold. Raydium never mints the 100 units it
@@ -782,26 +820,6 @@ impl BondingCurve {
 // lamport plumbing
 // ---------------------------------------------------------------------------
 
-/// Debit an account this program owns. The runtime rejects a debit of any
-/// account we do not own, which is the guarantee behind INV-VAULT-PDA-ONLY.
-fn debit(account: &AccountInfo, amount: u64) -> Result<()> {
-    let mut lamports = account.try_borrow_mut_lamports()?;
-    **lamports = lamports
-        .checked_sub(amount)
-        .ok_or(LaunchpadError::InsufficientReserve)?;
-    Ok(())
-}
-
-/// Credit any account — increases are unrestricted, only debits need
-/// ownership.
-fn credit(account: &AccountInfo, amount: u64) -> Result<()> {
-    let mut lamports = account.try_borrow_mut_lamports()?;
-    **lamports = lamports
-        .checked_add(amount)
-        .ok_or(LaunchpadError::MathOverflow)?;
-    Ok(())
-}
-
 fn transfer_from_user<'info>(
     system_program: &Program<'info, System>,
     from: &Signer<'info>,
@@ -844,6 +862,102 @@ fn transfer_signed<'info>(
         ),
         amount,
     )
+}
+
+/// Raydium CPMM `initialize`, built by hand. The generated CPI crate declares
+/// `pool_state` as a non-signer account, which is correct only for creating
+/// Raydium's canonical pool PDA. We seed OUR pool PDA instead (unsquattable —
+/// nobody else can sign for it), and the deployed program requires any
+/// non-canonical pool account to be a signer, so its meta must carry
+/// `is_signer = true` and be signed via `invoke_signed`. Account order and
+/// mut/signer flags mirror the deployed program's Initialize context exactly.
+#[allow(clippy::too_many_arguments)]
+fn initialize_cpmm_pool<'info>(
+    cpmm_program: &AccountInfo<'info>,
+    creator: &AccountInfo<'info>,
+    amm_config: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    pool_state: &AccountInfo<'info>,
+    token_0_mint: &AccountInfo<'info>,
+    token_1_mint: &AccountInfo<'info>,
+    lp_mint: &AccountInfo<'info>,
+    creator_token_0: &AccountInfo<'info>,
+    creator_token_1: &AccountInfo<'info>,
+    creator_lp_token: &AccountInfo<'info>,
+    token_0_vault: &AccountInfo<'info>,
+    token_1_vault: &AccountInfo<'info>,
+    create_pool_fee: &AccountInfo<'info>,
+    observation_state: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    associated_token_program: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    rent: &AccountInfo<'info>,
+    amount_0: u64,
+    amount_1: u64,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    // sha256("global:initialize")[..8], verified against the deployed binary.
+    let mut data = Vec::with_capacity(8 + 24);
+    data.extend_from_slice(&[175, 175, 109, 31, 13, 152, 155, 237]);
+    data.extend_from_slice(&amount_0.to_le_bytes());
+    data.extend_from_slice(&amount_1.to_le_bytes());
+    // open_time 0: Raydium clamps any past timestamp to now + 1, so the pool
+    // opens immediately.
+    data.extend_from_slice(&0u64.to_le_bytes());
+
+    let accounts = vec![
+        AccountMeta::new(*creator.key, true),
+        AccountMeta::new_readonly(*amm_config.key, false),
+        AccountMeta::new_readonly(*authority.key, false),
+        AccountMeta::new(*pool_state.key, true),
+        AccountMeta::new_readonly(*token_0_mint.key, false),
+        AccountMeta::new_readonly(*token_1_mint.key, false),
+        AccountMeta::new(*lp_mint.key, false),
+        AccountMeta::new(*creator_token_0.key, false),
+        AccountMeta::new(*creator_token_1.key, false),
+        AccountMeta::new(*creator_lp_token.key, false),
+        AccountMeta::new(*token_0_vault.key, false),
+        AccountMeta::new(*token_1_vault.key, false),
+        AccountMeta::new(*create_pool_fee.key, false),
+        AccountMeta::new(*observation_state.key, false),
+        AccountMeta::new_readonly(*token_program.key, false),
+        AccountMeta::new_readonly(*token_program.key, false),
+        AccountMeta::new_readonly(*token_program.key, false),
+        AccountMeta::new_readonly(*associated_token_program.key, false),
+        AccountMeta::new_readonly(*system_program.key, false),
+        AccountMeta::new_readonly(*rent.key, false),
+    ];
+    let ix = Instruction {
+        program_id: *cpmm_program.key,
+        accounts,
+        data,
+    };
+    invoke_signed(
+        &ix,
+        &[
+            creator.clone(),
+            amm_config.clone(),
+            authority.clone(),
+            pool_state.clone(),
+            token_0_mint.clone(),
+            token_1_mint.clone(),
+            lp_mint.clone(),
+            creator_token_0.clone(),
+            creator_token_1.clone(),
+            creator_lp_token.clone(),
+            token_0_vault.clone(),
+            token_1_vault.clone(),
+            create_pool_fee.clone(),
+            observation_state.clone(),
+            token_program.clone(),
+            associated_token_program.clone(),
+            system_program.clone(),
+            rent.clone(),
+            cpmm_program.clone(),
+        ],
+        signer_seeds,
+    )?;
+    Ok(())
 }
 
 /// Raydium's admin can change the pool-creation fee, so migration reads it
@@ -1036,6 +1150,14 @@ pub struct CreateCoin<'info> {
         associated_token::authority = bonding_curve,
     )]
     pub curve_token_vault: Box<Account<'info, TokenAccount>>,
+    /// CHECK: system-owned PDA that holds the raise; funded to the rent floor
+    /// here so the first buy has an account to send SOL to.
+    #[account(
+        mut,
+        seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
+        bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
     /// CHECK: system-owned PDA keyed to the creator argument; funded to the
     /// rent floor here so the first trade's fee crumb has somewhere to land.
     #[account(
@@ -1077,6 +1199,14 @@ pub struct Trade<'info> {
         associated_token::authority = bonding_curve,
     )]
     pub curve_token_vault: Box<Account<'info, TokenAccount>>,
+    /// CHECK: system-owned PDA holding the raise; buys pay into it, sells and
+    /// migration are paid out of it by a transfer it signs for its own seeds.
+    #[account(
+        mut,
+        seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
+        bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
     #[account(
         init_if_needed,
         payer = user,
@@ -1122,6 +1252,14 @@ pub struct Migrate<'info> {
         associated_token::authority = bonding_curve,
     )]
     pub curve_token_vault: Box<Account<'info, TokenAccount>>,
+    /// CHECK: system-owned PDA holding the raise; drained here by a transfer
+    /// it signs for its own seeds.
+    #[account(
+        mut,
+        seeds = [SOL_VAULT_SEED, mint.key().as_ref()],
+        bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
     /// CHECK: system-owned PDA — Raydium pays its fee with a system transfer
     /// from the pool creator, which a program-owned account cannot do.
     #[account(

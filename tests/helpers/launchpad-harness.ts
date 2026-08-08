@@ -57,6 +57,8 @@ const pda = (seeds: (Buffer | Uint8Array)[], programId = LAUNCHPAD_PROGRAM_ID) =
 export const configPda = () => pda([Buffer.from("config")]);
 export const curvePda = (mint: PublicKey) =>
   pda([Buffer.from("bonding-curve"), mint.toBuffer()]);
+export const solVaultPda = (mint: PublicKey) =>
+  pda([Buffer.from("sol-vault"), mint.toBuffer()]);
 export const creatorVaultPda = (creator: PublicKey) =>
   pda([Buffer.from("creator-vault"), creator.toBuffer()]);
 export const migrationAuthorityPda = (mint: PublicKey) =>
@@ -249,6 +251,7 @@ export function createCoinIx(args: {
         isSigner: false,
         isWritable: true,
       },
+      { pubkey: solVaultPda(args.mint), isSigner: false, isWritable: true },
       {
         pubkey: creatorVaultPda(args.creator),
         isSigner: false,
@@ -290,6 +293,7 @@ function tradeKeys(args: {
       isSigner: false,
       isWritable: true,
     },
+    { pubkey: solVaultPda(args.mint), isSigner: false, isWritable: true },
     {
       pubkey: getAssociatedTokenAddressSync(args.mint, args.user, true),
       isSigner: false,
@@ -369,6 +373,7 @@ export function migrateIx(args: {
         isSigner: false,
         isWritable: true,
       },
+      { pubkey: solVaultPda(args.mint), isSigner: false, isWritable: true },
       { pubkey: migration, isSigner: false, isWritable: true },
       {
         pubkey: getAssociatedTokenAddressSync(NATIVE_MINT, migration, true),
