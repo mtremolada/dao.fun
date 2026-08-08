@@ -2,7 +2,7 @@
 # every member: overflow-checks on, typed accounts, no CPI to
 # user-supplied programs, bump validation.
 [workspace]
-members = ["proposal-gate"]
+members = ["proposal-gate", "launchpad-curve"]
 resolver = "2"
 
 [profile.release]

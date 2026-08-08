@@ -33,3 +33,37 @@ Program IDs (verified against installed pump-sdk source — see DECISIONS.md):
 | Voter Stake Registry | `vsr2nfGVNHmSY8uxoBGqq8AQbwz3JwaEaHqGbsTPXqQ` |
 | Squads v4 | `SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf` |
 | Merkle distributor (Jito, IMMUTABLE on mainnet) | `mERKcfxMC5SqJn4Ld4BUris3WKZZ1ojjWJ3A3J5CKxv` (D-024) |
+
+## Launchpad (SPEC-LAUNCHPAD.md)
+
+Rust/on-chain pins for `programs/launchpad-curve` (D-035):
+
+| Item | Pin | Notes |
+|---|---|---|
+| solana-cli / cargo-build-sbf | 4.1.1 / 4.1.0 | drift from D-029's 4.0.0, accepted |
+| platform-tools | v1.54 | curl-fetch into `~/.cache/solana/v1.54/platform-tools/` (proxy CA) |
+| anchor-lang | 0.30.1 (`event-cpi`) | matches the workspace pin |
+| anchor-spl | 0.30.1 (`metadata`) | re-exports mpl-token-metadata 4.1.2; do NOT pair with mpl 5.x |
+| raydium-cpmm-cpi | git rev `31338e2504e4a23172bdbbb49e05b10566594b14` | anchor-0.30.1 branch, pinned by rev not branch |
+| solana-security-txt | 1.1.1 | on-chain contact block |
+
+Launchpad program IDs (graduation venue — verified against the DEPLOYED
+binaries, D-034; fixture provenance in `tests/fixtures/fixture-slots.json`):
+
+| Program / account | Mainnet | Devnet |
+|---|---|---|
+| Raydium CPMM | `CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C` | `DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb` |
+| CPMM AmmConfig index 0 (0.25%) | `D4FPEruKEHrG5TenZ2mpDGEfu1iUvTiqBxvpU8HLBvC2` | `5MxLgy9oPdTC3YgkiePHqr3EoCRD9uLVYRQS2ANAs7wy` |
+| CPMM `create_pool_fee` receiver (wSOL) | `DNXgeM9EiiaAbaWvwjHj9fQQLAX5ZsfHyvmYUNRAdNC8` | `3oE58BKVt8KuYkGxx8zBojugnymWmBiyafWgMrnb6eYy` |
+| CPMM vault/LP-mint authority | `GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL` | same seed, same address |
+| Metaplex Token Metadata | `metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s` | same |
+| `launchpad-curve` | minted at first devnet deploy (Phase 8) | — |
+
+CPMM fixture deploy slot: **425,801,539** (2026-06-11). The program is
+upgradeable — monitor the live ProgramData slot against this pin; an
+unnoticed upgrade is how the spl-governance fork burned us (D-031).
+
+DEVNET TRAP: `raydium-cpi-example`'s README still advertises an older,
+parallel devnet deployment (`CPMDWBwJ…` / `9zSzfkYy…` / `G11FKB…`). Pools
+created there do not appear in Raydium's devnet UI. Use the `DRaycpLY…`
+set above.

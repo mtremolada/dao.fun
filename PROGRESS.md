@@ -215,3 +215,47 @@
       enforcement redesigns onto the realm-authority + proposal-creation
       gating path (operator decision pending); the D-030 validation
       engine + ratchet stand. MVP scope unchanged (Council + Cypherpunk).
+
+## Launchpad (SPEC-LAUNCHPAD.md v1.0 — native curve + Raydium graduation)
+
+Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
+
+- [x] **L0 — spec, pins, fixtures, foreign-binary verification** (no fund
+      logic yet, by design):
+      - SPEC-LAUNCHPAD.md v1.0 written (economics profiles, program
+        contract, 24 named invariants, component contracts, gates);
+        SPEC.md §14 pointer (v2.1); D-033 (scope + the four locked operator
+        decisions + derived choices), D-034 (CPMM binary verification),
+        D-035 (build pipeline + toolchain drift); VERSIONS.md launchpad
+        section; research corpus committed under `research/launchpad/`.
+      - Fixtures dumped with provenance: `cpmm.so.gz` at deploy slot
+        425,801,539 (the dump script now REFUSES anything older than the
+        verified slot), `mpl_token_metadata.so.gz`, `cpmm-accounts.json`
+        (AmmConfig 0 + wSOL fee receiver + native mint), and
+        `fixture-slots.json` recording which deployment each came from.
+      - **CPMM interface verified against the DEPLOYED binary**
+        (tests/launchpad-cpmm-verify.integration.test.ts, 5 tests):
+        authority PDA seed, AmmConfig byte layout, permissionless plain
+        `initialize`, the non-canonical-signing-pool_state path that makes
+        graduation unsquattable, wrong-sort-order refusal, and the exact
+        192,156,720-lamport migration cost. FOUND: the 100 withheld LP
+        units are never minted, so a fully burned pool reads supply 0 —
+        our first draft asserted 100 and failed, which is why this leg
+        runs before Phase 2 (D-034).
+      - **Build pipeline proven** (tests/launchpad-build.integration.test.ts,
+        3 tests): `programs/launchpad-curve` scaffold compiles under
+        cargo-build-sbf 4.1.0 / platform-tools v1.54 WITH the
+        `raydium-cpmm-cpi` graduation crate linked (the plan's headline
+        risk, retired on day one), loads in the same bankrun harness as the
+        deployed binaries, and its config PDA decodes at the exact offsets
+        the SDK will read; re-init refused; fee band enforced on both
+        bounds.
+- [ ] L1 — curve math in TS, property tests first (named invariants +
+      pinned completion raises 85,005,359,057 / 2,833,511,968)
+- [ ] L2 — launchpad-curve program, tests first (lifecycle, adversarial,
+      TS↔on-chain parity, CU)
+- [ ] L3 — SDK NativeCurveRail + hand-rolled builders
+- [ ] L4 — backend indexer + REST + SSE + first production entrypoint
+- [ ] L5 — frontend board + coin page + native launch flow
+- [ ] L6 — keeper graduation crank + creator-fee sweep
+- [ ] GATE L1 (hermetic) → GATE L2 (devnet) → GATE L3 (operator go/no-go)

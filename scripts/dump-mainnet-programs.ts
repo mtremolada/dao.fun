@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
+import { NATIVE_MINT, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import {
   AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA,
   FEE_PROGRAM_GLOBAL_PDA,
@@ -27,9 +27,14 @@ import {
 import * as multisig from "@sqds/multisig";
 import {
   MERKLE_DISTRIBUTOR_PROGRAM_ID,
+  MPL_TOKEN_METADATA_PROGRAM_ID,
   PUMP_AMM_PROGRAM_ID,
   PUMP_FEES_PROGRAM_ID,
   PUMP_PROGRAM_ID,
+  RAYDIUM_CPMM_AMM_CONFIG,
+  RAYDIUM_CPMM_CREATE_POOL_FEE_RECEIVER,
+  RAYDIUM_CPMM_PROGRAM_ID,
+  RAYDIUM_CPMM_VERIFIED_SLOT,
   SPL_GOVERNANCE_PROGRAM_ID,
   SQUADS_V4_PROGRAM_ID,
   VSR_PROGRAM_ID,
@@ -43,7 +48,7 @@ const FORCE = process.argv.includes("--force");
 // 1+32 (option<upgrade authority>) header, then the ELF.
 const PROGRAMDATA_HEADER = 45;
 
-const PROGRAMS: { name: string; id: PublicKey }[] = [
+const PROGRAMS: { name: string; id: PublicKey; minSlot?: number }[] = [
   { name: "spl_governance", id: SPL_GOVERNANCE_PROGRAM_ID },
   { name: "squads_v4", id: SQUADS_V4_PROGRAM_ID },
   { name: "vsr", id: VSR_PROGRAM_ID },
@@ -55,6 +60,31 @@ const PROGRAMS: { name: string; id: PublicKey }[] = [
   { name: "pump_amm", id: PUMP_AMM_PROGRAM_ID },
   // Jito merkle distributor (immutable on mainnet — D-024): distribute action.
   { name: "merkle_distributor", id: MERKLE_DISTRIBUTOR_PROGRAM_ID },
+  // Launchpad graduation venue. minSlot pins the dump to the upgrade our
+  // interface verification was done against (D-034): a fixture taken from an
+  // OLDER deployment would prove nothing about what we CPI into today.
+  {
+    name: "cpmm",
+    id: RAYDIUM_CPMM_PROGRAM_ID,
+    minSlot: RAYDIUM_CPMM_VERIFIED_SLOT,
+  },
+  // create_coin CPIs create_metadata_accounts_v3 into this program.
+  { name: "mpl_token_metadata", id: MPL_TOKEN_METADATA_PROGRAM_ID },
+];
+
+// Live CPMM state the graduation CPI reads/credits: the fee tier we use and
+// the wSOL account `initialize` pays into (address-constrained in the program,
+// so bankrun needs the real one).
+const CPMM_ACCOUNTS: { label: string; address: PublicKey }[] = [
+  { label: "cpmm-amm-config", address: RAYDIUM_CPMM_AMM_CONFIG },
+  {
+    label: "cpmm-create-pool-fee-receiver",
+    address: RAYDIUM_CPMM_CREATE_POOL_FEE_RECEIVER,
+  },
+  // The pool's quote side is wrapped SOL, so the native mint must exist for
+  // the wSOL token accounts the migration creates. bankrun's program-test
+  // does not preload it.
+  { label: "wsol-mint", address: NATIVE_MINT },
 ];
 
 // Live state accounts the pump stack reads (config/global PDAs).
@@ -104,13 +134,18 @@ async function dumpAccounts(connection: Connection) {
   writeFileSync(out, JSON.stringify(entries, null, 2));
 }
 
-async function dumpProgram(connection: Connection, name: string, id: PublicKey) {
+async function dumpProgram(
+  connection: Connection,
+  name: string,
+  id: PublicKey,
+  minSlot?: number,
+): Promise<{ name: string; programId: string; deploySlot: number } | null> {
   // Committed gzipped (zero-padded 10 MB programdata compresses ~10x);
   // the test harness inflates to .so before bankrun loads it.
   const out = join(OUT, `${name}.so.gz`);
   if (existsSync(out) && !FORCE) {
     console.log(`${out} exists, skipping`);
-    return;
+    return null;
   }
   const program = await connection.getAccountInfo(id);
   if (!program) throw new Error(`${name}: program account missing`);
@@ -118,12 +153,60 @@ async function dumpProgram(connection: Connection, name: string, id: PublicKey) 
   const programData = new PublicKey(program.data.subarray(4, 36));
   const pd = await connection.getAccountInfo(programData);
   if (!pd) throw new Error(`${name}: programdata missing`);
+  // ProgramData header: 4-byte enum, then the u64 slot of the last deploy.
+  const deploySlot = Number(pd.data.readBigUInt64LE(4));
+  if (minSlot !== undefined && deploySlot < minSlot) {
+    throw new Error(
+      `${name}: deployed at slot ${deploySlot}, older than the verified slot ${minSlot}. ` +
+        `The dump would not match the interface we verified — re-verify against the ` +
+        `live binary before lowering this floor (D-034).`,
+    );
+  }
   const elf = pd.data.subarray(PROGRAMDATA_HEADER);
   const gz = gzipSync(elf, { level: 9 });
   writeFileSync(out, gz);
   console.log(
-    `${out}: ${gz.length} bytes gz (elf ${elf.length}, programdata ${programData.toBase58()})`,
+    `${out}: ${gz.length} bytes gz (elf ${elf.length}, programdata ${programData.toBase58()}, deploy slot ${deploySlot})`,
   );
+  return { name, programId: id.toBase58(), deploySlot };
+}
+
+/**
+ * Generic state-account dump in the pump-accounts.json shape. Unlike
+ * dumpAccounts (which top-ups by label), this rewrites whenever a label is
+ * missing so a new account can be added without --force.
+ */
+async function dumpStateAccounts(
+  connection: Connection,
+  file: string,
+  wanted: { label: string; address: PublicKey }[],
+) {
+  const out = join(OUT, file);
+  if (existsSync(out) && !FORCE) {
+    const have = new Set(
+      (JSON.parse(readFileSync(out, "utf8")) as { label: string }[]).map(
+        (e) => e.label,
+      ),
+    );
+    if (wanted.every((a) => have.has(a.label))) {
+      console.log(`${out} exists with all labels, skipping`);
+      return;
+    }
+  }
+  const entries = [];
+  for (const { label, address } of wanted) {
+    const info = await connection.getAccountInfo(address);
+    if (!info) throw new Error(`${label} (${address.toBase58()}): missing`);
+    entries.push({
+      label,
+      address: address.toBase58(),
+      owner: info.owner.toBase58(),
+      lamports: info.lamports,
+      dataBase64: info.data.toString("base64"),
+    });
+    console.log(`${label}: ${info.data.length} bytes`);
+  }
+  writeFileSync(out, JSON.stringify(entries, null, 2));
 }
 
 async function dumpSquadsProgramConfig(connection: Connection) {
@@ -157,9 +240,29 @@ async function dumpSquadsProgramConfig(connection: Connection) {
 async function main() {
   mkdirSync(OUT, { recursive: true });
   const connection = new Connection(RPC, "confirmed");
-  for (const p of PROGRAMS) await dumpProgram(connection, p.name, p.id);
+  const dumped = [];
+  for (const p of PROGRAMS) {
+    const r = await dumpProgram(connection, p.name, p.id, p.minSlot);
+    if (r) dumped.push(r);
+  }
   await dumpSquadsProgramConfig(connection);
   await dumpAccounts(connection);
+  await dumpStateAccounts(connection, "cpmm-accounts.json", CPMM_ACCOUNTS);
+
+  // Record which deployment each fixture came from. Foreign programs are
+  // upgradeable, so "which binary did we prove this against" is evidence, not
+  // trivia — the ops runbook diffs live ProgramData slots against this file.
+  if (dumped.length) {
+    const manifest = join(OUT, "fixture-slots.json");
+    const prev = existsSync(manifest)
+      ? (JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>)
+      : {};
+    for (const d of dumped) {
+      prev[d.name] = { programId: d.programId, deploySlot: d.deploySlot };
+    }
+    writeFileSync(manifest, JSON.stringify(prev, null, 2));
+    console.log(`${manifest}: recorded ${dumped.length} deploy slot(s)`);
+  }
 }
 
 void main();

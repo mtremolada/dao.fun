@@ -503,3 +503,27 @@ A proposal is an ordered instruction set stored on-chain in SPL Governance Propo
 11. MeteoraDbcRail + rail-matrix e2e; coordinator-custody default; runbook → GATE 4.
 
 **Mainnet transition (only after operator approval):** funding request (two pubkeys) → halt → resume on funds → deploy with operator-supplied upgrade authority/treasury → mainnet smoke test → done.
+-----
+
+## 14. Launchpad extension (see SPEC-LAUNCHPAD.md)
+
+Added 2026-08-08 (v2.0 → v2.1; this section and this changelog line are the
+only edits to a document the operator has already signed off).
+
+The product gains a second, standalone half: a pump.fun-class launchpad on
+our OWN bonding curve, with a public coin board and permissionless
+graduation into a Raydium CPMM pool whose LP is burned. **SPEC-LAUNCHPAD.md
+v1.0 is authoritative for that subsystem** — economics, program contract,
+named invariants, component contracts, and gates L1/L2/L3.
+
+What changes here: nothing. Sections 1–13 continue to govern the DAO
+product. The launchpad reaches it through one opt-in path — "launch as
+DAO" runs the Section 2 ceremony with the native curve substituted for
+pump's `create_v2`, making the coin's `creator` the advance-derived Squads
+vault PDA. INV-1, INV-2, INV-5, INV-7 and INV-8 therefore bind to
+DAO-launched coins exactly as written, and the keeper sweeps the curve's
+creator vault the way it sweeps pump's.
+
+Operator decisions behind the extension are recorded in DECISIONS.md D-033;
+the deployed-binary verification of the graduation venue is D-034 and the
+build pipeline is D-035.

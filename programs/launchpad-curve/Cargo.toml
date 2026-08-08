@@ -1,0 +1,29 @@
+[package]
+name = "launchpad-curve"
+version = "0.1.0"
+description = "Native bonding-curve launchpad: pump-classic economics, permissionless Raydium CPMM graduation, LP burned (SPEC-LAUNCHPAD.md)"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "launchpad_curve"
+
+[features]
+no-entrypoint = []
+no-idl = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = { version = "0.30.1", features = ["event-cpi"] }
+# `metadata` re-exports mpl-token-metadata 4.1.2 for the create_coin CPI.
+# Do NOT add the standalone mpl-token-metadata 5.x crate alongside it — the
+# duplicate types do not unify (that pairing belongs to anchor-spl 0.31+).
+anchor-spl = { version = "0.30.1", features = ["metadata"] }
+# Graduation CPI. Pinned by REV, not branch: a branch pin would silently
+# re-resolve, and this crate is the one place where a moved dependency could
+# change which program our migration hands the curve's liquidity to.
+# Interface verified against the deployed binary in
+# tests/launchpad-cpmm-verify.integration.test.ts (D-034).
+raydium-cpmm-cpi = { git = "https://github.com/raydium-io/raydium-cpi", package = "raydium-cpmm-cpi", rev = "31338e2504e4a23172bdbbb49e05b10566594b14" }
+solana-security-txt = "1.1.1"

@@ -836,6 +836,150 @@ wire create_proposal validation. Until then, Guarded mode stays Stage 3
 WIP and the MVP ships Council + Cypherpunk only (unchanged from the spec
 scope).
 
+## D-033 — Native launchpad: scope, economics, and the four locked choices (2026-08-08)
+
+The product grows a second, standalone half: our OWN bonding curve, a
+public coin board, and graduation into Raydium — the DAO stack becomes an
+opt-in on top rather than the only way in. Authoritative spec:
+**SPEC-LAUNCHPAD.md v1.0** (SPEC.md gains a §14 pointer only; v2.0 stays
+operator-signed and unchurned).
+
+Operator decisions, taken 2026-08-08, not to be re-litigated:
+
+1. **Standalone + DAO opt-in.** One-click pump-style launches by default;
+   a "launch as DAO" toggle runs the existing ceremony with our curve
+   swapped in for pump's `create_v2` — the coin's `creator` becomes the
+   advance-derived Squads vault PDA, so INV-1/INV-7 hold unchanged.
+2. **Devnet first.** Hermetic proof against real dumped binaries, then a
+   live devnet run; mainnet only behind an operator go/no-go (GATE L3).
+3. **pump-classic economics**, every number in an operator-settable config
+   PDA: 1B supply / 6 decimals, virtual 30 SOL + 1.073e15 tokens, 793.1e12
+   sellable, 206.9M reserved for the pool.
+4. **LP burned at graduation.** Strongest trust story and the smallest
+   surface: no dependency on Raydium's closed-source Burn & Earn program.
+
+Derived choices recorded here so Phase 2 does not re-open them:
+
+- **Fees 1% total, 70 bps protocol / 30 bps creator**, bounded in-program
+  to [10, 500] bps. The creator share is what gives the DAO toggle teeth:
+  the Squads vault earns 0.30% of every curve trade in perpetuity.
+  `collect_creator_fee` is **permissionless-to-recipient** — anyone may
+  crank it, funds can only move to the stored creator. This deliberately
+  fixes the pump.fun design that made GATE 0c fail: pump requires the
+  creator to SIGN collection, which a PDA creator cannot do.
+- **Fee bps are snapshotted onto each curve at creation** (INV-FEE-SNAPSHOT).
+  A later config change cannot retroactively tax live curves — the
+  authority key must not be a rug vector.
+- **No withdraw instruction exists, at any privilege level.** Curve
+  principal leaves only via `buy`/`sell`/`migrate` under PDA signatures
+  (INV-VAULT-PDA-ONLY). The May-2024 pump.fun drain was a privileged
+  withdraw path, not a math bug; the fix is structural absence.
+- **Migration is permissionless and idempotent**, gated on
+  `complete && !migrated`. The keeper is a fee payer providing liveness,
+  never an authority — same posture as the sweep keeper (INV-2).
+- **CPMM addresses (program, amm_config, fee receiver) are immutable after
+  `initialize_config`**, so a compromised authority cannot redirect
+  migration liquidity. One binary serves every cluster; no cargo `devnet`
+  feature.
+- **`pool_state` is our own PDA** `["cpmm-pool", mint]` signed via
+  `invoke_signed`, not the canonical Raydium pool PDA. The deployed
+  program accepts any signing account (verified, D-034), so this is one
+  deterministic unsquattable path instead of a squattable primary plus a
+  fallback. Competing pools for the same mint cannot be prevented in any
+  design; ours wins by holding the liquidity.
+- **No structural anti-snipe in MVP** (pump-classic parity; pump has none).
+  The creator's tool is the dev-buy bundled atomically into the create
+  transaction. `Config.reserved` carries headroom so launch-window guards
+  can land later without migrating live state. Dispositioned as accepted
+  residual risk in REDTEAM.md.
+- **Devnet economics are scaled** (`initial_virtual_sol = 1 SOL`, ÷30),
+  because completing a full curve needs ~85 SOL and the faucet gives
+  2–5 SOL per cycle. Scaled completion raise = 2,833,511,968 lamports.
+  Full pump-scale constants are proven hermetically instead, where
+  airdrops are free. Same code path; only numbers differ — do not read
+  devnet evidence as production economics.
+
+## D-034 — Raydium CPMM verified against the DEPLOYED binary (2026-08-08)
+
+The interface the graduation CPI targets, established the way D-031/D-032
+taught us to: by driving the real binary, not by reading the source repo.
+Evidence: `tests/launchpad-cpmm-verify.integration.test.ts` (5 tests, real
+mainnet binary in bankrun).
+
+- **Fixture provenance is pinned.** `tests/fixtures/cpmm.so.gz` was dumped
+  at deploy slot **425,801,539** (2026-06-11T16:39:55Z), recorded in
+  `tests/fixtures/fixture-slots.json`; the dump script now REFUSES a
+  binary older than `RAYDIUM_CPMM_VERIFIED_SLOT`. The program is
+  upgradeable (~quarterly), so "which deployment did we prove this
+  against" is evidence, not trivia — the ops runbook diffs the live
+  ProgramData slot against this number.
+- **`initialize` confirmed**: discriminator
+  `[175,175,109,31,13,152,155,237]`, args `(init_amount_0, init_amount_1,
+  open_time)` as u64, the 20-account list in IDL order, and
+  `["vault_and_lp_mint_auth_seed"] -> GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL`.
+  AmmConfig index 0 decodes byte-for-byte at the researched offsets
+  (`disable_create_pool@9 = 0`, `trade_fee_rate@12 = 2500`,
+  `create_pool_fee@36 = 150,000,000`); the fee receiver is a wSOL token
+  account, so `initialize` transfers lamports then syncs it native.
+- **CORRECTION to the public description of LP accounting.** Raydium's
+  `lock_lp_amount = 100` is **never minted**, not minted-and-locked: after
+  `initialize`, `lp_mint.supply == sqrt(a0*a1) - 100` and the creator holds
+  all of it. Consequence for INV-LP-BURNED: burning the migration
+  authority's balance drives supply to **0**, not 100. Our first draft of
+  the test asserted 100 and failed — which is the entire reason this leg
+  exists before Phase 2.
+- **Migration cost measured, not estimated**: 150,000,000 fee +
+  42,156,720 rent (PoolState 637 B, ObservationState 4,075 B, lp_mint,
+  2 vaults, creator LP ATA) = **192,156,720 lamports**, reconciled against
+  the payer's balance delta (plus 2 signature fees). `create_pool_fee` is
+  admin-settable, so migration reads it from AmmConfig at runtime rather
+  than trusting this constant.
+- **Pool-account rules confirmed**: the canonical PDA works with no
+  signature; a non-canonical `pool_state` works IF it signs and is refused
+  otherwise; mints supplied in the wrong sort order are refused. WSOL's
+  first byte is 6, so ~97.7% of coin mints sort ABOVE it — the
+  WSOL-as-token_1 branch is the rare one in the wild and Phase 2 must
+  grind mints to exercise both.
+
+## D-035 — Launchpad build pipeline + toolchain drift from D-029 (2026-08-08)
+
+`programs/launchpad-curve` joins the Rust workspace (inheriting the 6.9
+safety profile: overflow-checks on, lto fat, codegen-units 1) as a
+scaffold whose only job is to pin the pipeline before fund logic exists —
+the same sequencing D-029 used. Proven by
+`tests/launchpad-build.integration.test.ts`: our compiled artifact loads
+in the same bankrun harness as the deployed binaries, the config PDA comes
+out with the exact anchor discriminator and byte layout the SDK will
+decode, re-initialization is refused, and the fee band is enforced on both
+bounds.
+
+- **Toolchain drift, accepted and recorded**: this container's Anza stable
+  installer gives **solana-cli 4.1.1 / cargo-build-sbf 4.1.0 /
+  platform-tools v1.54**, where D-029 pinned 4.0.0 / v1.53. The D-029
+  proxy workaround still applies verbatim, one version up: the built-in
+  downloader fails on the egress proxy CA, so platform-tools must be
+  curl-fetched into `~/.cache/solana/v1.54/platform-tools/`. Git
+  dependencies additionally need `CARGO_NET_GIT_FETCH_WITH_CLI=true`.
+- **The graduation CPI crate builds under our anchor pin** — the plan's
+  headline risk, retired on day one. `raydium-cpmm-cpi` is pinned by REV
+  `31338e2504e4a23172bdbbb49e05b10566594b14` (anchor-0.30.1 branch), never
+  by branch: a moving pin is the one dependency that could silently change
+  which program receives a curve's liquidity. It declares
+  `anchor-lang = "=0.30.1"` / `anchor-spl = "=0.30.1"`, matching us
+  exactly. Its structs are wire-compatible but semantically STALE
+  (pre-creator-fee): never read `AmmConfig.creator_fee_rate` or the
+  creator-fee `PoolState` fields through it. `create_pool_fee` at offset
+  36 IS a declared field and is safe to read.
+- **Metaplex**: `anchor-spl 0.30.1` with the `metadata` feature re-exports
+  mpl-token-metadata 4.1.2 for the `create_coin` CPI. Do NOT add the
+  standalone 5.x crate — the duplicate types do not unify (that pairing
+  belongs to anchor-spl 0.31+).
+- **Key handling unchanged from D-029**: `programs/target/` stays
+  gitignored (cargo-build-sbf drops a private program-id keypair there);
+  only the gzipped `.so` is committed. `declare_id!` currently holds a
+  throwaway key — the real program id is minted at first devnet deploy,
+  at which point Section 11 upgrade-authority rules apply.
+
 ## Open (verify) items — to resolve before/at their first use
 
 - ~~spl-gov v3 Veto vote config~~ RESOLVED: D-011
