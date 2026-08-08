@@ -10,7 +10,6 @@
 import { sha256 } from "@noble/hashes/sha256";
 import { PublicKey } from "@solana/web3.js";
 import {
-  MPL_TOKEN_METADATA_PROGRAM_ID,
   RAYDIUM_CPMM_AMM_CONFIG,
   RAYDIUM_CPMM_AMM_CONFIG_DEVNET,
   RAYDIUM_CPMM_CREATE_POOL_FEE_RECEIVER,
@@ -43,8 +42,6 @@ export const RAYDIUM_AUTH_SEED = Buffer.from("vault_and_lp_mint_auth_seed");
 export const RAYDIUM_LP_MINT_SEED = Buffer.from("pool_lp_mint");
 export const RAYDIUM_POOL_VAULT_SEED = Buffer.from("pool_vault");
 export const RAYDIUM_OBSERVATION_SEED = Buffer.from("observation");
-
-export { MPL_TOKEN_METADATA_PROGRAM_ID };
 
 /** Anchor instruction discriminator: sha256("global:<name>")[..8]. */
 export function ixDiscriminator(name: string): Buffer {
