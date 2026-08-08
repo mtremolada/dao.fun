@@ -8,6 +8,8 @@ import {
   subscribeLaunchpad,
   type CoinView,
 } from "../lib/launchpad-api";
+import { fetchCoinFromChain, loadLocalCoins } from "../lib/chain-coin";
+import { getConnection } from "../lib/solana";
 import { truncateAddress } from "../lib/wallet-registry";
 
 type Tab = "new" | "graduating" | "graduated";
@@ -46,9 +48,28 @@ export function BoardScreen() {
   useEffect(() => {
     let live = true;
     setLoading(true);
-    launchpadApi
-      .board(tab)
-      .then((c) => live && (setCoins(c), setError(null)))
+
+    // With an indexer, the board is global. Without one, fall back to the
+    // coins this browser has launched or visited, read straight from chain —
+    // so a backend-less deploy still shows your own launches.
+    const loadLocal = async () => {
+      const mints = loadLocalCoins();
+      const connection = getConnection();
+      const found = (await Promise.all(mints.map((m) => fetchCoinFromChain(connection, m).catch(() => null))))
+        .filter((c): c is CoinView => c !== null)
+        .filter((c) =>
+          tab === "graduated" ? c.migrated : tab === "graduating" ? !c.migrated && !c.complete : !c.migrated,
+        );
+      if (live) {
+        setCoins(found);
+        setError(null);
+      }
+    };
+
+    (apiConfigured()
+      ? launchpadApi.board(tab).then((c) => live && (setCoins(c), setError(null)))
+      : loadLocal()
+    )
       .catch((e) => live && setError((e as Error).message))
       .finally(() => live && setLoading(false));
     return () => {

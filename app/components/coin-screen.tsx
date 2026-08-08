@@ -3,11 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  apiConfigured,
   launchpadApi,
   subscribeLaunchpad,
   type CoinView,
   type TradeView,
 } from "../lib/launchpad-api";
+import { fetchCoinFromChain, rememberCoin } from "../lib/chain-coin";
 import { useWallet } from "./wallet-provider";
 import { makeSigningWallet } from "../lib/signing-wallet";
 import { getConnection } from "../lib/solana";
@@ -137,9 +139,25 @@ export function CoinScreen() {
   useEffect(() => {
     if (!mint) return;
     let live = true;
+    rememberCoin(mint);
+    // Chain first: a coin's own state needs no server, so the page works with
+    // just an RPC. The indexer only adds trade history and the live feed.
     const load = () => {
-      launchpadApi.coin(mint).then((c) => live && setCoin(c)).catch((e) => live && setError((e as Error).message));
-      launchpadApi.trades(mint).then((t) => live && setTrades(t)).catch(() => {});
+      fetchCoinFromChain(getConnection(), mint)
+        .then((c) => {
+          if (!live) return;
+          if (c) {
+            setCoin(c);
+            setError(null);
+          } else if (!apiConfigured()) {
+            setError("No curve found for this mint on this cluster.");
+          }
+        })
+        .catch(() => {});
+      if (apiConfigured()) {
+        launchpadApi.coin(mint).then((c) => live && setCoin(c)).catch(() => {});
+        launchpadApi.trades(mint).then((t) => live && setTrades(t)).catch(() => {});
+      }
     };
     load();
     const unsub = subscribeLaunchpad((_k, data) => {

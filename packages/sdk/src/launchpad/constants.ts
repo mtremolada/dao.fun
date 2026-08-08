@@ -27,7 +27,7 @@ export type Cluster = "mainnet" | "devnet";
  * without recompiling the SDK.
  */
 export const LAUNCHPAD_PROGRAM_ID = new PublicKey(
-  "6s4F21hxm5MurkGX6XdfcbPtMPXMxVfazATZRsiRrmvr",
+  "DaV3ystSgyM9ALDCbtv9AzyfEtAuPe9x8jVacYDdSU7V",
 );
 
 export const CONFIG_SEED = Buffer.from("config");

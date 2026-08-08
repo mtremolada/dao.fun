@@ -7,6 +7,7 @@ import { makeSigningWallet } from "../lib/signing-wallet";
 import { getConnection } from "../lib/solana";
 import { createCoin } from "../lib/coin-actions";
 import { apiConfigured, launchpadApi } from "../lib/launchpad-api";
+import { rememberCoin } from "../lib/chain-coin";
 import type { SendState } from "../lib/tx-sender";
 import { explorerTx } from "../lib/cluster";
 
@@ -56,6 +57,7 @@ export function CreateScreen() {
         { connection: getConnection(), wallet: signer, onState: setState },
       );
       if (st.phase === "confirmed") {
+        rememberCoin(mint.toBase58());
         router.push(`/coin?mint=${mint.toBase58()}`);
       }
     } catch (e) {

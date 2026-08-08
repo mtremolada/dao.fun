@@ -35,7 +35,6 @@ use anchor_spl::token::{
     self, burn, close_account, mint_to, set_authority, spl_token::instruction::AuthorityType,
     sync_native, Burn, CloseAccount, Mint, MintTo, SetAuthority, SyncNative, Token, TokenAccount,
 };
-use raydium_cpmm_cpi::program::RaydiumCpmm;
 
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
@@ -47,7 +46,7 @@ solana_security_txt::security_txt! {
     source_code: "https://github.com/mtremolada/dao.fun"
 }
 
-declare_id!("6s4F21hxm5MurkGX6XdfcbPtMPXMxVfazATZRsiRrmvr");
+declare_id!("DaV3ystSgyM9ALDCbtv9AzyfEtAuPe9x8jVacYDdSU7V");
 
 /// A zero-fee path makes wash trading free (the Meteora `cliff_fee = 0`
 /// audit finding); the ceiling caps what a compromised authority could
@@ -1089,8 +1088,16 @@ pub struct InitializeConfig<'info> {
     pub authority: Signer<'info>,
     /// CHECK: destination for protocol fees; only its address is stored.
     pub fee_recipient: UncheckedAccount<'info>,
-    pub cpmm_program: Program<'info, RaydiumCpmm>,
-    /// CHECK: Raydium's fee tier; parsed by offset at migration.
+    /// CHECK: the CPMM deployment this launchpad graduates into. Its address
+    /// is recorded here and can never change afterwards, which is the real
+    /// guarantee (INV-CPI-PINNED); we assert only that it is executable,
+    /// because Raydium deploys the CPMM at a DIFFERENT address per cluster
+    /// (mainnet CPMMoo8L… vs devnet DRaycpLY…) and a type-level pin to one of
+    /// them would make the program undeployable on the other.
+    #[account(constraint = cpmm_program.executable @ LaunchpadError::InvalidCpmmAccount)]
+    pub cpmm_program: UncheckedAccount<'info>,
+    /// CHECK: Raydium's fee tier; parsed by offset at migration. Owned by the
+    /// CPMM program above, which ties the config set together.
     #[account(owner = cpmm_program.key())]
     pub cpmm_amm_config: UncheckedAccount<'info>,
     /// CHECK: Raydium's wSOL fee receiver, address-constrained by them.
@@ -1290,10 +1297,12 @@ pub struct Migrate<'info> {
     /// CHECK: pinned to the address recorded in config.
     #[account(mut, address = config.fee_recipient @ LaunchpadError::InvalidFeeRecipient)]
     pub fee_recipient: UncheckedAccount<'info>,
-    /// Pinned to the program recorded at initialization: an authority key
-    /// must not be able to redirect a graduation (INV-CPI-PINNED).
+    /// CHECK: pinned by ADDRESS to the program recorded at initialization —
+    /// an authority key must not be able to redirect a graduation
+    /// (INV-CPI-PINNED). That address equality is the whole guarantee; the
+    /// account type stays generic so the same binary serves every cluster.
     #[account(address = config.cpmm_program @ LaunchpadError::InvalidCpmmAccount)]
-    pub cpmm_program: Program<'info, RaydiumCpmm>,
+    pub cpmm_program: UncheckedAccount<'info>,
     /// CHECK: Raydium's own PDA, validated by them during the CPI.
     pub cpmm_authority: UncheckedAccount<'info>,
     /// CHECK: pinned to config; parsed by offset for the live pool fee.

@@ -1,13 +1,16 @@
 name: Deploy to GitHub Pages
 
-# Builds the static export of the Next.js app (app/out) and publishes it to
-# GitHub Pages. The site is fully client-side — it reads chain state over the
-# visitor's RPC and sends transactions through their connected wallet, so no
-# server or secret is needed. Set repo variable NEXT_PUBLIC_RPC_URL to change
-# the default read endpoint (visitors can still override with ?rpc=).
+# Publishes the static export of the Next.js app (app/out) to GitHub Pages.
+#
+# The site is fully client-side: it reads curve state over the visitor's RPC
+# and sends transactions through their connected wallet, so no server or
+# secret is needed. The launchpad board falls back to the coins a visitor has
+# launched/visited (read straight from chain) when no indexer API is
+# configured; set the NEXT_PUBLIC_API_URL repo variable to point at a hosted
+# backend for the global board and live feed.
 on:
   push:
-    branches: [main, master, claude/spec-driven-repo-reset-yqzenh]
+    branches: [main, master, claude/solana-launchpad-bonding-curve-lqx3dd]
   workflow_dispatch:
 
 permissions:
@@ -49,7 +52,11 @@ jobs:
         env:
           STATIC_EXPORT: "1"
           NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
-          NEXT_PUBLIC_RPC_URL: ${{ vars.NEXT_PUBLIC_RPC_URL }}
+          # Devnet by default. A repo variable can override any of these.
+          NEXT_PUBLIC_CLUSTER: ${{ vars.NEXT_PUBLIC_CLUSTER || 'devnet' }}
+          NEXT_PUBLIC_RPC_URL: ${{ vars.NEXT_PUBLIC_RPC_URL || 'https://api.devnet.solana.com' }}
+          NEXT_PUBLIC_LAUNCHPAD_PROGRAM_ID: ${{ vars.NEXT_PUBLIC_LAUNCHPAD_PROGRAM_ID || 'DaV3ystSgyM9ALDCbtv9AzyfEtAuPe9x8jVacYDdSU7V' }}
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
         run: pnpm exec next build
 
       - uses: actions/upload-pages-artifact@v3
