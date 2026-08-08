@@ -1075,3 +1075,29 @@ volume (optional sharp 512×512 webp), served with ACAO:* + immutable cache;
 `pump.fun/api/ipfs` is dead for third parties and is not used. Program id is
 env-driven (minted at first devnet deploy; scaffold until then). Full deploy +
 ops steps in RUNBOOK.md.
+
+## D-040 — web3.js legacy simulateTransaction overload; e2e harness doctrine (2026-08-08)
+
+The launchpad e2e suite (app/e2e/{board,coin,create}.spec.ts) caught a real
+production bug the unit tests could not: `Connection.simulateTransaction(tx,
+{sigVerify:false})` throws **"Invalid arguments"** for every legacy
+`Transaction` — in web3.js (verified in the installed 1.98.4 source) the
+config-object second argument exists ONLY for `VersionedTransaction`; the
+legacy overload takes a signers ARRAY, and any non-array throws. The tx-sender
+unit tests use a fake `SendRpc` seam, so the mismatch never surfaced; GATE L2
+drove trades through the SDK scripts, not the browser. Every browser trade on
+the deployed frontend failed at the `building` phase until this fix.
+
+**Fix:** call `simulateTransaction(tx)` with the transaction alone — the
+legacy path simulates the unsigned tx with sigVerify off by default, the same
+intent — and the `SendRpc` interface now documents the constraint.
+
+**Doctrine (extends "verify against the deployed binary"):** verify against
+the installed LIBRARY too — a seam interface must be proven against the real
+implementation it abstracts, at least once, in an end-to-end test. The e2e
+harness (app/e2e/launchpad-harness.ts) is the pattern: the app's RPC points at
+a same-origin `/__rpc` path Playwright intercepts (no CORS, un-stubbed calls
+404 loudly), account bytes are fabricated with the SAME layouts the SDK
+decoders read, a faithful wallet-standard fake exposes the sign-only feature,
+and the buy/create specs run the REAL pipeline — real web3 Connection, real
+serialization, real mint co-signing — end to end in the browser.

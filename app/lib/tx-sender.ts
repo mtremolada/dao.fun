@@ -55,9 +55,14 @@ export interface SigningWallet {
 /** The subset of web3 Connection the pipeline uses (real Connection satisfies it). */
 export interface SendRpc {
   getLatestBlockhash(commitment: string): Promise<{ blockhash: string; lastValidBlockHeight: number }>;
+  /**
+   * Legacy-Transaction form: NO config argument. web3's Connection throws
+   * "Invalid arguments" if a legacy tx is paired with a config object (that
+   * overload exists only for VersionedTransaction); called with the tx alone
+   * it simulates unsigned with sigVerify off — exactly what we want.
+   */
   simulateTransaction(
     tx: Transaction,
-    config?: { sigVerify?: boolean },
   ): Promise<{ value: { err: unknown; logs: string[] | null; unitsConsumed?: number } }>;
   sendRawTransaction(raw: Uint8Array | Buffer, opts?: { skipPreflight?: boolean; maxRetries?: number }): Promise<string>;
   getSignatureStatuses(sigs: string[]): Promise<{ value: ({ confirmationStatus: string | null; err: unknown } | null)[] }>;
@@ -125,7 +130,7 @@ export async function sendTransaction(p: SendParams): Promise<SendState> {
 
   let unitLimit = 400_000;
   try {
-    const sim = await p.connection.simulateTransaction(build(1_400_000), { sigVerify: false });
+    const sim = await p.connection.simulateTransaction(build(1_400_000));
     if (sim.value.err) {
       const logs = (sim.value.logs ?? []).join("\n");
       const explained = p.explainError?.(logs);

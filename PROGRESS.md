@@ -335,13 +335,24 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       devnet send pipeline (sign-only + broadcast to OUR RPC + landing
       verification) that resolves the wallet-broadcast trap (D-038). Wallets
       widened to all Wallet Standard wallets; security headers + devnet banner +
-      disclaimer + equal-prominence nav. DEFERRED polish: dynamic OG images,
-      Playwright e2e specs.
-- [~] **Public deploy prep (D/E/F)** — code + scripts + docs COMPLETE, operator
-      runs the deploy: RUNBOOK.md (program→devnet, Railway, Vercel, ops),
-      scripts/launchpad-init-devnet.ts + scripts/gate-l2-devnet.ts,
-      Procfile/railway.toml/vercel.json, DECISIONS D-036..D-039, REDTEAM §6.
+      disclaimer + equal-prominence nav. DEFERRED polish: dynamic OG images.
+- [x] **Launchpad e2e** (app/e2e/{board,coin,create}.spec.ts + harness; 22 e2e
+      total). Hermetic same-origin RPC stub with byte-accurate fabricated
+      accounts; the buy/create specs run the REAL send pipeline in the browser
+      — which caught the web3.js legacy-simulate overload bug (D-040).
+- [x] **Devnet deploy + GATE L2 PASS** (2026-08-08, evidence in GATES.md):
+      program `DaV3ystSgyM9ALDCbtv9AzyfEtAuPe9x8jVacYDdSU7V` live on devnet,
+      config initialized, coin created → bought to completion → migrated to a
+      real devnet Raydium CPMM pool with LP burned. Frontend live at
+      https://mtremolada.github.io/dao.fun/ (GitHub Pages static export,
+      backendless chain-direct mode). Railway backend (global board / live
+      feed) awaits the operator's account — RUNBOOK.md § E.
+- [~] **Deploy prep docs (D/E/F)** — RUNBOOK.md (program→devnet, Railway,
+      Vercel, ops), scripts/launchpad-init-devnet.ts + scripts/gate-l2-devnet.ts,
+      Procfile/railway.toml/vercel.json, DECISIONS D-036..D-040, REDTEAM §6.
+      Remaining: Railway/Vercel hosted tier (operator account).
 - [x] **L6 — keeper graduation crank + creator-fee sweep**
       (packages/keeper/src/graduation.ts; 6 tests). Permissionless, idempotent,
       per-item isolated; inlined into server.ts for the single-service deploy.
-- [ ] GATE L1 (hermetic) → GATE L2 (devnet) → GATE L3 (operator go/no-go)
+- [x] GATE L1 (hermetic) → [x] GATE L2 (devnet, 2026-08-08) → [ ] GATE L3
+      (operator go/no-go, mainnet — out of scope)
