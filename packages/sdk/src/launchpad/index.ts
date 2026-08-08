@@ -9,3 +9,4 @@ export * from "./instructions";
 export * from "./state";
 export * from "./events";
 export * from "./errors";
+export * from "./candles";

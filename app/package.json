@@ -15,16 +15,17 @@
     "@daofun/sdk": "workspace:*",
     "@ledgerhq/hw-app-solana": "^7.3.0",
     "@ledgerhq/hw-transport-webhid": "^6.30.0",
+    "@pump-fun/pump-sdk": "1.36.0",
     "@solana/spl-governance": "0.3.28",
     "@solana/spl-token": "0.4.14",
     "@solana/web3.js": "1.98.4",
+    "@sqds/multisig": "2.1.4",
     "bn.js": "5.2.3",
     "bs58": "6.0.0",
+    "lightweight-charts": "5.2.0",
     "next": "^15.5.19",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "@pump-fun/pump-sdk": "1.36.0",
-    "@sqds/multisig": "2.1.4"
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

@@ -10,6 +10,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { aggregateCandles, type Candle } from "@daofun/sdk/launchpad";
 
 export interface CoinRow {
   mint: string;
@@ -201,15 +202,11 @@ export class SqliteLaunchpadStore {
   }
 
   /**
-   * OHLCV candles from the trade stream. Price is the marginal curve price
-   * after each trade (virtual_sol / virtual_token), normalized to SOL per
-   * whole token; volume is summed SOL. Empty buckets are omitted (the client
-   * carries the close forward).
+   * OHLCV candles from the trade stream — aggregation shared with the app's
+   * chain-direct fallback via @daofun/sdk/launchpad (one implementation, so
+   * chart and API can never disagree about a bucket).
    */
-  candles(mint: string, resolutionSeconds: number, limit = 500): {
-    time: number; open: number; high: number; low: number; close: number; volume: number;
-  }[] {
-    const res = Math.max(resolutionSeconds, 1);
+  candles(mint: string, resolutionSeconds: number, limit = 500): Candle[] {
     const rows = this.db
       .prepare(
         `SELECT block_time, virtual_sol, virtual_token, sol_amount, slot, ix_index
@@ -217,25 +214,16 @@ export class SqliteLaunchpadStore {
          ORDER BY slot ASC, ix_index ASC`,
       )
       .all(mint) as { block_time: number; virtual_sol: string; virtual_token: string; sol_amount: string }[];
-    const buckets = new Map<number, { o: number; h: number; l: number; c: number; v: number }>();
-    for (const r of rows) {
-      const price =
-        Number(BigInt(r.virtual_sol)) / Number(BigInt(r.virtual_token)) / 1000;
-      const vol = Number(BigInt(r.sol_amount)) / 1e9;
-      const t = Math.floor(r.block_time / res) * res;
-      const b = buckets.get(t);
-      if (!b) buckets.set(t, { o: price, h: price, l: price, c: price, v: vol });
-      else {
-        b.h = Math.max(b.h, price);
-        b.l = Math.min(b.l, price);
-        b.c = price;
-        b.v += vol;
-      }
-    }
-    return [...buckets.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .slice(-limit)
-      .map(([time, b]) => ({ time, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }));
+    return aggregateCandles(
+      rows.map((r) => ({
+        blockTime: r.block_time,
+        virtualSol: BigInt(r.virtual_sol),
+        virtualToken: BigInt(r.virtual_token),
+        solAmount: BigInt(r.sol_amount),
+      })),
+      resolutionSeconds,
+      limit,
+    );
   }
 
   getCursor(): Cursor {
