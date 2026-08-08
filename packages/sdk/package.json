@@ -49,6 +49,14 @@
     "./rails/pumpfun": {
       "types": "./src/rails/pumpfun.ts",
       "default": "./src/rails/pumpfun.ts"
+    },
+    "./rails/native": {
+      "types": "./src/rails/native.ts",
+      "default": "./src/rails/native.ts"
+    },
+    "./launchpad": {
+      "types": "./src/launchpad/index.ts",
+      "default": "./src/launchpad/index.ts"
     }
   },
   "scripts": {
