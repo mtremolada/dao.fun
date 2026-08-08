@@ -48,6 +48,11 @@ stream flows to a holder-governed Squads/Realms treasury.
   indexer, board/coin/trade REST + SSE, metadata upload, RPC proxy, airdrop.
 - **Frontend** `app/` — `/board`, `/coin?mint=`, `/create`, with a send pipeline
   that keeps devnet transactions on devnet (the wallet-broadcast trap, D-038).
+  `/coin` is a full terminal: candle chart, trades / top-traders feed,
+  position + PnL, and a buy/sell panel that keeps working after graduation by
+  swapping on the coin's Raydium pool (quote math bankrun-proven exact against
+  the deployed CPMM binary, D-041) — all with only an RPC; the hosted indexer
+  just makes it richer.
 
 **Run it locally (devnet):**
 ```

@@ -121,8 +121,10 @@ export function ammBuyInstructions(args: {
   minTokensOut: bigint;
 }): TransactionInstruction[] {
   const { owner, mint, amm } = args;
-  const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, owner);
-  const coinAta = getAssociatedTokenAddressSync(mint, owner);
+  // allowOwnerOffCurve: PDA owners (a DAO treasury driving the terminal) are
+  // legitimate here, and consistent with every other ATA in the app.
+  const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, owner, true);
+  const coinAta = getAssociatedTokenAddressSync(mint, owner, true);
   return [
     createAssociatedTokenAccountIdempotentInstruction(owner, wsolAta, owner, NATIVE_MINT),
     createAssociatedTokenAccountIdempotentInstruction(owner, coinAta, owner, mint),
@@ -156,8 +158,8 @@ export function ammSellInstructions(args: {
   minLamportsOut: bigint;
 }): TransactionInstruction[] {
   const { owner, mint, amm } = args;
-  const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, owner);
-  const coinAta = getAssociatedTokenAddressSync(mint, owner);
+  const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, owner, true);
+  const coinAta = getAssociatedTokenAddressSync(mint, owner, true);
   return [
     createAssociatedTokenAccountIdempotentInstruction(owner, wsolAta, owner, NATIVE_MINT),
     buildCpmmSwapBaseInputIx({

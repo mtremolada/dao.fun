@@ -12,7 +12,16 @@
 import type { Page } from "@playwright/test";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
-import { configPda, curvePda, metadataPda } from "@daofun/sdk/launchpad";
+import { NATIVE_MINT, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  CPMM_AMM_CONFIG_LEN,
+  CPMM_POOL_STATE_LEN,
+  EVENT_IX_TAG,
+  configPda,
+  curvePda,
+  eventDiscriminator,
+  metadataPda,
+} from "@daofun/sdk/launchpad";
 import { launchpadProgramId } from "../lib/cluster";
 
 // Same-origin so fulfilled responses need no CORS dance; next dev would 404
@@ -147,6 +156,133 @@ export function coinAccounts(
   ]);
 }
 
+/** SPL token account bytes (mint, owner, amount at 64) — enough for the readers. */
+export function tokenAccountData(mint: PublicKey, owner: PublicKey, amount: bigint): Buffer {
+  const d = Buffer.alloc(165);
+  mint.toBuffer().copy(d, 0);
+  owner.toBuffer().copy(d, 32);
+  d.writeBigUInt64LE(amount, 64);
+  d.writeUInt32LE(1, 108); // state: initialized
+  return d;
+}
+
+/** Devnet CPMM program id — only its role as the pool account's OWNER matters. */
+export const CPMM_PROGRAM = new PublicKey("CPMDWBwJDtYax9qW7AyRuVC19Cc4L4Vcy4n2BHAbHkCW");
+
+/**
+ * The four accounts behind a graduated coin's Raydium pool — PoolState (at
+ * the packed offsets `decodeCpmmPool` reads), AmmConfig (0.25% fee), and the
+ * two vaults, byte-sort ordered exactly like the real pool.
+ */
+export function poolAccounts(
+  mint: PublicKey,
+  poolState: PublicKey,
+  reserves: { wsol: bigint; coin: bigint },
+): Map<string, StubAccount> {
+  const wsolIsToken0 = Buffer.compare(NATIVE_MINT.toBuffer(), mint.toBuffer()) < 0;
+  const [mint0, mint1] = wsolIsToken0 ? [NATIVE_MINT, mint] : [mint, NATIVE_MINT];
+  const [amount0, amount1] = wsolIsToken0
+    ? [reserves.wsol, reserves.coin]
+    : [reserves.coin, reserves.wsol];
+  const seeded = (label: string) =>
+    new PublicKey(Buffer.from(label.padEnd(32, "\0")).subarray(0, 32));
+  const ammConfig = seeded("e2e-amm-config");
+  const vault0 = seeded("e2e-vault0");
+  const vault1 = seeded("e2e-vault1");
+  const authority = seeded("e2e-authority");
+
+  const pool = Buffer.alloc(CPMM_POOL_STATE_LEN);
+  ammConfig.toBuffer().copy(pool, 8);
+  vault0.toBuffer().copy(pool, 72);
+  vault1.toBuffer().copy(pool, 104);
+  mint0.toBuffer().copy(pool, 168);
+  mint1.toBuffer().copy(pool, 200);
+  TOKEN_PROGRAM_ID.toBuffer().copy(pool, 232);
+  TOKEN_PROGRAM_ID.toBuffer().copy(pool, 264);
+  seeded("e2e-observation").toBuffer().copy(pool, 296);
+  pool[331] = wsolIsToken0 ? 9 : 6;
+  pool[332] = wsolIsToken0 ? 6 : 9;
+  // status, fees, open_time stay zero: pool open, nothing accrued.
+
+  const cfg = Buffer.alloc(CPMM_AMM_CONFIG_LEN);
+  cfg.writeBigUInt64LE(2500n, 12); // trade_fee_rate 0.25%
+
+  return new Map<string, StubAccount>([
+    [poolState.toBase58(), { data: pool, owner: CPMM_PROGRAM }],
+    [ammConfig.toBase58(), { data: cfg, owner: CPMM_PROGRAM }],
+    [vault0.toBase58(), { data: tokenAccountData(mint0, authority, amount0), owner: TOKEN_PROGRAM_ID }],
+    [vault1.toBase58(), { data: tokenAccountData(mint1, authority, amount1), owner: TOKEN_PROGRAM_ID }],
+  ]);
+}
+
+export interface StubTrade {
+  signature: string;
+  slot: number;
+  blockTime: number;
+  trader: PublicKey;
+  isBuy: boolean;
+  tokenAmount: bigint;
+  solAmount: bigint;
+  virtualSol: bigint;
+  virtualToken: bigint;
+}
+
+/**
+ * A confirmed transaction carrying one TradeEvent as a self-CPI inner
+ * instruction — the exact wire shape `fetchTradeHistory` decodes.
+ */
+export function tradeTransactionJson(mint: PublicKey, t: StubTrade): unknown {
+  const body = Buffer.concat([
+    EVENT_IX_TAG,
+    eventDiscriminator("TradeEvent"),
+    mint.toBuffer(),
+    t.trader.toBuffer(),
+    Buffer.from([t.isBuy ? 1 : 0]),
+    u64(t.tokenAmount),
+    u64(t.solAmount),
+    u64(0n), // protocolFee
+    u64(0n), // creatorFee
+    u64(t.virtualSol),
+    u64(t.virtualToken),
+    u64(0n), // realSol
+    u64(0n), // realToken
+  ]);
+  return {
+    slot: t.slot,
+    blockTime: t.blockTime,
+    meta: {
+      err: null,
+      fee: 5000,
+      preBalances: [],
+      postBalances: [],
+      innerInstructions: [
+        {
+          index: 0,
+          instructions: [{ programIdIndex: 2, accounts: [], data: bs58.encode(body) }],
+        },
+      ],
+      logMessages: [],
+    },
+    transaction: {
+      signatures: [t.signature],
+      message: {
+        header: {
+          numRequiredSignatures: 1,
+          numReadonlySignedAccounts: 0,
+          numReadonlyUnsignedAccounts: 2,
+        },
+        accountKeys: [
+          t.trader.toBase58(),
+          curvePda(mint, PROGRAM_ID).toBase58(),
+          PROGRAM_ID.toBase58(),
+        ],
+        recentBlockhash: BLOCKHASH,
+        instructions: [{ programIdIndex: 2, accounts: [0, 1], data: "" }],
+      },
+    },
+  };
+}
+
 export interface RpcStubOptions {
   /**
    * Called for every sendTransaction with the wire bytes; `register` adds
@@ -154,67 +290,104 @@ export interface RpcStubOptions {
    * curve + metadata for the mint the browser just generated).
    */
   onSendTransaction?: (tx: Transaction, register: (address: string, acc: StubAccount) => void) => void;
+  /** Trade history served for getSignaturesForAddress/getTransaction, newest first. */
+  trades?: { mint: PublicKey; list: StubTrade[] };
 }
 
-/** Intercept `/__rpc` and answer from the fabricated account map. */
+/**
+ * Intercept `/__rpc` and answer from the fabricated account map. Handles
+ * both single requests and JSON-RPC batches (web3's getTransactions posts
+ * one array-bodied batch).
+ */
 export async function installRpcStub(
   page: Page,
   accounts: Map<string, StubAccount>,
   opts: RpcStubOptions = {},
 ): Promise<void> {
-  await page.route("**/__rpc", async (route) => {
-    const req = JSON.parse(route.request().postData() ?? "{}") as {
-      id: number;
-      method: string;
-      params?: unknown[];
-    };
-    const respond = (result: unknown) =>
-      route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ jsonrpc: "2.0", id: req.id, result }),
-      });
+  const accountJson = (acc: StubAccount | undefined) => ({
+    context: { apiVersion: "1.18.0", slot: 1 },
+    value: acc
+      ? {
+          data: [acc.data.toString("base64"), "base64"],
+          executable: false,
+          lamports: 2_039_280,
+          owner: acc.owner.toBase58(),
+          rentEpoch: 0,
+          space: acc.data.length,
+        }
+      : null,
+  });
 
+  const handle = (req: { method: string; params?: unknown[] }): unknown => {
     switch (req.method) {
-      case "getAccountInfo": {
-        const acc = accounts.get(req.params?.[0] as string);
-        return respond({
+      case "getAccountInfo":
+        return accountJson(accounts.get(req.params?.[0] as string));
+      case "getMultipleAccounts": {
+        const keys = (req.params?.[0] as string[]) ?? [];
+        return {
           context: { apiVersion: "1.18.0", slot: 1 },
-          value: acc
-            ? {
-                data: [acc.data.toString("base64"), "base64"],
-                executable: false,
-                lamports: 2_039_280,
-                owner: acc.owner.toBase58(),
-                rentEpoch: 0,
-                space: acc.data.length,
-              }
-            : null,
-        });
+          value: keys.map((k) => accountJson(accounts.get(k)).value),
+        };
+      }
+      case "getBalance":
+        return { context: { slot: 1 }, value: 5_000_000_000 };
+      case "getSignaturesForAddress": {
+        const address = req.params?.[0] as string;
+        const t = opts.trades;
+        if (!t || curvePda(t.mint, PROGRAM_ID).toBase58() !== address) return [];
+        return t.list.map((x) => ({
+          signature: x.signature,
+          slot: x.slot,
+          err: null,
+          memo: null,
+          blockTime: x.blockTime,
+          confirmationStatus: "confirmed",
+        }));
+      }
+      case "getTransaction": {
+        const sig = req.params?.[0] as string;
+        const t = opts.trades;
+        const found = t?.list.find((x) => x.signature === sig);
+        return found ? tradeTransactionJson(t!.mint, found) : null;
       }
       case "getLatestBlockhash":
-        return respond({ context: { slot: 1 }, value: { blockhash: BLOCKHASH, lastValidBlockHeight: 1_000 } });
+        return { context: { slot: 1 }, value: { blockhash: BLOCKHASH, lastValidBlockHeight: 1_000 } };
       case "getBlockHeight":
-        return respond(10);
+        return 10;
       case "simulateTransaction":
-        return respond({
+        return {
           context: { slot: 1 },
           value: { err: null, logs: [], accounts: null, unitsConsumed: 80_000, returnData: null },
-        });
+        };
       case "sendTransaction": {
         const raw = Buffer.from(req.params?.[0] as string, "base64");
         opts.onSendTransaction?.(Transaction.from(raw), (address, acc) => accounts.set(address, acc));
-        return respond(FAKE_SIG);
+        return FAKE_SIG;
       }
       case "getSignatureStatuses":
-        return respond({
+        return {
           context: { slot: 1 },
           value: [{ slot: 1, confirmations: 1, err: null, confirmationStatus: "confirmed" }],
-        });
+        };
       case "getVersion":
-        return respond({ "solana-core": "1.18.0", "feature-set": 1 });
+        return { "solana-core": "1.18.0", "feature-set": 1 };
       default:
-        return respond(null);
+        return null;
     }
+  };
+
+  await page.route("**/__rpc", async (route) => {
+    if (process.env.E2E_RPC_LOG) {
+      const p = JSON.parse(route.request().postData() ?? "{}");
+      for (const r of Array.isArray(p) ? p : [p]) console.log("[rpc]", r.method);
+    }
+    const parsed = JSON.parse(route.request().postData() ?? "{}") as
+      | { id: number; method: string; params?: unknown[] }
+      | { id: number; method: string; params?: unknown[] }[];
+    const body = Array.isArray(parsed)
+      ? parsed.map((r) => ({ jsonrpc: "2.0", id: r.id, result: handle(r) }))
+      : { jsonrpc: "2.0", id: parsed.id, result: handle(parsed) };
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
   });
 }
 

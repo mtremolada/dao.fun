@@ -374,4 +374,13 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       when migrated (tri-state pool load), stats/position price from pool
       reserves. Suites now: 188 sdk + 76 backend + 25 keeper + 45 app unit,
       39 integration, 22 e2e; eslint+tsc clean.
-- [ ] **Terminal T5 — AMM-path e2e + docs + deploy refresh.**
+- [x] **Terminal T5 — terminal e2e + docs + deploy** (2026-08-08). e2e harness
+      extended (batched JSON-RPC, getMultipleAccounts, fabricated
+      PoolState/AmmConfig/vault bytes, trade-event transactions);
+      app/e2e/terminal.spec.ts: a graduated coin swaps on the AMM through the
+      REAL send pipeline with the rendered quote equal to SDK math (caught a
+      real bug: AMM ATAs must allow off-curve owners — DAO treasuries), and
+      the no-backend terminal reconstructs trades/stats/chart/position from
+      wire-shaped RPC responses. README/PROGRESS/DECISIONS refreshed. Pages
+      deploy is automatic on push to the working branch (workflow already
+      targets it). 24 e2e total; all suites green.
