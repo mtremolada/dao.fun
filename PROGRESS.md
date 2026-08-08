@@ -318,8 +318,18 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       - GOTCHA worth remembering: the bankrun harness only inflates
         `*.so.gz` when no `.so` exists, so a rebuilt program silently runs
         as the stale binary until `tests/fixtures/<name>.so` is deleted.
-- [ ] L3 — SDK NativeCurveRail + hand-rolled builders
-- [ ] L4 — backend indexer + REST + SSE + first production entrypoint
+- [x] **L3 — SDK launchpad module + NativeCurveRail** (packages/sdk/src/launchpad/*
+      + rails/native.ts; 11 unit tests). Browser-safe builders/PDAs/state
+      decoders/event codec/error map/cluster selection. The bankrun harness now
+      DELEGATES to these builders, so the integration suites (11/11 on real
+      binaries) are the SDK's own proof — drift is impossible.
+- [x] **L4 — backend indexer + REST + SSE + first production entrypoint**
+      (packages/backend/src/launchpad/* + server.ts; 76 backend tests). Polling
+      indexer behind a TxSource seam, sqlite store, board/coin/trades/candles,
+      SSE hub, metadata upload (self-host + optional sharp), allowlisted RPC
+      proxy, rate-limited airdrop, exact-origin CORS. All injected/testable.
 - [ ] L5 — frontend board + coin page + native launch flow
-- [ ] L6 — keeper graduation crank + creator-fee sweep
+- [x] **L6 — keeper graduation crank + creator-fee sweep**
+      (packages/keeper/src/graduation.ts; 6 tests). Permissionless, idempotent,
+      per-item isolated; inlined into server.ts for the single-service deploy.
 - [ ] GATE L1 (hermetic) → GATE L2 (devnet) → GATE L3 (operator go/no-go)
