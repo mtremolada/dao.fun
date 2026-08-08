@@ -309,3 +309,44 @@ tests (real mainnet binaries, hermetic; 3 consecutive green runs);
 eslint + tsc clean.
 
 Operator sign-off (GATE 2): ______
+
+## GATE L2 — devnet end-to-end (launchpad)
+
+**Status: PASS — 2026-08-08.** The launchpad is live on Solana devnet: a coin
+was launched on the native curve, bought to completion, and graduated into a
+REAL Raydium CPMM pool with the LP burned. Not a simulation — every line below
+is an on-chain account or signature anyone can verify.
+
+| Item | Value |
+|---|---|
+| Program | `DaV3ystSgyM9ALDCbtv9AzyfEtAuPe9x8jVacYDdSU7V` (deploy slot 482171857, 419,912 bytes) |
+| Upgrade authority | `5xqnc7on54YYTiNKDbC5vb123q3JDuLSGF8HdQSd1f2G` (disposable devnet deployer, D-008) |
+| Config | `initialize_config` `4gxNg75nN1ZA1NAVwLqX6RVr4s79rY2H8CeHhR35uFJTUGTbiCDDq1eKRUd5827rkqXQqujm71ZkCrnJPGPSBfvF` |
+| CPMM pinned (immutable) | `DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb` / amm config `5MxLgy9oPdTC3YgkiePHqr3EoCRD9uLVYRQS2ANAs7wy` |
+| Coin mint | `8PnhcD5R8inK9YbcS2GYTg63n6LD3FY3xxD47RaB1s5K` |
+| create_coin | `sADA4q7tAtDJeQxu1JBcExQzZ6QUw1jFGfo6N8BQfGXGBJntbkD4kiZ5u1bHamABaegGLsZhCzNcKSEA26HyNoA` |
+| buy → complete | `5g5Y7UM7qT4HjNY83ej8hxG1ACSN3QRy3c5AM9SMDWqqM93K7bg7vZvs9vWmi1aSWJHTxXQoM2U59zGT8uqSdi3e` |
+| migrate | `2MGx32ksckfyEYvRzNJDjSpfBCT5zz8AshksWnQNCnWT5RxkpK2z9psvT968hUrz1NEFDB6ECBzNFDVnFUNgRpZV` |
+| Raydium pool | `7Xi9ijr7mZS6YL1fmwfscSuEQyQ9kZD9W3PzbNob9Bof` (owner = devnet CPMM) |
+| Frontend | https://mtremolada.github.io/dao.fun/ (Pages run 31274586319, all routes 200) |
+
+**Accept criteria / Result**
+
+- Curve completes at the scaled devnet profile → `complete = true`, raise
+  **2,833,511,969 lamports**, matching `raiseAtCompletion(DEVNET_SCALED)` to
+  the lamport.
+- Graduation seeds a real pool → pool account exists and is **owned by the
+  devnet CPMM program**, not by us.
+- **INV-LP-BURNED** → `lp_mint.supply == 0` after migrate (Raydium never mints
+  the 100 units it withholds, so a fully burned pool reads zero).
+- Migration is permissionless → cranked by a plain fee-payer with no authority.
+
+**Finding fixed during this gate (D-036 addendum).** `Program<'info,
+RaydiumCpmm>` pins the CPI crate's MAINNET address at the type level, so
+`initialize_config` rejected devnet's CPMM (anchor 3008). The real
+INV-CPI-PINNED guarantee is the `address = config.cpmm_program` equality
+enforced at migrate, so the account type is now `UncheckedAccount` with an
+`executable` constraint at init: one binary serves every cluster with the
+security property unchanged. Re-proven against the mainnet binaries (11/11).
+
+Operator sign-off:
