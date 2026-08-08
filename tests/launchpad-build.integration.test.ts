@@ -1,142 +1,114 @@
 /**
- * GATE L1 leg 1 — the launchpad build pipeline (SPEC-LAUNCHPAD.md §6).
+ * GATE L1 leg 1 — the global config account (SPEC-LAUNCHPAD.md §1/§2).
  *
  * Proves that OUR compiled program loads and executes in the same bankrun
- * harness as the deployed binaries, that the graduation-CPI dependency links,
- * and that the config account comes out with the layout the SDK will decode.
- * This is the D-029 sequencing applied to the launchpad: pin the pipeline
- * before writing fund-handling logic, so a Phase-2 failure is never
- * ambiguous between "our math is wrong" and "the toolchain is wrong".
+ * harness as the deployed binaries, that the graduation-CPI dependency
+ * links, and that the config account comes out with the exact byte layout
+ * the SDK will decode. This is the D-029 sequencing applied to the
+ * launchpad: pin the pipeline before trusting anything built on it.
  *
- * Rebuild the fixture (toolchain pins in DECISIONS.md D-035):
- *   export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
- *   export CARGO_NET_GIT_FETCH_WITH_CLI=true
- *   cargo-build-sbf --manifest-path programs/launchpad-curve/Cargo.toml
- *   gzip -9 -c programs/target/deploy/launchpad_curve.so \
- *     > tests/fixtures/launchpad_curve.so.gz
+ * It also pins the guards on the one instruction an operator can call
+ * directly — the fee band and the "can this curve afford to graduate"
+ * check — because those bound what a compromised authority could do.
  *
+ * Fixture rebuild command: see tests/helpers/launchpad-harness.ts.
  * Run: pnpm test:integration
  */
 import { createHash } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
-import {
-  ComputeBudgetProgram,
-  Keypair,
-  PublicKey,
-  SystemProgram,
-  TransactionInstruction,
-} from "@solana/web3.js";
+import { ComputeBudgetProgram, Keypair, PublicKey } from "@solana/web3.js";
 import type { ProgramTestContext } from "solana-bankrun";
-import { RAYDIUM_CPMM_PROGRAM_ID } from "../packages/sdk/src/constants";
 import {
-  TEST_TIMEOUT,
-  send,
-  sendExpectFail,
-  startCtx,
-} from "./helpers/bankrun-harness";
+  PUMP_CLASSIC,
+  type CurveParams,
+} from "../packages/sdk/src/curve-math";
+import {
+  RAYDIUM_CPMM_AMM_CONFIG,
+  RAYDIUM_CPMM_CREATE_POOL_FEE_RECEIVER,
+  RAYDIUM_CPMM_PROGRAM_ID,
+} from "../packages/sdk/src/constants";
+import { TEST_TIMEOUT, send, sendExpectFail } from "./helpers/bankrun-harness";
+import {
+  LAUNCHPAD_PROGRAM_ID,
+  configPda,
+  initializeConfigIx,
+  startLaunchpadCtx,
+  updateConfigIx,
+} from "./helpers/launchpad-harness";
 
-/** Scaffold id (throwaway key); the real id is minted at first devnet deploy. */
-const LAUNCHPAD_PROGRAM_ID = new PublicKey(
-  "6s4F21hxm5MurkGX6XdfcbPtMPXMxVfazATZRsiRrmvr",
-);
-
-/** Anchor discriminators, computed the same way the SDK builders will. */
-const ixDisc = (name: string) =>
-  createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
 const accountDisc = (name: string) =>
   createHash("sha256").update(`account:${name}`).digest().subarray(0, 8);
 
-const configPda = () =>
-  PublicKey.findProgramAddressSync(
-    [Buffer.from("config")],
-    LAUNCHPAD_PROGRAM_ID,
-  );
-
-function initializeConfigIx(args: {
-  payer: PublicKey;
-  authority: PublicKey;
-  feeRecipient: PublicKey;
-  protocolFeeBps: number;
-  creatorFeeBps: number;
-}): TransactionInstruction {
-  const data = Buffer.alloc(8 + 4);
-  ixDisc("initialize_config").copy(data, 0);
-  data.writeUInt16LE(args.protocolFeeBps, 8);
-  data.writeUInt16LE(args.creatorFeeBps, 10);
-  const [config] = configPda();
-  return new TransactionInstruction({
-    programId: LAUNCHPAD_PROGRAM_ID,
-    data,
-    keys: [
-      { pubkey: args.payer, isSigner: true, isWritable: true },
-      { pubkey: args.authority, isSigner: true, isWritable: false },
-      { pubkey: args.feeRecipient, isSigner: false, isWritable: false },
-      { pubkey: RAYDIUM_CPMM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: config, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-  });
-}
-
-describe("launchpad-curve — build pipeline", () => {
+describe("launchpad-curve — global config", () => {
   let ctx: ProgramTestContext;
   const authority = Keypair.generate();
   const feeRecipient = Keypair.generate();
   let cuNonce = 0;
+  const cu = () =>
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 + cuNonce++ });
 
   beforeAll(async () => {
-    ctx = await startCtx([
-      { name: "launchpad_curve", programId: LAUNCHPAD_PROGRAM_ID },
-      { name: "cpmm", programId: RAYDIUM_CPMM_PROGRAM_ID },
-    ]);
+    ctx = await startLaunchpadCtx();
   }, TEST_TIMEOUT);
 
   it(
     "creates the config PDA with the declared layout",
     async () => {
-      // 70/30 split of a 1% trade fee (SPEC-LAUNCHPAD A2).
       await send(
         ctx,
         [
-          ComputeBudgetProgram.setComputeUnitLimit({
-            units: 200_000 + cuNonce++,
-          }),
+          cu(),
           initializeConfigIx({
             payer: ctx.payer.publicKey,
             authority: authority.publicKey,
             feeRecipient: feeRecipient.publicKey,
-            protocolFeeBps: 70,
-            creatorFeeBps: 30,
+            params: PUMP_CLASSIC,
           }),
         ],
         [authority],
       );
 
-      const [config, bump] = configPda();
+      const [config, bump] = PublicKey.findProgramAddressSync(
+        [Buffer.from("config")],
+        LAUNCHPAD_PROGRAM_ID,
+      );
+      expect(config.toBase58()).toBe(configPda().toBase58());
       const info = await ctx.banksClient.getAccount(config);
-      expect(info).not.toBeNull();
       expect(new PublicKey(info!.owner).toBase58()).toBe(
         LAUNCHPAD_PROGRAM_ID.toBase58(),
       );
 
       // Decoded by byte offset, exactly as the SDK will read it — no anchor
-      // TS client anywhere in this repo's tests.
-      const data = Buffer.from(info!.data);
-      expect([...data.subarray(0, 8)]).toEqual([...accountDisc("Config")]);
-      expect(new PublicKey(data.subarray(8, 40)).toBase58()).toBe(
+      // TS client anywhere in this repo's tests, so a layout change shows up
+      // here rather than being absorbed by a regenerated IDL.
+      const d = Buffer.from(info!.data);
+      expect([...d.subarray(0, 8)]).toEqual([...accountDisc("Config")]);
+      expect(new PublicKey(d.subarray(8, 40)).toBase58()).toBe(
         authority.publicKey.toBase58(),
       );
-      expect(new PublicKey(data.subarray(40, 72)).toBase58()).toBe(
+      expect(new PublicKey(d.subarray(40, 72)).toBase58()).toBe(
         feeRecipient.publicKey.toBase58(),
       );
-      expect(data.readUInt16LE(72)).toBe(70);
-      expect(data.readUInt16LE(74)).toBe(30);
-      expect(new PublicKey(data.subarray(76, 108)).toBase58()).toBe(
+      expect(d.readUInt16LE(72)).toBe(70); // protocol: 0.70%
+      expect(d.readUInt16LE(74)).toBe(30); // creator:  0.30%
+      expect(d.readBigUInt64LE(76)).toBe(0n); // graduation fee, off by default
+      expect(d.readBigUInt64LE(84)).toBe(PUMP_CLASSIC.initialVirtualSol);
+      expect(d.readBigUInt64LE(92)).toBe(PUMP_CLASSIC.initialVirtualToken);
+      expect(d.readBigUInt64LE(100)).toBe(PUMP_CLASSIC.initialRealToken);
+      expect(d.readBigUInt64LE(108)).toBe(PUMP_CLASSIC.tokenTotalSupply);
+      // The three Raydium addresses, immutable from here on.
+      expect(new PublicKey(d.subarray(116, 148)).toBase58()).toBe(
         RAYDIUM_CPMM_PROGRAM_ID.toBase58(),
       );
-      expect(data[108]).toBe(bump);
-      // 8 disc + 32 + 32 + 2 + 2 + 32 + 1 bump + 64 reserved
-      expect(data.length).toBe(173);
+      expect(new PublicKey(d.subarray(148, 180)).toBase58()).toBe(
+        RAYDIUM_CPMM_AMM_CONFIG.toBase58(),
+      );
+      expect(new PublicKey(d.subarray(180, 212)).toBase58()).toBe(
+        RAYDIUM_CPMM_CREATE_POOL_FEE_RECEIVER.toBase58(),
+      );
+      expect(d[212]).toBe(bump);
+      // 8 disc + 32 + 32 + 2 + 2 + 8*5 + 32*3 + 1 bump + 64 reserved
+      expect(d.length).toBe(277);
     },
     TEST_TIMEOUT,
   );
@@ -147,15 +119,12 @@ describe("launchpad-curve — build pipeline", () => {
       const logs = await sendExpectFail(
         ctx,
         [
-          ComputeBudgetProgram.setComputeUnitLimit({
-            units: 200_000 + cuNonce++,
-          }),
+          cu(),
           initializeConfigIx({
             payer: ctx.payer.publicKey,
             authority: authority.publicKey,
             feeRecipient: feeRecipient.publicKey,
-            protocolFeeBps: 70,
-            creatorFeeBps: 30,
+            params: PUMP_CLASSIC,
           }),
         ],
         [authority],
@@ -172,27 +141,64 @@ describe("launchpad-curve — build pipeline", () => {
       // cliff_fee=0 finding. Both bounds are checked on one code path.
       const outOfBand: [number, number][] = [
         [0, 0],
+        [5, 4],
         [600, 0],
       ];
       for (const [protocol, creator] of outOfBand) {
-        const logs = await sendExpectFail(
+        const params: CurveParams = {
+          ...PUMP_CLASSIC,
+          protocolFeeBps: protocol,
+          creatorFeeBps: creator,
+        };
+        expect(
+          await sendExpectFail(
+            ctx,
+            [cu(), updateConfigIx({ authority: authority.publicKey, params })],
+            [authority],
+          ),
+        ).toMatch(/permitted range|custom program error/i);
+      }
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "refuses curve params that could not fund their own graduation",
+    async () => {
+      // INV-GRAD-COVERS-COST: a curve that completes and then cannot afford
+      // to migrate would strand every holder's SOL.
+      const params: CurveParams = {
+        ...PUMP_CLASSIC,
+        initialVirtualSol: 100_000_000n, // raises ~0.28 SOL
+      };
+      expect(
+        await sendExpectFail(
+          ctx,
+          [cu(), updateConfigIx({ authority: authority.publicKey, params })],
+          [authority],
+        ),
+      ).toMatch(/graduation|custom program error/i);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "refuses a config update from anyone but the authority",
+    async () => {
+      const impostor = Keypair.generate();
+      expect(
+        await sendExpectFail(
           ctx,
           [
-            ComputeBudgetProgram.setComputeUnitLimit({
-              units: 200_000 + cuNonce++,
-            }),
-            initializeConfigIx({
-              payer: ctx.payer.publicKey,
-              authority: authority.publicKey,
-              feeRecipient: feeRecipient.publicKey,
-              protocolFeeBps: protocol,
-              creatorFeeBps: creator,
+            cu(),
+            updateConfigIx({
+              authority: impostor.publicKey,
+              params: PUMP_CLASSIC,
             }),
           ],
-          [authority],
-        );
-        expect(logs).toMatch(/permitted range|custom program error/i);
-      }
+          [impostor],
+        ),
+      ).toMatch(/unauthorized|constraint|custom program error/i);
     },
     TEST_TIMEOUT,
   );

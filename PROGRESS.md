@@ -270,8 +270,50 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       `tokensForSolInput` (the trade panel's inversion) binary-searches
       against the real quote function rather than a closed form, so it
       can never drift from what the buy actually charges.
-- [ ] L2 — launchpad-curve program, tests first (lifecycle, adversarial,
-      TS↔on-chain parity, CU)
+- [~] **L2 — launchpad-curve program: trading COMPLETE, graduation BLOCKED**
+      (tests/launchpad-curve.integration.test.ts, 4 passing + 2 skipped;
+      tests/launchpad-build.integration.test.ts, 5 passing — all against the
+      real CPMM + Metaplex binaries):
+      - SHIPPED and proven: `initialize_config` / `update_config` (fee band
+        and INV-GRAD-COVERS-COST enforced, authority-gated, Raydium
+        addresses immutable after init, exact byte layout pinned),
+        `create_coin` (full supply escrowed in the curve vault, mint AND
+        freeze authority already gone, immutable Metaplex metadata,
+        INV-CREATOR-ARG — the creator never signs), `buy` / `sell` (priced
+        identically to the TypeScript reference to the lamport across
+        several sizes, fees landing exactly where configured, slippage
+        refused on both sides), `collect_creator_fee` (permissionless to
+        crank, pays only the recorded creator — the DAO path, proven with a
+        PDA creator and a stranger cranking).
+      - **BLOCKED: `migrate` is not yet proven.** The instruction reaches
+        its first lamport move and the runtime rejects the transaction with
+        "sum of account balances before and after instruction do not
+        match". Everything the graduation depends on OUTSIDE our program is
+        already verified independently (pool creation, LP accounting, the
+        192,156,720-lamport cost, both mint orderings — D-034), so this is
+        our plumbing, not Raydium's.
+        NEXT STEP, before any further patching: implement the SOL vault as
+        SPEC-LAUNCHPAD §2.1 actually specifies — a separate SYSTEM-owned
+        `["sol-vault", mint]` PDA. The current code holds the raise inside
+        the program-owned BondingCurve account and moves it to the
+        system-owned migration authority by direct lamport arithmetic; the
+        spec'd vault makes every SOL movement a
+        `system_program::transfer` under `invoke_signed`, deleting the
+        manual lamport bookkeeping from migrate entirely. The two
+        graduation tests are `it.skip` with this note attached rather than
+        deleted, so the gap stays visible.
+      - Two real bugs found and fixed on the way, both only visible by
+        running it: (a) the `Migrate` context blew the 4 KB BPF stack, and
+        the corrupted frame read `complete` back as false — the fix is
+        `Box`ing every deserialized account in the heavy contexts; (b) the
+        creator fee vault had to be seeded to the rent floor inside
+        `create_coin`, or the first buy of every coin failed on D-009.
+      - Harness: tests/helpers/launchpad-harness.ts (hand-rolled
+        discriminators, PDAs, instruction builders, byte-offset decoders,
+        and `grindMint` for both wSOL sort orders).
+      - GOTCHA worth remembering: the bankrun harness only inflates
+        `*.so.gz` when no `.so` exists, so a rebuilt program silently runs
+        as the stale binary until `tests/fixtures/<name>.so` is deleted.
 - [ ] L3 — SDK NativeCurveRail + hand-rolled builders
 - [ ] L4 — backend indexer + REST + SSE + first production entrypoint
 - [ ] L5 — frontend board + coin page + native launch flow
