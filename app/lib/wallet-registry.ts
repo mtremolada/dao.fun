@@ -75,24 +75,32 @@ export interface InstallOption {
 }
 
 /**
- * The wallet(s) we support for now — Phantom only. Detected wallets are
- * filtered to this allowlist.
+ * We accept ANY wallet that registers via the Wallet Standard — the modern
+ * approach (wallets announce themselves; the dapp does not maintain adapters).
+ * Phantom, Solflare, and Backpack are the devnet-capable set we link installs
+ * for; others (OKX, etc.) still show up if the user has them, they're just
+ * effectively mainnet-only for Solana.
  */
-export const ALLOWED_WALLET_NAMES = ["Phantom"] as const;
+export const ALLOWED_WALLET_NAMES: readonly string[] = [];
 
-/** Detected wallet-standard wallets, restricted to the allowlist. */
+/**
+ * Detected wallet-standard wallets. With auto-discovery we surface all of
+ * them; the empty allowlist above means "no filter". A non-empty allowlist
+ * (e.g. in a test) still restricts.
+ */
 export function allowedDetected(
   wallets: StandardWalletLike[],
 ): StandardWalletLike[] {
-  const allow = new Set(
-    ALLOWED_WALLET_NAMES.map((n) => n.toLowerCase()),
-  );
+  if (ALLOWED_WALLET_NAMES.length === 0) return wallets;
+  const allow = new Set(ALLOWED_WALLET_NAMES.map((n) => n.toLowerCase()));
   return wallets.filter((w) => allow.has(w.name.toLowerCase()));
 }
 
-/** Install links for the supported wallet(s). */
+/** Install links for the wallets we recommend on devnet. */
 export const KNOWN_WALLETS: readonly InstallOption[] = [
   { name: "Phantom", url: "https://phantom.app/download" },
+  { name: "Solflare", url: "https://solflare.com/download" },
+  { name: "Backpack", url: "https://backpack.app/downloads" },
 ];
 
 /** Supported browser wallets that are NOT already detected (case-insensitive). */

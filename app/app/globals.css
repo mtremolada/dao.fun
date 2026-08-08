@@ -341,3 +341,59 @@ pre.result {
 .muted {
   color: var(--muted);
 }
+
+/* ---------- launchpad ---------- */
+.devnet-banner {
+  background: color-mix(in srgb, var(--amber) 18%, var(--bg));
+  color: var(--text);
+  text-align: center;
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.site-nav { display: flex; gap: 1rem; margin-left: 1.5rem; flex: 1; }
+.site-nav a { color: var(--muted); text-decoration: none; font-size: 0.95rem; }
+.site-nav a:hover { color: var(--text); }
+.site-footer {
+  display: flex; gap: 1rem; align-items: center; justify-content: center;
+  padding: 2rem 1rem; border-top: 1px solid var(--border); margin-top: 3rem;
+  font-size: 0.8rem;
+}
+.site-footer a { color: var(--muted); }
+.board { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; }
+.board-head { display: flex; align-items: center; justify-content: space-between; }
+.tabs { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
+.tab {
+  background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+  padding: 0.4rem 0.9rem; border-radius: 999px; cursor: pointer; font-size: 0.9rem;
+}
+.tab.active { color: var(--text); border-color: var(--text); }
+.coin-card { display: block; text-decoration: none; color: inherit; }
+.coin-card-head { display: flex; align-items: center; gap: 0.5rem; }
+.ticker { color: var(--muted); font-size: 0.85rem; }
+.coin-card-head .badge { margin-left: auto; }
+.progress { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; height: 8px; overflow: hidden; margin: 0.6rem 0; }
+.progress.big { height: 12px; }
+.progress span { display: block; height: 100%; background: var(--green); }
+.small { font-size: 0.8rem; }
+.empty { text-align: center; padding: 2.5rem 1rem; }
+.coin-screen { display: grid; grid-template-columns: 1fr 340px; gap: 1rem; max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; }
+.coin-title { display: flex; align-items: baseline; gap: 0.6rem; }
+.badges { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.5rem 0; }
+.trade-panel .field, .launch .field { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.6rem 0; }
+.trade-panel input[type="text"], .trade-panel input:not([type]), .launch input:not([type]), .launch textarea {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 0.5rem;
+}
+.button.primary { background: var(--green); color: #04120a; border: none; }
+.button.primary:disabled { opacity: 0.5; cursor: default; }
+.status { font-size: 0.85rem; margin-top: 0.6rem; }
+.status[data-phase="error"] { color: var(--red); }
+.status[data-phase="done"] { color: var(--green); }
+.quote { font-size: 0.85rem; }
+.steps { list-style: none; padding: 0; margin: 0.6rem 0; font-size: 0.85rem; color: var(--muted); }
+tr.buy td:first-child { color: var(--green); }
+tr.sell td:first-child { color: var(--red); }
+@media (max-width: 760px) {
+  .coin-screen { grid-template-columns: 1fr; }
+  .site-nav { margin-left: 0.5rem; gap: 0.6rem; }
+}
