@@ -250,8 +250,26 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
         deployed binaries, and its config PDA decodes at the exact offsets
         the SDK will read; re-init refused; fee band enforced on both
         bounds.
-- [ ] L1 — curve math in TS, property tests first (named invariants +
-      pinned completion raises 85,005,359,057 / 2,833,511,968)
+- [x] **L1 — curve math in TS, property tests first** (21 tests,
+      packages/sdk/test/curve-math.property.test.ts written before
+      src/curve-math.ts): constant product over virtual reserves, rounding
+      in the curve's favour on both sides (buy cost ceils, sell proceeds
+      floor, fees ceil). Invariants proven: ROUND-BUY, ROUND-SELL,
+      K-NONDECREASING (both directions), U128-WIDEN, RESERVE-CAP,
+      SELL-NO-UNDERFLOW, SOL-CONSERVATION, COMPLETE-MONOTONE,
+      MONOTONIC-PRICE, ROUNDTRIP-NONPROFIT, FEE-FLOOR/CAP,
+      GRAD-COVERS-COST. Completion raise is DERIVED and pinned:
+      85,005,359,057 lamports (pump-classic) / 2,833,511,969
+      (devnet-scaled) — the plan's 2,833,511,968 was the floor of a
+      division our ceil-rounding turns into ...969.
+      FOUND by the fee property: at a 1-lamport curve cost the total fee
+      is 1 lamport and cannot be split two ways, so the creator's share
+      floors to zero. INV-FEE-FLOOR means "no free trades", not "both
+      parties always paid"; the protocol absorbs the remainder
+      deterministically and the test now says so.
+      `tokensForSolInput` (the trade panel's inversion) binary-searches
+      against the real quote function rather than a closed form, so it
+      can never drift from what the buy actually charges.
 - [ ] L2 — launchpad-curve program, tests first (lifecycle, adversarial,
       TS↔on-chain parity, CU)
 - [ ] L3 — SDK NativeCurveRail + hand-rolled builders

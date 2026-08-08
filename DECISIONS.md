@@ -894,7 +894,10 @@ Derived choices recorded here so Phase 2 does not re-open them:
   residual risk in REDTEAM.md.
 - **Devnet economics are scaled** (`initial_virtual_sol = 1 SOL`, ÷30),
   because completing a full curve needs ~85 SOL and the faucet gives
-  2–5 SOL per cycle. Scaled completion raise = 2,833,511,968 lamports.
+  2–5 SOL per cycle. Scaled completion raise = 2,833,511,969 lamports
+  (the division is not exact and the curve rounds in its own favour;
+  planning notes carried the floor, 2,833,511,968 — the derived ceil is
+  authoritative and is asserted in the property suite).
   Full pump-scale constants are proven hermetically instead, where
   airdrops are free. Same code path; only numbers differ — do not read
   devnet evidence as production economics.

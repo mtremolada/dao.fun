@@ -14,6 +14,10 @@
       "types": "./src/launch-form.ts",
       "default": "./src/launch-form.ts"
     },
+    "./curve-math": {
+      "types": "./src/curve-math.ts",
+      "default": "./src/curve-math.ts"
+    },
     "./matrix": {
       "types": "./src/matrix.ts",
       "default": "./src/matrix.ts"

@@ -44,7 +44,7 @@ identical and only the numbers differ.
 | `initial_virtual_token` | 1,073,000,000,000,000 | same |
 | `initial_real_token` (sellable) | 793,100,000,000,000 | same |
 | reserved for the pool | 206,900,000,000,000 (206.9M) | same |
-| completion raise | **85,005,359,057** lamports | **2,833,511,968** lamports |
+| completion raise | **85,005,359,057** lamports | **2,833,511,969** lamports |
 
 Completion raise is derived, never configured:
 `raise = initial_virtual_sol * initial_real_token / (initial_virtual_token - initial_real_token)`.
