@@ -270,10 +270,11 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       `tokensForSolInput` (the trade panel's inversion) binary-searches
       against the real quote function rather than a closed form, so it
       can never drift from what the buy actually charges.
-- [~] **L2 — launchpad-curve program: trading COMPLETE, graduation BLOCKED**
-      (tests/launchpad-curve.integration.test.ts, 4 passing + 2 skipped;
-      tests/launchpad-build.integration.test.ts, 5 passing — all against the
-      real CPMM + Metaplex binaries):
+- [x] **L2 — launchpad-curve program: trading AND graduation COMPLETE**
+      (tests/launchpad-curve.integration.test.ts, 6 passing;
+      tests/launchpad-build.integration.test.ts, 5 passing;
+      tests/launchpad-cpmm-verify.integration.test.ts, 5 passing — all against
+      the real CPMM + Metaplex binaries):
       - SHIPPED and proven: `initialize_config` / `update_config` (fee band
         and INV-GRAD-COVERS-COST enforced, authority-gated, Raydium
         addresses immutable after init, exact byte layout pinned),
@@ -285,23 +286,26 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
         refused on both sides), `collect_creator_fee` (permissionless to
         crank, pays only the recorded creator — the DAO path, proven with a
         PDA creator and a stranger cranking).
-      - **BLOCKED: `migrate` is not yet proven.** The instruction reaches
-        its first lamport move and the runtime rejects the transaction with
-        "sum of account balances before and after instruction do not
-        match". Everything the graduation depends on OUTSIDE our program is
-        already verified independently (pool creation, LP accounting, the
-        192,156,720-lamport cost, both mint orderings — D-034), so this is
-        our plumbing, not Raydium's.
-        NEXT STEP, before any further patching: implement the SOL vault as
-        SPEC-LAUNCHPAD §2.1 actually specifies — a separate SYSTEM-owned
-        `["sol-vault", mint]` PDA. The current code holds the raise inside
-        the program-owned BondingCurve account and moves it to the
-        system-owned migration authority by direct lamport arithmetic; the
-        spec'd vault makes every SOL movement a
-        `system_program::transfer` under `invoke_signed`, deleting the
-        manual lamport bookkeeping from migrate entirely. The two
-        graduation tests are `it.skip` with this note attached rather than
-        deleted, so the gap stays visible.
+      - **`migrate` now PROVEN** end to end on the real Raydium binary, both
+        mint orderings: a completed curve seeds a real CPMM pool at OUR PDA,
+        the LP is burned (supply 0), the migration accounts close, residue
+        goes to the protocol, and a second crank is refused. Two blockers
+        cleared (commit "launchpad L2: graduation unblocked"):
+        (a) "sum of account balances ... do not match" — the raise lived in
+        the program-owned BondingCurve account and moved by hand-edited
+        lamports. Fixed by the spec'd SYSTEM-owned `["sol-vault", mint]` PDA
+        (SPEC-LAUNCHPAD §2.1): buy pays in, sell/migrate pay out, every leg a
+        signed `system_program::transfer`; the debit/credit helpers are
+        deleted. INV-SOL-CONSERVATION strengthened to assert the raise
+        physically sits in the sol vault and the curve account never holds a
+        lamport of it.
+        (b) Raydium `RequireEqViolated` on `pool_state.is_signer` — the
+        raydium-cpmm-cpi crate declares pool_state as a non-signer, so its
+        generated CPI can only seed Raydium's canonical pool PDA. We seed OUR
+        unsquattable `["cpmm-pool", mint]` PDA (decision A8), which the
+        deployed program requires to sign. Fixed by hand-building the
+        `initialize` instruction (`initialize_cpmm_pool`) with pool_state +
+        creator as signer metas and `invoke_signed`.
       - Two real bugs found and fixed on the way, both only visible by
         running it: (a) the `Migrate` context blew the 4 KB BPF stack, and
         the corrupted frame read `complete` back as false — the fix is
