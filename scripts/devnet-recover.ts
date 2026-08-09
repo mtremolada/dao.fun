@@ -14,11 +14,22 @@
  *     skipped: that balance is the migration reserve, and the program refuses
  *     the sweep anyway.
  *
- * `--burn` additionally burns leftover TEST TOKENS so their accounts can be
- * closed too. It is a separate flag because it is the only irreversible thing
- * here — on devnet those tokens are worthless, but "worthless" is a judgement
- * about this cluster, not a property of the instruction, and the same script
- * pointed at mainnet would destroy real balances.
+ * `--sell` liquidates positions that HAVE a market before recovering rent: a
+ * graduated coin sells into its Raydium pool, a coin still on its curve sells
+ * back to the curve. This is where nearly all of the recoverable value is, and
+ * skipping it is the expensive mistake — see the guard below.
+ *
+ * `--burn` burns leftover tokens so their accounts can be closed. It **refuses
+ * to burn anything with a live market**, no matter what flags are passed.
+ *
+ * That refusal is not defensive programming, it is a scar. The first run of
+ * this script burned seven positions to reclaim 0.014 SOL of account rent;
+ * four of them were graduated coins whose Raydium pools would have paid
+ * **8.42 SOL**, and the other three sat on live curves worth 0.61 SOL more.
+ * Nine SOL destroyed to recover fourteen thousandths, because "recover the
+ * rent" was mistaken for "recover the value". A recovery tool that can do that
+ * is worse than no recovery tool, so the market check now runs first and the
+ * burn cannot proceed past it.
  *
  * Two things it will NOT do, and reports instead:
  *
@@ -42,19 +53,29 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import {
+  NATIVE_MINT,
   TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
   createBurnInstruction,
   createCloseAccountInstruction,
+  getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import {
   buildCollectCreatorFeeIx,
   buildCollectProtocolFeeIx,
+  buildCpmmSwapBaseInputIx,
+  buildSellIx,
   configPda,
+  cpmmSwapBaseInputQuote,
   creatorVaultPda,
+  curvePda,
   decodeConfig,
+  decodeCpmmAmmConfig,
+  decodeCpmmPool,
   decodeCurve,
   protocolVaultPda,
 } from "../packages/sdk/src/launchpad";
+import { sellQuote } from "../packages/sdk/src/curve-math";
 
 const RPC = process.env.DEVNET_RPC ?? "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey(
@@ -64,6 +85,7 @@ const GATE_ID = new PublicKey("4UioBmH3WkwYbLN6tumLGrUpXGMwFwcaxt1jbUcZE7Cy");
 
 const APPLY = process.argv.includes("--apply");
 const BURN = process.argv.includes("--burn");
+const SELL = process.argv.includes("--sell");
 
 /** Curve account length — the size filter that keeps Config out of the scan. */
 const CURVE_LEN = 8 + 32 + 32 + 8 * 4 + 2 + 2 + 1 + 1 + 32 + 1;
@@ -82,12 +104,143 @@ async function send(
   signer: Keypair,
   ixs: TransactionInstruction[],
 ): Promise<string> {
-  const tx = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-    ...ixs,
-  );
+  const tx = new Transaction().add(...ixs);
   return sendAndConfirmTransaction(connection, tx, [signer], { commitment: "confirmed" });
 }
+
+
+/** A token balance, with what the chain would actually pay for it. */
+interface PricedPosition {
+  address: PublicKey;
+  mint: PublicKey;
+  amount: bigint;
+  lamports: number;
+  /** Where it can be sold: a graduated pool, its live curve, or nowhere. */
+  market: "pool" | "curve" | "none";
+  /** Lamports a full exit would return, before slippage tolerance. */
+  value: bigint;
+  creator?: PublicKey;
+  poolState?: PublicKey;
+}
+
+/**
+ * What is this position worth?
+ *
+ * A launchpad coin always has a market: before graduation the curve itself
+ * buys it back, and after graduation the Raydium pool does. Only a token with
+ * no curve on this program — a governance test mint, say — is genuinely
+ * worthless, and that is the ONLY thing this script will ever burn.
+ */
+async function pricePosition(
+  connection: Connection,
+  cfg: ReturnType<typeof decodeConfig>,
+  h: { address: PublicKey; mint: PublicKey; amount: bigint; lamports: number },
+): Promise<PricedPosition> {
+  const base = { ...h, market: "none" as const, value: 0n };
+  const curveInfo = await connection.getAccountInfo(curvePda(h.mint, PROGRAM_ID));
+  if (!curveInfo) return base;
+  const curve = decodeCurve(curveInfo.data);
+
+  if (!curve.migrated) {
+    const q = sellQuote(
+      {
+        virtualSol: curve.virtualSol,
+        virtualToken: curve.virtualToken,
+        realSol: curve.realSol,
+        realToken: curve.realToken,
+        protocolFeeBps: curve.protocolFeeBps,
+        creatorFeeBps: curve.creatorFeeBps,
+        complete: curve.complete,
+      },
+      h.amount,
+    );
+    return { ...h, market: "curve", value: q.netSol, creator: curve.creator };
+  }
+
+  const poolInfo = await connection.getAccountInfo(curve.poolState);
+  if (!poolInfo) return base;
+  const pool = decodeCpmmPool(poolInfo.data);
+  const [solVault, tokenVault] = pool.token0Mint.equals(NATIVE_MINT)
+    ? [pool.token0Vault, pool.token1Vault]
+    : [pool.token1Vault, pool.token0Vault];
+  const [solBal, tokBal] = await Promise.all([
+    connection.getTokenAccountBalance(solVault),
+    connection.getTokenAccountBalance(tokenVault),
+  ]);
+  const q = cpmmSwapBaseInputQuote({
+    amountIn: h.amount,
+    inputReserve: BigInt(tokBal.value.amount),
+    outputReserve: BigInt(solBal.value.amount),
+    // The fee comes from the AmmConfig the CONFIG names, not a constant: the
+    // tier is settable, and pricing against the wrong one misquotes the exit.
+    tradeFeeRate: await tradeFeeRateOf(connection, cfg.cpmmAmmConfig),
+  });
+  return { ...h, market: "pool", value: q.amountOut, poolState: curve.poolState };
+}
+
+/** The live trade fee of the tier the config names, read once and cached. */
+let tradeFeeCache: { tier: string; rate: bigint } | null = null;
+async function tradeFeeRateOf(connection: Connection, tier: PublicKey): Promise<bigint> {
+  if (tradeFeeCache?.tier === tier.toBase58()) return tradeFeeCache.rate;
+  const info = await connection.getAccountInfo(tier);
+  if (!info) throw new Error(`AmmConfig ${tier.toBase58()} not found`);
+  const rate = decodeCpmmAmmConfig(info.data).tradeFeeRate;
+  tradeFeeCache = { tier: tier.toBase58(), rate };
+  return rate;
+}
+
+/**
+ * The instructions that turn a position back into SOL.
+ *
+ * Slippage is deliberately loose (5%): this is a cleanup tool exiting a
+ * position it is about to abandon, so a sale that lands slightly worse than
+ * quoted is strictly better than one that fails and leaves the tokens behind.
+ */
+async function sellIxs(
+  connection: Connection,
+  cfg: ReturnType<typeof decodeConfig>,
+  p: PricedPosition,
+  me: PublicKey,
+): Promise<TransactionInstruction[]> {
+  const minOut = (p.value * 95n) / 100n;
+  if (p.market === "curve") {
+    return [
+      cu(),
+      buildSellIx({
+        user: me,
+        mint: p.mint,
+        creator: p.creator!,
+        tokenAmount: p.amount,
+        minSolOutput: minOut,
+        programId: PROGRAM_ID,
+      }),
+    ];
+  }
+  const poolInfo = await connection.getAccountInfo(p.poolState!);
+  const pool = decodeCpmmPool(poolInfo!.data);
+  const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, me, true);
+  return [
+    cu(),
+    createAssociatedTokenAccountIdempotentInstruction(me, wsolAta, me, NATIVE_MINT),
+    buildCpmmSwapBaseInputIx({
+      payer: me,
+      cpmmProgram: cfg.cpmmProgram,
+      poolState: p.poolState!,
+      pool,
+      inputMint: p.mint,
+      inputTokenAccount: p.address,
+      outputTokenAccount: wsolAta,
+      amountIn: p.amount,
+      minimumAmountOut: minOut,
+    }),
+    // Closing unwraps the proceeds (and the ATA rent) into plain SOL.
+    createCloseAccountInstruction(wsolAta, me, me),
+    // ...and the now-empty coin account is rent to reclaim too.
+    createCloseAccountInstruction(p.address, me, me),
+  ];
+}
+
+const cu = (units = 400_000) => ComputeBudgetProgram.setComputeUnitLimit({ units });
 
 async function main(): Promise<void> {
   const connection = new Connection(RPC, "confirmed");
@@ -132,29 +285,63 @@ async function main(): Promise<void> {
     recovered += emptyRent;
   }
 
-  if (held.length > 0) {
-    for (const h of held) {
-      console.log(`  ${h.address.toBase58().slice(0, 8)}…  mint ${h.mint.toBase58().slice(0, 8)}…  ` +
-        `${h.amount} units  rent ${SOL(h.lamports)}`);
-    }
-    if (APPLY && BURN) {
-      for (const h of held) {
-        const sig = await send(connection, signer, [
-          createBurnInstruction(h.address, h.mint, me, h.amount),
-          createCloseAccountInstruction(h.address, me, me),
-        ]);
-        console.log(`  burned + closed ${h.address.toBase58().slice(0, 8)}…  ${sig}`);
+  // ---- 1b. price every position BEFORE deciding what to do with it -------
+  // This ordering is the whole lesson: rent is the small number and the market
+  // is the big one, so nothing may be destroyed before it has been valued.
+  const cfgInfo = await connection.getAccountInfo(configPda(PROGRAM_ID));
+  if (!cfgInfo) throw new Error("no config account");
+  const cfg = decodeConfig(cfgInfo.data);
+
+  const priced: PricedPosition[] = [];
+  for (const h of held) {
+    priced.push(await pricePosition(connection, cfg, h));
+  }
+  for (const p of priced) {
+    const where =
+      p.market === "pool" ? "graduated — sells into its Raydium pool"
+      : p.market === "curve" ? "live curve — sells back to the curve"
+      : "no market on this cluster";
+    console.log(`  ${p.address.toBase58().slice(0, 8)}…  mint ${p.mint.toBase58().slice(0, 8)}…  ` +
+      `${p.amount} units  rent ${SOL(p.lamports)}  → ${where}` +
+      (p.value > 0n ? `, worth ${SOL(p.value)} SOL` : ""));
+  }
+  const sellable = priced.filter((p) => p.value > 0n);
+  const worthless = priced.filter((p) => p.value === 0n);
+  const marketValue = sellable.reduce((n, p) => n + p.value, 0n);
+  if (sellable.length > 0) {
+    console.log(`\n  positions worth ${SOL(marketValue)} SOL — ${SELL ? "selling" : "pass --sell to liquidate"}`);
+  }
+
+  if (APPLY && SELL) {
+    for (const p of sellable) {
+      try {
+        const sig = await send(connection, signer, await sellIxs(connection, cfg, p, me));
+        console.log(`  sold ${p.mint.toBase58().slice(0, 8)}… for ~${SOL(p.value)} SOL  ${sig}`);
+        recovered += p.value;
+      } catch (e) {
+        console.log(`  sell ${p.mint.toBase58().slice(0, 8)}… FAILED — ${(e as Error).message.split("\n")[0]}`);
       }
-      recovered += heldRent;
-    } else if (!BURN) {
-      console.log(`  (pass --burn to burn these TEST tokens and reclaim ${SOL(heldRent)} SOL)`);
+    }
+  }
+
+  if (APPLY && BURN) {
+    // The guard. A position with a market is never burned, whatever the flags
+    // say — burning one trades its full value for 0.002 SOL of rent.
+    for (const p of worthless) {
+      const sig = await send(connection, signer, [
+        createBurnInstruction(p.address, p.mint, me, p.amount),
+        createCloseAccountInstruction(p.address, me, me),
+      ]);
+      console.log(`  burned + closed ${p.address.toBase58().slice(0, 8)}… (no market)  ${sig}`);
+      recovered += BigInt(p.lamports);
+    }
+    if (sellable.length > 0) {
+      console.log(`  REFUSED to burn ${sellable.length} position(s) worth ${SOL(marketValue)} SOL — ` +
+        `sell them with --sell first; their rent is ${SOL(sellable.reduce((n, p) => n + BigInt(p.lamports), 0n))} SOL`);
     }
   }
 
   // ---- 2. fee vaults -----------------------------------------------------
-  const cfgInfo = await connection.getAccountInfo(configPda(PROGRAM_ID));
-  if (!cfgInfo) throw new Error("no config account");
-  const cfg = decodeConfig(cfgInfo.data);
   const iAmFeeRecipient = cfg.feeRecipient.equals(me);
   console.log(`\nconfig.feeRecipient ${cfg.feeRecipient.toBase58()}` +
     `${iAmFeeRecipient ? " (me)" : " (NOT me — protocol fees are not mine to sweep)"}`);

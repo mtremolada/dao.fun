@@ -2193,3 +2193,51 @@ I could not measure exactly what remains in those wallets: finding them needs
 `getTokenLargestAccounts`, which the public devnet RPC rate-limits from this IP
 (the D-026 constraint again). The funded figure is exact; the residue is not,
 and it is unrecoverable either way.
+
+## D-059 — CORRECTION to D-058: the burned tokens were positions, not dust (2026-08-09)
+
+The operator asked the right question — *"no positions to sell?"* — and the
+answer is that D-058 destroyed value. This entry quantifies it exactly and
+records the guard that makes the mistake unrepeatable.
+
+**What actually happened.** The seven "worthless test tokens" burned under
+`--burn` all had markets. Four were full 793,100,000,000,000-unit positions in
+GRADUATED coins whose Raydium pools were live, quoted with the SDK's own
+`cpmmSwapBaseInputQuote` against the observed reserves:
+
+| position | pool held | selling would have returned |
+|---|---|---|
+| `5cWwoLPp…` | 2.665 SOL | 2.109 SOL |
+| `8PnhcD5R…` | 2.641 SOL | 2.090 SOL |
+| `42io3su1…` | 2.665 SOL | 2.109 SOL |
+| `5r9Tznj5…` | 2.661 SOL | 2.106 SOL |
+
+The other three sat on LIVE curves: `H1PBTihw…` worth 0.498 SOL, `EPxbNBCw…`
+0.099 SOL, `EfWLyjtM…` 0.010 SOL. Total: **~9.02 SOL destroyed to reclaim
+0.014 SOL of account rent.** The recovery run was net −9.0 SOL.
+
+**Why it is unrecoverable.** The burn reduced each mint's supply; no swap can
+retrieve the pools' SOL without putting equal value in, and there is no LP to
+redeem — the burn-the-LP guarantee the audit proves is precisely what makes
+this permanent. The strongest property in the protocol worked exactly as
+designed, against us.
+
+**The root cause was a category error in D-058's own reasoning.** It said
+"on devnet those tokens are worthless" — treating CLUSTER as what confers
+value, when what confers value is A MARKET. These coins had markets ON devnet;
+the SOL in those pools was the same faucet-scarce SOL the whole exercise was
+trying to recover. The tell that should have stopped me: the recovery script
+itself lists migrated pools holding ~2.6 SOL each, on the same screen as the
+0.002-SOL rents it was busy reclaiming.
+
+**The fix** (`devnet-recover.ts`, rebuilt): every position is PRICED before
+anything is decided — graduated coins against their pool, curve coins against
+`sellQuote` — and printed with its value. `--sell` liquidates through the same
+SDK builders the app trades with (5% slippage tolerance: a cleanup tool
+exiting a position it is abandoning prefers a slightly worse fill to a failed
+one). `--burn` now refuses, unconditionally, to burn anything with a live
+market — the guard is not flag-overridable, because the whole failure was a
+flag being easier to type than a valuation.
+
+Re-surveyed after the rebuild: zero token accounts remain, so there is nothing
+left to sell or to save. The guard exists for the next wallet, not this one.
