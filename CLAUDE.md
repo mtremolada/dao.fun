@@ -7,6 +7,18 @@ everything in **DECISIONS.md** (D-001..D-042 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
+## ▶ NEXT: perpetual post-graduation fees — PLAN-GRADUATED-FEES.md
+
+Research done against the DEPLOYED binaries (lock program dumped to
+tests/fixtures/raydium_lock.so.gz). Finding that decides the design:
+Raydium's locker has lock_cp_liquidity, lock_clmm_position and
+collect_cp_fees — there is NO collect_clmm_fees, so only the CPMM path
+supports "permanent liquidity + claimable fees". It also hard-codes the
+MAINNET cpmm/clmm ids and is absent from devnet, so the lock path can
+NEVER be exercised on devnet — bankrun-with-mainnet-binaries is the
+primary proof, devnet covers everything around it, mainnet canary is the
+only live run. Phases G0..G4 in the plan; G0 (spike) is blocking.
+
 ## ✅ Guarded SHIPPED (2026-08-09, D-043) — unified launch page live
 
 Gate v2 (four PDA-signed CPIs, client-parity, proven on the deployed
