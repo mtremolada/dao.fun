@@ -34,6 +34,8 @@
  *
  * Run: pnpm test:integration
  */
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { NATIVE_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -53,6 +55,7 @@ import {
   startPumpCtx,
 } from "./helpers/bankrun-harness";
 
+const FIXTURES = resolve(__dirname, "fixtures");
 const pumpSdk = new PumpSdk(); // offline builder/decoder
 
 async function info(ctx: ProgramTestContext, address: PublicKey) {
@@ -77,10 +80,27 @@ describe("reference: what a pump.fun graduation costs (deployed binaries)", () =
       // Same curve shape as PUMP_CLASSIC; only the fee SPLIT differs.
       expect(Number(global.initialVirtualSolReserves)).toBe(30_000_000_000);
       expect(Number(global.initialRealTokenReserves)).toBe(793_100_000_000_000);
-      // 0.95% protocol + 0.05% creator = 1.00% total, same headline as ours,
-      // but pump keeps 19x what the creator does on the way up (we keep 2.3x).
+      // CAREFUL: `Global` is NOT the effective curve fee. It reads 95/5, but
+      // the newer pump_fees `FeeConfig` account supersedes it and carries
+      // protocol 95 / creator 30 — so pump's real curve fee is 1.25% total
+      // and its creator share is 0.30%, the SAME as ours, not the 0.05% a
+      // reading of Global alone suggests. Both are asserted so the
+      // distinction cannot quietly rot.
       expect(Number(global.feeBasisPoints)).toBe(95);
       expect(Number(global.creatorFeeBasisPoints)).toBe(5);
+      const feeCfg = Buffer.from(
+        (
+          JSON.parse(
+            readFileSync(join(FIXTURES, "pump-accounts.json"), "utf8"),
+          ) as { label: string; dataBase64: string }[]
+        ).find((e) => e.label === "pump-fee-config")!.dataBase64,
+        "base64",
+      );
+      // FeeConfig: 8 disc + 1 bump + 32 admin, then flat_fees {lp, protocol,
+      // creator} as u64s.
+      expect(Number(feeCfg.readBigUInt64LE(41))).toBe(0); // lp
+      expect(Number(feeCfg.readBigUInt64LE(49))).toBe(95); // protocol
+      expect(Number(feeCfg.readBigUInt64LE(57))).toBe(30); // creator
       // THE number: not 6 SOL. Since PumpSwap, graduation is a 0.015 SOL fee.
       expect(Number(global.poolMigrationFee)).toBe(15_000_001);
 

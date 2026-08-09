@@ -51,9 +51,12 @@ crank it and the caller pays nothing but a signature, so graduation can
 never stall for want of funding. That liveness property is the real prize,
 and it is why "the raise pays" keeps winning.
 
-**pump's curve split is 0.95% protocol / 0.05% creator** [measured — live
-`Global`]. Same 1% headline as ours; they keep **19×** what the creator
-does, we keep 2.3×.
+**pump's curve fee is 1.25%, split 0.95% protocol / 0.30% creator**
+[measured — live `pump-fee-config`]. Note the trap: the `Global` account
+reads 95/5, but the newer `pump_fees` `FeeConfig` supersedes it and carries
+creator = 30 bps. Reading `Global` alone (as an earlier draft of this doc
+did) understates pump's creator share by 6×. So pump pays creators the
+**same 0.30% we do** on the curve, while charging traders 0.25 pp more.
 
 ## 2. The thing that actually matters: what happens AFTER graduation
 
@@ -197,3 +200,60 @@ lamport of the raise is in the pool, locked, unwithdrawable by anyone.
   signal to drop new launches to tier 5 (0.30%).
 - Half the fee stream arrives as the coin, not SOL. Selling it is a DAO
   governance question; the keeper should only unwrap the wSOL side.
+
+---
+
+## 7. Competitive field, researched 2026-08-09
+
+Three parallel research passes (pump.fun history, Meteora DBC + Raydium
+LaunchLab, and the wider field). Full reports in the session; the findings
+that bear on our design:
+
+**pump.fun's Raydium era — the analogue we asked about.** The migration fee
+was exactly **6,000,000,000 lamports deducted from the raise**, verified to
+the lamport on four graduations (FWOG 2024-07-30, GOAT 2024-10-10,
+FARTCOIN 2024-10-18, PNUT 2024-10-31). Raydium's own cost was **0.4 SOL**,
+because pump used AMM v4 and never CPMM — the 0.15 SOL CPMM rate never
+applied to them. pump's margin was therefore ~5.32 SOL per graduation. LP
+was minted to pump's wallet and burned in a separate transaction ~82s
+later. The widely cited "1.5 SOL migration fee" (The Block, 2024-08-09) is
+**refuted** by chain state ten days earlier and months later.
+
+**Raydium LaunchLab.** `migrate_fee = 0`; graduation costs **0.213510841
+SOL paid entirely by Raydium's own crank wallet** (`RAYpQbFN…`), so 100% of
+the 85 SOL raise enters the pool. The crank is **permissioned** — only
+`migrate_to_cpswap_wallet` may call it. That is how they guarantee funding,
+and it is the trade we decline: our crank stays open to anyone.
+
+**letsbonk.fun.** Curve fee **1.50%** (0.25% Raydium + 1.25% platform).
+`creator_fee_rate = 0` and `creator_scale = 0` on both live platform
+configs: creators get **nothing**, on the curve or after. One config burns
+99.9999% of the LP; another sends 100% of it to a *platform* fee key on a
+**2.0% CPMM pool** — direct evidence that a 1% destination tier is
+conservative.
+
+**Meteora DBC.** Permissionless crank where the **cranker** pays, billed
+exactly via a `flash_rent` PDA-fronting trick. Destination pool tier is
+chosen from 0.25/0.3/1/2/4/6%. An optional `migration_fee` takes 0–99% of
+the raise. At least 10% of liquidity must remain locked 24h after
+migration — we lock 100%.
+
+**Moonit** is the closest thing to our design and the most creator-friendly
+found: LP locked permanently, fees auto-claimed **in SOL and airdropped
+daily**, split **80% creator / 20% platform**. Our proposed 90/10 is more
+generous.
+
+**StonkFun** has no curve and no graduation — a fixed supply and a
+one-sided CLMM position against an xStock. Liquidity is genuinely locked
+(position NFTs held by Raydium's locker CLMM authority), but the fee keys
+sit in platform bot wallets, so the advertised 50/50 is off-chain.
+
+**Doctrine notes.** Published IDLs and docs are stale across the board:
+pump's on-chain IDL declares 27 accounts for `migrate_v2` where the
+deployed program takes 29; pump's own README publishes
+`fee_basis_points: 100` where live `Global` reads 95. And pump appears to
+have added a **BOOST** step (reported 2026-07-21) that pulls ~20.69% of
+seeded SOL back out of a new pool. We have not measured that — but we did
+confirm today's deployed `pump_amm` carries a `boost_vault` seed string
+that our fixture does not, so our fixture is stale and the
+"seeded into the pool" figure in §1 describes the fixture, not live pump.

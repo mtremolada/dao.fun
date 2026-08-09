@@ -111,10 +111,20 @@ unattended forever. CLMM is not ruled out on capability, and if
 concentrated liquidity ever becomes a product requirement it is a
 tractable second rail — the lock program supports it.
 
-Open question worth noting: I could NOT determine who holds the position
-NFT for the stonkfun token (public RPC blocked the lookup). If it sits in
-a platform wallet, their liquidity is pullable in principle. Not an
-accusation — an unknown, and a reason not to copy the pattern blind.
+**Correction — the stonkfun description above is wrong on two counts, and
+the open question is now answered.** StonkFun has no bonding curve and no
+graduation at all: it mints a fixed supply and opens a one-sided Raydium
+**CLMM** position quoted against an **xStock** (SPYX, NVDAX, …), not USDC.
+It has no program of its own — `goonuddt…`, which I attributed to them, is
+GoonFi V2 and unrelated. The USDC pools on that mint are third-party dust.
+
+On the question I could not answer before: **their liquidity is genuinely
+locked.** Both position NFTs sit with `kN1kEzna…`, Raydium's locker CLMM
+authority PDA, and the creator's original position ATA is closed. But the
+**fee keys are custodial** — the two Burn & Earn NFTs went to StonkFun bot
+wallets, so the creator's advertised 50% share is a platform promise
+settled off-chain, not an on-chain right. That is precisely the gap our
+design closes: our fee key lives in a PDA that can only pay the creator.
 
 **Recommendation: ship CPMM + lock. Revisit CLMM only if concentrated
 liquidity itself becomes a product requirement.**

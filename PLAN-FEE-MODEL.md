@@ -14,35 +14,52 @@ deployed binaries and live mainnet state), D-049 (G0 lock verification),
 
 | | curve fee | who pays graduation | post-graduation creator stream |
 |---|---|---|---|
-| **pump.fun** | 1.00% (0.95 protocol / 0.05 creator) | the raise — 0.015 SOL fee, of which 0.0082 is rent; cranker pays 0 | PumpSwap, market-cap tiered: **creator 0.95%** of volume at fresh-graduate mcap, decaying to 0.05% above ~98k SOL mcap |
-| **letsbonk.fun** (LaunchLab) | **1.50%** (0.25 Raydium + 1.25 platform) | Raydium's crank wallet, 0.2135 SOL, 100% of the raise reaches the pool | **none** — `creator_scale = 0`, 99.9999% of LP burned |
-| **Meteora DBC** | 0.25–6% tier, configurable | the **cranker**, billed exactly via `flash_rent`; plus an optional 0–99% cut of the raise | configurable locked-LP split, partner vs creator; ≥10% must stay locked at 24h |
+| **pump.fun, Raydium era** | 1.00% | **6 SOL from the raise** against ~0.4 SOL of real cost — ~5.32 SOL margin per graduation | none — LP minted to pump's wallet, then burned |
+| **pump.fun today** | **1.25%** (0.95 protocol / 0.30 creator) | the raise — 0.015 SOL fee, mostly rent; cranker pays 0 | PumpSwap, market-cap tiered: **creator 0.95%** of volume at fresh-graduate mcap, decaying to 0.05% above ~98k SOL mcap |
+| **letsbonk.fun** (LaunchLab) | **1.50%** (0.25 Raydium + 1.25 platform) | Raydium's crank wallet, 0.2135 SOL, 100% of the raise reaches the pool | **none** — `creator_scale = 0`; LP either burned 99.9999% or 100% to a *platform* fee key |
+| **Meteora DBC** | configurable; protocol takes 20% of it | the **cranker**, billed exactly via `flash_rent`; plus an optional 0–99% cut of the raise | configurable locked-LP split, partner vs creator; ≥10% must stay locked at 24h |
+| **Moonit** | — | — | LP locked permanently, fees auto-claimed **in SOL and airdropped daily**, **80% creator / 20% platform** |
+| **Boop** | all fees to the platform pre-graduation | **6 SOL from the raise** (80 SOL migrates) | — |
+| **StonkFun** | 1% or 4% pool | no curve — mints and locks a one-sided CLMM position | 50/50 creator/platform, but the fee keys sit in **platform bot wallets** — the creator's share is an off-chain promise |
 | **dao.fun today** | 1.00% (0.70 / 0.30) | the raise — 0.2155 SOL | nothing — LP is burned |
 | **dao.fun proposed** | 1.00% (0.70 / 0.30) | the coin's own protocol fees; **100% of the raise reaches the pool** | Raydium CPMM tier 1: **DAO 0.756%**, protocol 0.084%, Raydium 0.16% |
 
-Four things fall out, all of which the proposal already leans into:
+Five things fall out, all of which the proposal already leans into:
 
-- **Nobody charges a graduation margin any more.** Raydium eats 0.2135 SOL
-  out of its own wallet so the full 85 SOL enters the pool; pump charges
-  0.015 SOL, most of which is rent. pump's 6 SOL Raydium-era fee is dead and
-  reviving it would be conspicuous.
-- **We are already the most generous platform on the curve.** 0.30% to the
-  creator against pump's 0.05% and letsbonk's zero — and our 1.00% headline
-  undercuts letsbonk's 1.50%.
-- **A 1% destination pool is squarely normal.** Meteora ships 0.25/0.3/1/2/4/6%
-  as first-class migration options. Tier 1 is not aggressive.
-- **The perpetual DAO stream is a genuine differentiator, not table stakes.**
-  The market leader on our exact venue (letsbonk) gives creators *nothing*
-  after graduation and burns 99.9999% of the LP. pump is the only one paying
-  a real post-graduation stream, and only because they own the venue.
+- **The 6 SOL era is over and reviving it would be conspicuous.** pump's
+  Raydium-era fee was verified at exactly 6,000,000,000 lamports deducted
+  from the raise on four separate graduations (FWOG, GOAT, FARTCOIN, PNUT)
+  against ~0.4 SOL of actual cost. Today Raydium eats 0.2135 SOL out of its
+  own wallet so the full 85 SOL enters the pool, and pump charges 0.015 SOL.
+  Boop still takes 6 SOL and is the outlier, not the norm.
+- **On the curve we match pump and undercut everyone on price.** pump's
+  effective curve fee is **1.25%** (0.95 protocol / 0.30 creator) — the
+  `Global` account's 95/5 is superseded by the `pump_fees` `FeeConfig`, and
+  reading `Global` alone understates their creator share 6×. So pump pays
+  creators the same 0.30% we do; we simply charge traders 1.00% where pump
+  charges 1.25% and letsbonk 1.50%.
+- **A 1% destination pool is conservative, not aggressive.** Meteora ships
+  0.25/0.3/1/2/4/6% as first-class migration options, and one live letsbonk
+  platform config graduates into a **2.0%** CPMM pool. Tier 1 sits below
+  what the market already bears.
+- **Our 90/10 split is more generous than the closest precedent.** Moonit —
+  the most creator-friendly launchpad found — splits post-graduation fees
+  **80/20**. We propose 90/10.
+- **Holding the fee key in a program PDA is a real advantage, not a
+  detail.** StonkFun's liquidity genuinely is locked (their position NFTs
+  sit with Raydium's locker authority — verified on chain), but the *fee
+  keys* are in platform bot wallets, so the creator's advertised 50% is an
+  off-chain promise the platform could stop keeping. letsbonk mints the fee
+  key to a platform wallet outright. Our fee-authority PDA can only ever pay
+  the coin's creator, and no key exists that could redirect it.
 
 ## 2. The model
 
 ### Before graduation — unchanged, 1.00%
 `0.70%` protocol / `0.30%` creator, fees on top of the curve price. No
-change: the headline matches pump exactly, and our split already favours
-creators 6:1 against theirs. Raising it would be uncompetitive; lowering
-the protocol side is unnecessary (see §3).
+change: we already match pump's creator share (0.30%) while charging
+traders 1.00% against pump's 1.25% and letsbonk's 1.50%. Raising it would
+throw away that position; lowering the protocol side is unnecessary (§3).
 
 ### At graduation — no fee at all
 The full **85.005359 SOL raise becomes liquidity**. The
@@ -85,12 +102,13 @@ life we pay the creator **more** than pump does, because we never decay.
 
 ### What a trader pays
 
-| | dao.fun | pump.fun |
-|---|---|---|
-| on the curve | 1.000% | 1.000% |
-| after graduation | 1.000% flat | 1.20–1.25% early, 0.30% at scale |
+| | dao.fun | pump.fun | letsbonk |
+|---|---|---|---|
+| on the curve | **1.00%** | 1.25% | 1.50% |
+| after graduation | **1.00%** flat | 1.20–1.25% early, 0.30% at scale | 2.00% (one live config) |
 
-Cheaper than pump exactly when a coin is young and most trading happens.
+Cheapest on the curve, and cheaper than pump after graduation exactly when
+a coin is young and most of its trading happens.
 
 ## 3. Why these numbers
 
