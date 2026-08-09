@@ -132,6 +132,35 @@ export function buildUpdateConfigIx(args: {
   });
 }
 
+/**
+ * Authority-only: selects the Raydium fee tier new pools are created in,
+ * whether migrate locks or burns the LP, and the protocol's share of the
+ * resulting stream. Separate from updateConfig because these are graduation
+ * parameters, not curve parameters.
+ */
+export function buildSetGraduationConfigIx(args: {
+  authority: PublicKey;
+  ammConfig: PublicKey;
+  /** PublicKey.default (all zero) keeps the burn branch — devnet's only option. */
+  lockProgram: PublicKey;
+  graduatedFeeProtocolBps: number;
+  programId?: PublicKey;
+}): TransactionInstruction {
+  const programId = args.programId ?? LAUNCHPAD_PROGRAM_ID;
+  const data = Buffer.alloc(32 + 2);
+  args.lockProgram.toBuffer().copy(data, 0);
+  data.writeUInt16LE(args.graduatedFeeProtocolBps, 32);
+  return new TransactionInstruction({
+    programId,
+    data: Buffer.concat([ixDiscriminator("set_graduation_config"), data]),
+    keys: [
+      AM(args.authority, true, false),
+      AM(configPda(programId), false, true),
+      AM(args.ammConfig, false, false),
+    ],
+  });
+}
+
 export function buildCreateCoinIx(args: {
   payer: PublicKey;
   mint: PublicKey;

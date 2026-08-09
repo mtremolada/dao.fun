@@ -29,6 +29,11 @@ import {
 } from "../packages/sdk/src/constants";
 import { TEST_TIMEOUT, send, sendExpectFail } from "./helpers/bankrun-harness";
 import {
+  buildSetGraduationConfigIx,
+  configLocksLiquidity,
+  decodeConfig,
+} from "../packages/sdk/src/launchpad";
+import {
   LAUNCHPAD_PROGRAM_ID,
   configPda,
   initializeConfigIx,
@@ -107,8 +112,85 @@ describe("launchpad-curve — global config", () => {
         RAYDIUM_CPMM_CREATE_POOL_FEE_RECEIVER.toBase58(),
       );
       expect(d[212]).toBe(bump);
-      // 8 disc + 32 + 32 + 2 + 2 + 8*5 + 32*3 + 1 bump + 64 reserved
+      // A fresh config selects the BURN branch: lock_program all-zero. That
+      // is both the safe default and devnet's only possible behaviour.
+      expect(new PublicKey(d.subarray(213, 245)).equals(PublicKey.default)).toBe(
+        true,
+      );
+      expect(d.readUInt16LE(245)).toBe(0);
+      // 8 disc + 32 + 32 + 2 + 2 + 8*5 + 32*3 + 1 bump + 64 tail.
+      // The tail was originally `reserved: [u64; 8]`; lock_program (32) and
+      // graduated_fee_protocol_bps (2) were carved OUT of it, so this length
+      // must not move — a config account written by the previous deployment
+      // has to keep deserializing, and it does, as burn + zero share.
       expect(d.length).toBe(277);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "lets the authority pick the Raydium fee tier, but only a Raydium one",
+    async () => {
+      // The tier is the DAO's perpetual income rate (research/launchpad/
+      // graduation-economics.md §3): index 0 pays the locked position 0.210%
+      // of volume, index 1 pays 0.840% for the same 0.15 SOL. It has to be
+      // changeable without a redeploy, which is why this instruction exists.
+      await send(
+        ctx,
+        [
+          cu(),
+          buildSetGraduationConfigIx({
+            authority: authority.publicKey,
+            ammConfig: RAYDIUM_CPMM_AMM_CONFIG,
+            lockProgram: PublicKey.default,
+            graduatedFeeProtocolBps: 2_000,
+          }),
+        ],
+        [authority],
+      );
+      const cfg = decodeConfig(
+        (await ctx.banksClient.getAccount(configPda()))!.data,
+      );
+      expect(cfg.cpmmAmmConfig.toBase58()).toBe(RAYDIUM_CPMM_AMM_CONFIG.toBase58());
+      expect(cfg.graduatedFeeProtocolBps).toBe(2_000);
+      expect(configLocksLiquidity(cfg)).toBe(false);
+
+      // A stranger cannot touch it.
+      const stranger = Keypair.generate();
+      expect(
+        await sendExpectFail(
+          ctx,
+          [
+            cu(),
+            buildSetGraduationConfigIx({
+              authority: stranger.publicKey,
+              ammConfig: RAYDIUM_CPMM_AMM_CONFIG,
+              lockProgram: PublicKey.default,
+              graduatedFeeProtocolBps: 0,
+            }),
+          ],
+          [stranger],
+        ),
+      ).toMatch(/Unauthorized|ConstraintHasOne|2001|custom program error/i);
+
+      // And the fee tier must be an account Raydium owns — this is what
+      // stops a compromised authority pointing the migration at a config
+      // some other program controls.
+      expect(
+        await sendExpectFail(
+          ctx,
+          [
+            cu(),
+            buildSetGraduationConfigIx({
+              authority: authority.publicKey,
+              ammConfig: Keypair.generate().publicKey,
+              lockProgram: PublicKey.default,
+              graduatedFeeProtocolBps: 0,
+            }),
+          ],
+          [authority],
+        ),
+      ).toMatch(/owner|Owner|InvalidCpmmAccount|custom program error/i);
     },
     TEST_TIMEOUT,
   );

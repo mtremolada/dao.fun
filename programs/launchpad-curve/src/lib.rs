@@ -57,6 +57,9 @@ pub const BPS_DENOMINATOR: u128 = 10_000;
 /// Ceiling on the graduation fee, so "operator-tunable" can never become
 /// "operator takes the raise".
 pub const MAX_GRADUATION_FEE_LAMPORTS: u64 = 5_000_000_000;
+/// Ceiling on the protocol's share of post-graduation fees. The DAO stream
+/// is the product; half is already more than any competitor takes.
+pub const MAX_GRADUATED_FEE_PROTOCOL_BPS: u16 = 5_000;
 /// Rent the Raydium CPMM charges its `creator` for the six accounts it
 /// initializes (PoolState 637 B, ObservationState 4075 B, lp_mint, two
 /// vaults, the creator LP ATA). Measured, not estimated —
@@ -121,6 +124,32 @@ pub mod launchpad_curve {
     pub fn update_config(ctx: Context<UpdateConfig>, params: ConfigParams) -> Result<()> {
         params.validate()?;
         ctx.accounts.config.apply(params);
+        Ok(())
+    }
+
+    /// Authority-only. Sets the graduation-time parameters that were not
+    /// knowable at first deploy: which Raydium fee tier new pools are
+    /// created in, whether the LP is locked or burned, and the protocol's
+    /// share of the resulting fee stream.
+    ///
+    /// Unlike `cpmm_program`, these are safe to make mutable. The fee tier
+    /// is an account OWNED BY the already-pinned CPMM program, so it can
+    /// only ever be one of Raydium's own configs — a compromised authority
+    /// could pick a silly fee, but cannot redirect a lamport. The locker is
+    /// address-checked at use, and zero means "burn", the safe default.
+    pub fn set_graduation_config(
+        ctx: Context<SetGraduationConfig>,
+        lock_program: Pubkey,
+        graduated_fee_protocol_bps: u16,
+    ) -> Result<()> {
+        require!(
+            graduated_fee_protocol_bps <= MAX_GRADUATED_FEE_PROTOCOL_BPS,
+            LaunchpadError::FeeOutOfRange
+        );
+        let config = &mut ctx.accounts.config;
+        config.cpmm_amm_config = ctx.accounts.cpmm_amm_config.key();
+        config.lock_program = lock_program;
+        config.graduated_fee_protocol_bps = graduated_fee_protocol_bps;
         Ok(())
     }
 
@@ -1133,8 +1162,21 @@ pub struct Config {
     pub cpmm_amm_config: Pubkey,
     pub cpmm_create_pool_fee: Pubkey,
     pub bump: u8,
-    /// Headroom so later parameters do not force a state migration.
-    pub reserved: [u64; 8],
+    /// Raydium's liquidity locker. ZERO means "burn the LP", which is both
+    /// the pre-existing behaviour and the only possible behaviour on devnet
+    /// (the locker is not deployed there and hard-codes the MAINNET CPMM
+    /// id). Set on mainnet, `migrate` locks instead and the coin earns
+    /// trading fees forever (PLAN-FEE-MODEL.md §2).
+    pub lock_program: Pubkey,
+    /// Protocol's share of the SOL side of post-graduation fees, in bps,
+    /// applied only AFTER the graduation cost has been recovered.
+    pub graduated_fee_protocol_bps: u16,
+    /// Headroom so later parameters do not force a state migration. Carved
+    /// out of the original `[u64; 8]`, byte for byte, so this upgrade does
+    /// NOT change Config's size and every already-deployed config account
+    /// still deserializes — with lock_program = zero, i.e. burn, which is
+    /// exactly what a config written before this existed meant.
+    pub reserved: [u8; 30],
 }
 
 #[account]
@@ -1189,6 +1231,23 @@ pub struct InitializeConfig<'info> {
     )]
     pub config: Box<Account<'info, Config>>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetGraduationConfig<'info> {
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        has_one = authority @ LaunchpadError::Unauthorized
+    )]
+    pub config: Box<Account<'info, Config>>,
+    /// CHECK: a Raydium fee tier. Constrained to be owned by the CPMM
+    /// program pinned at initialization, so this can only ever select one of
+    /// Raydium's own configs.
+    #[account(owner = config.cpmm_program @ LaunchpadError::InvalidCpmmAccount)]
+    pub cpmm_amm_config: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

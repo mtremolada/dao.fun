@@ -18,6 +18,11 @@ export interface DecodedConfig {
   cpmmProgram: PublicKey;
   cpmmAmmConfig: PublicKey;
   cpmmCreatePoolFee: PublicKey;
+  bump: number;
+  /** Raydium's locker; all-zero means migrate BURNS the LP (devnet). */
+  lockProgram: PublicKey;
+  /** Protocol share of the SOL side of graduated fees, after recovery. */
+  graduatedFeeProtocolBps: number;
 }
 
 export function decodeConfig(data: Buffer | Uint8Array): DecodedConfig {
@@ -35,8 +40,15 @@ export function decodeConfig(data: Buffer | Uint8Array): DecodedConfig {
     cpmmProgram: new PublicKey(d.subarray(116, 148)),
     cpmmAmmConfig: new PublicKey(d.subarray(148, 180)),
     cpmmCreatePoolFee: new PublicKey(d.subarray(180, 212)),
+    bump: d[212]!,
+    lockProgram: new PublicKey(d.subarray(213, 245)),
+    graduatedFeeProtocolBps: d.readUInt16LE(245),
   };
 }
+
+/** True when the config selects the lock branch (mainnet) over burning. */
+export const configLocksLiquidity = (cfg: DecodedConfig): boolean =>
+  !cfg.lockProgram.equals(PublicKey.default);
 
 export interface DecodedCurve {
   mint: PublicKey;
