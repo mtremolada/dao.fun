@@ -17,12 +17,14 @@ import {
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   NATIVE_MINT,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { MPL_TOKEN_METADATA_PROGRAM_ID } from "../constants";
 import {
   LAUNCHPAD_PROGRAM_ID,
+  MEMO_PROGRAM_ID,
   ixDiscriminator,
   raydiumCpmmAddresses,
   type Cluster,
@@ -371,6 +373,67 @@ export function buildLockGraduatedLiquidityIx(args: {
       AM(ASSOCIATED_TOKEN_PROGRAM_ID, false, false),
       AM(SystemProgram.programId, false, false),
       AM(SYSVAR_RENT_PUBKEY, false, false),
+    ],
+  });
+}
+
+/**
+ * Collects a graduated pool's trading fees and splits them: the coin side
+ * 100% to the creator, the SOL side repaying the graduation cost and then
+ * splitting per `graduatedFeeProtocolBps`. Permissionless.
+ *
+ * The four token accounts must exist — prepend
+ * `createAssociatedTokenAccountIdempotentInstruction` for each, or run the
+ * keeper's crank which does it.
+ */
+export function buildCollectGraduatedFeesIx(args: {
+  payer: PublicKey;
+  mint: PublicKey;
+  creator: PublicKey;
+  feeRecipient: PublicKey;
+  poolState: PublicKey;
+  lockProgram: PublicKey;
+  ray: RaydiumCpmmAddresses;
+  programId?: PublicKey;
+}): TransactionInstruction {
+  const programId = args.programId ?? LAUNCHPAD_PROGRAM_ID;
+  const p = cpmmPoolAccounts(args.mint, args.ray, programId);
+  const feeAuthority = feeAuthorityPda(args.mint, programId);
+  const feeNftMint = feeNftMintPda(args.mint, programId);
+  const lockAuthority = lockCpAuthorityPda(args.lockProgram);
+  const ata = (mint: PublicKey, owner: PublicKey) =>
+    getAssociatedTokenAddressSync(mint, owner, true);
+  return new TransactionInstruction({
+    programId,
+    data: ixDiscriminator("collect_graduated_fees"),
+    keys: [
+      AM(args.payer, true, true),
+      AM(configPda(programId), false, false),
+      AM(args.mint, false, false),
+      AM(curvePda(args.mint, programId), false, false),
+      AM(graduatedFeesPda(args.mint, programId), false, true),
+      AM(feeAuthority, false, false),
+      AM(ata(feeNftMint, feeAuthority), false, false),
+      AM(ata(NATIVE_MINT, feeAuthority), false, true),
+      AM(ata(args.mint, args.creator), false, true),
+      AM(ata(NATIVE_MINT, args.creator), false, true),
+      AM(ata(NATIVE_MINT, args.feeRecipient), false, true),
+      AM(args.creator, false, false),
+      AM(args.feeRecipient, false, false),
+      AM(NATIVE_MINT, false, false),
+      AM(args.lockProgram, false, false),
+      AM(lockAuthority, false, false),
+      AM(lockedLiquidityPda(feeNftMint, args.lockProgram), false, true),
+      AM(args.ray.program, false, false),
+      AM(args.ray.authority, false, false),
+      AM(args.poolState, false, true),
+      AM(p.lpMint, false, true),
+      AM(p.vault0, false, true),
+      AM(p.vault1, false, true),
+      AM(ata(p.lpMint, lockAuthority), false, true),
+      AM(TOKEN_PROGRAM_ID, false, false),
+      AM(TOKEN_2022_PROGRAM_ID, false, false),
+      AM(MEMO_PROGRAM_ID, false, false),
     ],
   });
 }

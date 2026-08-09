@@ -78,6 +78,11 @@ const AMM_CONFIG_CREATE_POOL_FEE_OFFSET: usize = 36;
 pub const LOCK_CP_AUTHORITY_SEED: &[u8] = b"lock_cp_authority_seed";
 pub const LOCKED_LIQUIDITY_SEED: &[u8] = b"locked_liquidity";
 const LOCK_CP_LIQUIDITY_DISC: [u8; 8] = [216, 157, 29, 78, 38, 51, 31, 26];
+const COLLECT_CP_FEES_DISC: [u8; 8] = [8, 30, 51, 199, 209, 184, 247, 133];
+/// `fee_lp_amount` sentinel meaning "everything accrued".
+const CLAIM_ALL_FEES: u64 = u64::MAX;
+/// CPMM's vault + LP-mint authority seed, derived from the pinned program.
+pub const CPMM_AUTHORITY_SEED: &[u8] = b"vault_and_lp_mint_auth_seed";
 /// Coins are classic SPL, 6 decimals — the convention every terminal,
 /// indexer and wallet on Solana already renders correctly.
 pub const COIN_DECIMALS: u8 = 6;
@@ -855,6 +860,139 @@ pub mod launchpad_curve {
         record.cost_lamports = spent;
         record.recovered_lamports = 0;
         record.bump = ctx.bumps.graduated_fees;
+        Ok(())
+    }
+
+    /// Collects the graduated pool's trading fees and splits them.
+    /// Permissionless — every destination is derived or read from the
+    /// curve, so a crank can only make the payout happen, never redirect it.
+    ///
+    /// The split, per PLAN-FEE-MODEL.md §2:
+    ///   - the COIN side goes 100% to the creator. The protocol has no
+    ///     business accumulating memecoin dust it cannot sell without moving
+    ///     the price of the thing it is supposed to be neutral about.
+    ///   - the SOL side first repays what the protocol fronted for this
+    ///     coin's graduation, then splits by
+    ///     `config.graduated_fee_protocol_bps`.
+    ///
+    /// Fees arrive in the pool's two tokens, so the coin side is collected
+    /// STRAIGHT to the creator and only the wSOL side passes through a
+    /// holding account — one fewer transfer, and the coin can never sit
+    /// anywhere the creator does not already control.
+    pub fn collect_graduated_fees(ctx: Context<CollectGraduatedFees>) -> Result<()> {
+        let config = &ctx.accounts.config;
+        require!(
+            ctx.accounts.lock_program.key() == config.lock_program
+                && config.lock_program != Pubkey::default(),
+            LaunchpadError::LockingDisabled
+        );
+
+        let mint_key = ctx.accounts.mint.key();
+        let (lock_authority, _) =
+            Pubkey::find_program_address(&[LOCK_CP_AUTHORITY_SEED], &config.lock_program);
+        require!(
+            ctx.accounts.lock_authority.key() == lock_authority,
+            LaunchpadError::InvalidCpmmAccount
+        );
+        let (cp_authority, _) =
+            Pubkey::find_program_address(&[CPMM_AUTHORITY_SEED], &config.cpmm_program);
+        require!(
+            ctx.accounts.cpmm_authority.key() == cp_authority,
+            LaunchpadError::InvalidCpmmAccount
+        );
+
+        // wSOL sorts below a coin mint ~97.7% of the time but not always, and
+        // getting this backwards would pay the creator's SOL into the coin
+        // account. Decide it from the bytes, exactly as migrate does.
+        let wsol_is_token_0 =
+            ctx.accounts.wsol_mint.key().to_bytes() < mint_key.to_bytes();
+        let (recipient_0, recipient_1, vault_0_mint, vault_1_mint) = if wsol_is_token_0 {
+            (
+                ctx.accounts.sol_holding.to_account_info(),
+                ctx.accounts.creator_coin.to_account_info(),
+                ctx.accounts.wsol_mint.to_account_info(),
+                ctx.accounts.mint.to_account_info(),
+            )
+        } else {
+            (
+                ctx.accounts.creator_coin.to_account_info(),
+                ctx.accounts.sol_holding.to_account_info(),
+                ctx.accounts.mint.to_account_info(),
+                ctx.accounts.wsol_mint.to_account_info(),
+            )
+        };
+
+        let fee_authority_seeds: &[&[u8]] = &[
+            FEE_AUTHORITY_SEED,
+            mint_key.as_ref(),
+            &[ctx.bumps.fee_authority],
+        ];
+        lock::collect_cp_fees(
+            &ctx.accounts.lock_program.to_account_info(),
+            &ctx.accounts.lock_authority.to_account_info(),
+            &ctx.accounts.fee_authority.to_account_info(),
+            &ctx.accounts.fee_nft_account.to_account_info(),
+            &ctx.accounts.locked_liquidity.to_account_info(),
+            &ctx.accounts.cpmm_program.to_account_info(),
+            &ctx.accounts.cpmm_authority.to_account_info(),
+            &ctx.accounts.pool_state.to_account_info(),
+            &ctx.accounts.cpmm_lp_mint.to_account_info(),
+            &recipient_0,
+            &recipient_1,
+            &ctx.accounts.cpmm_token_0_vault.to_account_info(),
+            &ctx.accounts.cpmm_token_1_vault.to_account_info(),
+            &vault_0_mint,
+            &vault_1_mint,
+            &ctx.accounts.locked_lp_vault.to_account_info(),
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.token_program_2022.to_account_info(),
+            &ctx.accounts.memo_program.to_account_info(),
+            CLAIM_ALL_FEES,
+            &[fee_authority_seeds],
+        )?;
+
+        // Whatever the holding account now has is this round's SOL side.
+        ctx.accounts.sol_holding.reload()?;
+        let available = ctx.accounts.sol_holding.amount;
+        if available == 0 {
+            return Ok(());
+        }
+
+        let record = &mut ctx.accounts.graduated_fees;
+        let owed = record
+            .cost_lamports
+            .saturating_sub(record.recovered_lamports);
+        let recovery = owed.min(available);
+        let rest = available - recovery;
+        let share = ((rest as u128) * (config.graduated_fee_protocol_bps as u128)
+            / BPS_DENOMINATOR) as u64;
+        let to_protocol = recovery + share;
+        let to_creator = rest - share;
+
+        for (destination, amount) in [
+            (ctx.accounts.protocol_sol.to_account_info(), to_protocol),
+            (ctx.accounts.creator_sol.to_account_info(), to_creator),
+        ] {
+            if amount == 0 {
+                continue;
+            }
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    token::Transfer {
+                        from: ctx.accounts.sol_holding.to_account_info(),
+                        to: destination,
+                        authority: ctx.accounts.fee_authority.to_account_info(),
+                    },
+                    &[fee_authority_seeds],
+                ),
+                amount,
+            )?;
+        }
+        record.recovered_lamports = record
+            .recovered_lamports
+            .checked_add(recovery)
+            .ok_or(LaunchpadError::MathOverflow)?;
         Ok(())
     }
 
@@ -1743,6 +1881,98 @@ pub struct LockGraduatedLiquidity<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct CollectGraduatedFees<'info> {
+    /// Anyone. Pays the transaction and gains nothing.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    pub mint: Box<Account<'info, Mint>>,
+    #[account(
+        seeds = [CURVE_SEED, mint.key().as_ref()],
+        bump = bonding_curve.bump,
+        has_one = mint @ LaunchpadError::MintMismatch,
+    )]
+    pub bonding_curve: Box<Account<'info, BondingCurve>>,
+    #[account(
+        mut,
+        seeds = [GRADUATED_SEED, mint.key().as_ref()],
+        bump = graduated_fees.bump,
+    )]
+    pub graduated_fees: Box<Account<'info, GraduatedFees>>,
+    /// CHECK: signs the collect; owns the fee key and the holding account.
+    #[account(seeds = [FEE_AUTHORITY_SEED, mint.key().as_ref()], bump)]
+    pub fee_authority: UncheckedAccount<'info>,
+    /// CHECK: the fee key's token account, checked by the locker.
+    pub fee_nft_account: UncheckedAccount<'info>,
+    /// The wSOL side lands here first so it can be split.
+    #[account(
+        mut,
+        associated_token::mint = wsol_mint,
+        associated_token::authority = fee_authority,
+    )]
+    pub sol_holding: Box<Account<'info, TokenAccount>>,
+    /// The coin side is collected STRAIGHT here — 100% of it, always.
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = creator,
+    )]
+    pub creator_coin: Box<Account<'info, TokenAccount>>,
+    #[account(
+        mut,
+        associated_token::mint = wsol_mint,
+        associated_token::authority = creator,
+    )]
+    pub creator_sol: Box<Account<'info, TokenAccount>>,
+    #[account(
+        mut,
+        associated_token::mint = wsol_mint,
+        associated_token::authority = fee_recipient,
+    )]
+    pub protocol_sol: Box<Account<'info, TokenAccount>>,
+    /// CHECK: the curve's recorded creator — the only possible destination.
+    #[account(address = bonding_curve.creator @ LaunchpadError::Unauthorized)]
+    pub creator: UncheckedAccount<'info>,
+    /// CHECK: pinned to the address recorded in config.
+    #[account(address = config.fee_recipient @ LaunchpadError::InvalidFeeRecipient)]
+    pub fee_recipient: UncheckedAccount<'info>,
+    pub wsol_mint: Box<Account<'info, Mint>>,
+    /// CHECK: address checked against config.lock_program.
+    pub lock_program: UncheckedAccount<'info>,
+    /// CHECK: derived and checked in the handler.
+    pub lock_authority: UncheckedAccount<'info>,
+    /// CHECK: the locker's record for this position.
+    #[account(mut)]
+    pub locked_liquidity: UncheckedAccount<'info>,
+    /// CHECK: pinned at initialization.
+    #[account(address = config.cpmm_program @ LaunchpadError::InvalidCpmmAccount)]
+    pub cpmm_program: UncheckedAccount<'info>,
+    /// CHECK: derived and checked in the handler.
+    pub cpmm_authority: UncheckedAccount<'info>,
+    /// CHECK: our pool, recorded on the curve at migration.
+    #[account(mut, address = bonding_curve.pool_state @ LaunchpadError::InvalidCpmmAccount)]
+    pub pool_state: UncheckedAccount<'info>,
+    /// CHECK: re-derived by the locker and by CPMM.
+    #[account(mut)]
+    pub cpmm_lp_mint: UncheckedAccount<'info>,
+    /// CHECK: re-derived by CPMM from pool_state.
+    #[account(mut)]
+    pub cpmm_token_0_vault: UncheckedAccount<'info>,
+    /// CHECK: re-derived by CPMM from pool_state.
+    #[account(mut)]
+    pub cpmm_token_1_vault: UncheckedAccount<'info>,
+    /// CHECK: ATA(lock_authority, lp_mint).
+    #[account(mut)]
+    pub locked_lp_vault: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token>,
+    /// CHECK: Token-2022, passed through for token-2022 pools.
+    pub token_program_2022: UncheckedAccount<'info>,
+    /// CHECK: memo, used by the locker's transfer-fee path.
+    pub memo_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

@@ -106,3 +106,89 @@ pub fn lock_cp_liquidity<'info>(
     )
     .map_err(Into::into)
 }
+
+/// The 18 accounts of `collect_cp_fees`, in the deployed IDL's order.
+///
+/// `recipient_token_0/1` are UNCONSTRAINED by the locker (G0 proved a payout
+/// landing in a non-ATA account owned by an unrelated PDA), which is exactly
+/// what lets our program hard-wire the destinations and keep the crank open
+/// to anyone.
+#[allow(clippy::too_many_arguments)]
+pub fn collect_cp_fees<'info>(
+    lock_program: &AccountInfo<'info>,
+    lock_authority: &AccountInfo<'info>,
+    fee_nft_owner: &AccountInfo<'info>,
+    fee_nft_account: &AccountInfo<'info>,
+    locked_liquidity: &AccountInfo<'info>,
+    cp_swap_program: &AccountInfo<'info>,
+    cp_authority: &AccountInfo<'info>,
+    pool_state: &AccountInfo<'info>,
+    lp_mint: &AccountInfo<'info>,
+    recipient_token_0: &AccountInfo<'info>,
+    recipient_token_1: &AccountInfo<'info>,
+    token_0_vault: &AccountInfo<'info>,
+    token_1_vault: &AccountInfo<'info>,
+    vault_0_mint: &AccountInfo<'info>,
+    vault_1_mint: &AccountInfo<'info>,
+    locked_lp_vault: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    token_program_2022: &AccountInfo<'info>,
+    memo_program: &AccountInfo<'info>,
+    fee_lp_amount: u64,
+    signer_seeds: &[&[&[u8]]],
+) -> Result<()> {
+    let mut data = Vec::with_capacity(16);
+    data.extend_from_slice(&crate::COLLECT_CP_FEES_DISC);
+    data.extend_from_slice(&fee_lp_amount.to_le_bytes());
+
+    let ix = Instruction {
+        program_id: *lock_program.key,
+        accounts: vec![
+            AccountMeta::new_readonly(*lock_authority.key, false),
+            AccountMeta::new_readonly(*fee_nft_owner.key, true),
+            AccountMeta::new_readonly(*fee_nft_account.key, false),
+            AccountMeta::new(*locked_liquidity.key, false),
+            AccountMeta::new_readonly(*cp_swap_program.key, false),
+            AccountMeta::new_readonly(*cp_authority.key, false),
+            AccountMeta::new(*pool_state.key, false),
+            AccountMeta::new(*lp_mint.key, false),
+            AccountMeta::new(*recipient_token_0.key, false),
+            AccountMeta::new(*recipient_token_1.key, false),
+            AccountMeta::new(*token_0_vault.key, false),
+            AccountMeta::new(*token_1_vault.key, false),
+            AccountMeta::new_readonly(*vault_0_mint.key, false),
+            AccountMeta::new_readonly(*vault_1_mint.key, false),
+            AccountMeta::new(*locked_lp_vault.key, false),
+            AccountMeta::new_readonly(*token_program.key, false),
+            AccountMeta::new_readonly(*token_program_2022.key, false),
+            AccountMeta::new_readonly(*memo_program.key, false),
+        ],
+        data,
+    };
+    invoke_signed(
+        &ix,
+        &[
+            lock_authority.clone(),
+            fee_nft_owner.clone(),
+            fee_nft_account.clone(),
+            locked_liquidity.clone(),
+            cp_swap_program.clone(),
+            cp_authority.clone(),
+            pool_state.clone(),
+            lp_mint.clone(),
+            recipient_token_0.clone(),
+            recipient_token_1.clone(),
+            token_0_vault.clone(),
+            token_1_vault.clone(),
+            vault_0_mint.clone(),
+            vault_1_mint.clone(),
+            locked_lp_vault.clone(),
+            token_program.clone(),
+            token_program_2022.clone(),
+            memo_program.clone(),
+            lock_program.clone(),
+        ],
+        signer_seeds,
+    )
+    .map_err(Into::into)
+}

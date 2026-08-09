@@ -21,7 +21,12 @@ import {
   PublicKey,
   SystemProgram,
 } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  NATIVE_MINT,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createSyncNativeInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import type { ProgramTestContext } from "solana-bankrun";
 import { PUMP_CLASSIC } from "../packages/sdk/src/curve-math";
 import {
@@ -31,6 +36,9 @@ import {
   RAYDIUM_LOCK_PROGRAM_ID,
 } from "../packages/sdk/src/constants";
 import {
+  buildCollectGraduatedFeesIx,
+  buildCpmmSwapBaseInputIx,
+  decodeCpmmPool,
   buildLockGraduatedLiquidityIx,
   buildSetGraduationConfigIx,
   feeAuthorityPda,
@@ -110,8 +118,79 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
     );
   }, TEST_TIMEOUT);
 
-  /** create -> whale buys out -> migrate. Returns the coin mint. */
-  async function graduate(): Promise<Keypair> {
+  /** Trades both ways so the locked position accrues real fees. */
+  async function tradeForFees(mint: PublicKey, rounds = 2, perRound = 10_000_000_000) {
+    const trader = Keypair.generate();
+    const pool = cpmmPoolAccounts(mint).poolState;
+    await send(
+      ctx,
+      [
+        cu(),
+        SystemProgram.transfer({
+          fromPubkey: ctx.payer.publicKey,
+          toPubkey: trader.publicKey,
+          lamports: 60_000_000_000,
+        }),
+      ],
+      [],
+    );
+    const wsolAta = getAssociatedTokenAddressSync(NATIVE_MINT, trader.publicKey);
+    const coinAta = getAssociatedTokenAddressSync(mint, trader.publicKey);
+    await send(
+      ctx,
+      [
+        cu(),
+        createAssociatedTokenAccountIdempotentInstruction(
+          trader.publicKey, wsolAta, trader.publicKey, NATIVE_MINT),
+        createAssociatedTokenAccountIdempotentInstruction(
+          trader.publicKey, coinAta, trader.publicKey, mint),
+      ],
+      [trader],
+    );
+    for (let i = 0; i < rounds; i += 1) {
+      await send(
+        ctx,
+        [
+          cu(),
+          SystemProgram.transfer({
+            fromPubkey: trader.publicKey,
+            toPubkey: wsolAta,
+            lamports: perRound,
+          }),
+          createSyncNativeInstruction(wsolAta),
+        ],
+        [trader],
+      );
+      for (const [inMint, from, to] of [
+        [NATIVE_MINT, wsolAta, coinAta],
+        [mint, coinAta, wsolAta],
+      ] as const) {
+        const info = await ctx.banksClient.getAccount(pool);
+        const amountIn = await tokenBalance(ctx, from);
+        await send(
+          ctx,
+          [
+            cu(),
+            buildCpmmSwapBaseInputIx({
+              payer: trader.publicKey,
+              cpmmProgram: RAYDIUM_CPMM_PROGRAM_ID,
+              poolState: pool,
+              pool: decodeCpmmPool(Buffer.from(info!.data)),
+              inputMint: inMint,
+              inputTokenAccount: from,
+              outputTokenAccount: to,
+              amountIn,
+              minimumAmountOut: 0n,
+            }),
+          ],
+          [trader],
+        );
+      }
+    }
+  }
+
+  /** create -> whale buys out -> migrate. */
+  async function graduate(): Promise<{ mint: Keypair; creator: PublicKey }> {
     const mint = grindMint(false);
     const creator = Keypair.generate();
     const whale = Keypair.generate();
@@ -166,7 +245,7 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
       [],
     );
     await warpSeconds(ctx, 2);
-    return mint;
+    return { mint, creator: creator.publicKey };
   }
 
   const enableLocking = () =>
@@ -203,7 +282,7 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
     "burns the LP when no locker is configured — devnet's only branch",
     async () => {
       await disableLocking();
-      const mint = await graduate();
+      const { mint } = await graduate();
       const derived = cpmmPoolAccounts(mint.publicKey);
       // Raydium never mints the 100 units it withholds, so a fully burned
       // pool reads supply 0.
@@ -222,7 +301,7 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
     "refuses to lock while the config says burn",
     async () => {
       await disableLocking();
-      const mint = await graduate();
+      const { mint } = await graduate();
       const logs = await sendExpectFail(
         ctx,
         [
@@ -246,7 +325,7 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
     "locks the LP to a fee key our PDA owns, paid by the coin's own fees",
     async () => {
       await enableLocking();
-      const mint = await graduate();
+      const { mint } = await graduate();
       const derived = cpmmPoolAccounts(mint.publicKey);
 
       // migrate kept the LP instead of burning it.
@@ -356,6 +435,127 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
 
       const curve = await readCurve(ctx, mint.publicKey);
       expect(curve.migrated).toBe(true);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "pays the coin side 100% to the creator, and the SOL side repays the graduation before splitting",
+    async () => {
+      await enableLocking(); // 2000 bps = 20% of the SOL side, after recovery
+      const { mint, creator } = await graduate();
+      const derived = cpmmPoolAccounts(mint.publicKey);
+      await send(
+        ctx,
+        [
+          cu(600_000),
+          buildLockGraduatedLiquidityIx({
+            payer: ctx.payer.publicKey,
+            mint: mint.publicKey,
+            poolState: derived.poolState,
+            lockProgram: RAYDIUM_LOCK_PROGRAM_ID,
+            ray: RAY,
+          }),
+        ],
+        [],
+      );
+      const cost = Buffer.from(
+        (await ctx.banksClient.getAccount(graduatedFeesPda(mint.publicKey)))!.data,
+      ).readBigUInt64LE(72);
+
+      // Real trading, so every lamport below is real k-growth.
+      const feeAuthority = feeAuthorityPda(mint.publicKey);
+      const ata = (m: PublicKey, o: PublicKey) =>
+        getAssociatedTokenAddressSync(m, o, true);
+      const creatorCoin = ata(mint.publicKey, creator);
+      const creatorSol = ata(NATIVE_MINT, creator);
+      const protocolSol = ata(NATIVE_MINT, feeRecipient.publicKey);
+      const holding = ata(NATIVE_MINT, feeAuthority);
+      await send(
+        ctx,
+        [
+          cu(),
+          ...[
+            [mint.publicKey, creator, creatorCoin],
+            [NATIVE_MINT, creator, creatorSol],
+            [NATIVE_MINT, feeRecipient.publicKey, protocolSol],
+            [NATIVE_MINT, feeAuthority, holding],
+          ].map(([m, owner, addr]) =>
+            createAssociatedTokenAccountIdempotentInstruction(
+              ctx.payer.publicKey,
+              addr as PublicKey,
+              owner as PublicKey,
+              m as PublicKey,
+            ),
+          ),
+        ],
+        [],
+      );
+
+      const collect = () =>
+        send(
+          ctx,
+          [
+            cu(600_000),
+            buildCollectGraduatedFeesIx({
+              payer: ctx.payer.publicKey,
+              mint: mint.publicKey,
+              creator,
+              feeRecipient: feeRecipient.publicKey,
+              poolState: derived.poolState,
+              lockProgram: RAYDIUM_LOCK_PROGRAM_ID,
+              ray: RAY,
+            }),
+          ],
+          [],
+        );
+      const recovered = async () =>
+        Buffer.from(
+          (await ctx.banksClient.getAccount(graduatedFeesPda(mint.publicKey)))!.data,
+        ).readBigUInt64LE(80);
+
+      // --- Phase 1: a small round, deliberately less than the 0.0248 SOL
+      // graduation debt, so the recovery path runs on its own.
+      await tradeForFees(mint.publicKey, 1, 1_000_000_000);
+      await collect();
+
+      // The coin side is the creator's in full — the protocol never touches
+      // memecoin dust it could not sell without moving the price.
+      expect(await tokenBalance(ctx, creatorCoin)).toBeGreaterThan(0n);
+
+      const rec1 = await recovered();
+      expect(rec1 > 0n).toBe(true);
+      expect(rec1 < cost).toBe(true);
+      // Every lamport of the SOL side went to the debt; the creator sees
+      // none of it yet, and nothing is stranded in the holding account.
+      expect(await tokenBalance(ctx, protocolSol)).toBe(rec1);
+      expect(await tokenBalance(ctx, creatorSol)).toBe(0n);
+      expect(await tokenBalance(ctx, holding)).toBe(0n);
+
+      // --- Phase 2: trade until the debt clears. It repays exactly, never
+      // more, however much volume arrives in the round that finishes it.
+      for (let i = 0; i < 12 && (await recovered()) < cost; i += 1) {
+        await tradeForFees(mint.publicKey, 2);
+        await collect();
+      }
+      expect(await recovered()).toBe(cost);
+
+      // --- Phase 3: with the debt gone, the steady-state split applies.
+      const protocolBefore = await tokenBalance(ctx, protocolSol);
+      const creatorBefore = await tokenBalance(ctx, creatorSol);
+      await tradeForFees(mint.publicKey, 2);
+      await collect();
+      const protocolGain = (await tokenBalance(ctx, protocolSol)) - protocolBefore;
+      const creatorGain = (await tokenBalance(ctx, creatorSol)) - creatorBefore;
+      expect(creatorGain > 0n).toBe(true);
+
+      // 20% of the SOL side to the protocol, 80% to the creator — to the
+      // lamport, with floor rounding favouring the creator.
+      const round = protocolGain + creatorGain;
+      expect(protocolGain).toBe((round * 2_000n) / 10_000n);
+      expect(await tokenBalance(ctx, holding)).toBe(0n);
+      // Recovery does not restart once repaid.
+      expect(await recovered()).toBe(cost);
     },
     TEST_TIMEOUT,
   );

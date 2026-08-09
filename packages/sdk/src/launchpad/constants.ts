@@ -45,6 +45,10 @@ export const GRADUATED_SEED = Buffer.from("graduated");
 /** Raydium locker seeds (pinned against the deployed binary, D-049). */
 export const LOCK_CP_AUTHORITY_SEED = Buffer.from("lock_cp_authority_seed");
 export const LOCKED_LIQUIDITY_SEED = Buffer.from("locked_liquidity");
+/** SPL Memo v3 — the locker passes it through for token-2022 fee paths. */
+export const MEMO_PROGRAM_ID = new PublicKey(
+  "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+);
 export const MIGRATION_AUTHORITY_SEED = Buffer.from("migration-authority");
 export const POOL_SEED = Buffer.from("cpmm-pool");
 

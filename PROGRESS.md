@@ -442,3 +442,18 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       kept the 45-byte ProgramData header and was not a loadable ELF), dump
       script + `fixture-slots.json` now pin it at slot 362,025,476.
       Suites: 54 integration (18 files); eslint + tsc clean.
+- [x] **Fee model shipped end to end (D-050, 2026-08-09).** The coin's own
+      protocol fees pay for its graduation, so 100% of the 85.005 SOL raise
+      becomes liquidity; the LP is locked with Raydium's Burn & Earn instead
+      of burned (config-gated, mainnet-only); and `collect_graduated_fees`
+      pays the coin side 100% to the creator while the SOL side repays the
+      graduation and then splits 20/80. New per-mint PDAs: protocol-vault,
+      fee-authority, fee-nft, graduated. New instructions:
+      `set_graduation_config`, `collect_protocol_fee`,
+      `lock_graduated_liquidity`, `collect_graduated_fees`. Proven on the
+      REAL Raydium CPMM + locker binaries
+      (tests/launchpad-graduated-lock.integration.test.ts, 4 tests) with
+      real swaps generating real k-growth and the split asserted to the
+      lamport. Suites: 61 integration, 199 sdk + 78 backend + 58 app + 25
+      keeper unit, 32 e2e; eslint + tsc clean. BLOCKED: devnet deploy needs
+      ~3.5 devnet SOL (faucets rate-limit this IP).

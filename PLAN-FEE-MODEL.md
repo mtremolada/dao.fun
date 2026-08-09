@@ -167,7 +167,10 @@ ratio a config value we can change without touching a locked position.
 
 Tests before code on every leg — this is the funds path.
 
-- **F1 — Program (`launchpad-curve`).**
+**Status: F1 COMPLETE (2026-08-09).** Program, SDK and proofs are in; the
+devnet deploy is blocked on faucet funding (CLAUDE.md carries the unblock).
+
+- **F1 — Program (`launchpad-curve`). ✅ DONE**
   - `Config` gains `lock_program` (zero ⇒ burn branch, keeps devnet
     working), `graduated_fee_protocol_bps` (default 2000 = 20% of the SOL
     side), and a mutable-but-validated `cpmm_amm_config` so the tier can
