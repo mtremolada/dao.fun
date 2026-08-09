@@ -29,7 +29,11 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  NATIVE_MINT,
+  createAssociatedTokenAccountInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import {
   buildBuyIx,
   buildCollectCreatorFeeIx,
@@ -46,6 +50,7 @@ import {
   decodeCpmmPool,
   decodeCurve,
   graduatedFeesPda,
+  migrationAuthorityPda,
   protocolVaultPda,
   raydiumCpmmAddresses,
 } from "../packages/sdk/src/launchpad";
@@ -57,6 +62,7 @@ const PROGRAM_ID = new PublicKey(
 const RPC = process.env.DEVNET_RPC ?? "https://api.devnet.solana.com";
 const CURVE_LEN = 8 + 32 + 32 + 8 * 4 + 2 + 2 + 1 + 1 + 32 + 1;
 const GRADUATE = process.argv.includes("--graduate");
+const FRONTRUN = process.argv.includes("--frontrun");
 const CREATE = process.argv.includes("--create") || GRADUATE;
 const SOL = (l: bigint | number) => (Number(l) / 1e9).toFixed(9);
 /** Mirrors the program's constant: rent for the pool's accounts. */
@@ -329,6 +335,26 @@ async function main(): Promise<void> {
     const vaultBefore = (await connection.getAccountInfo(protocolVaultPda(mint, PROGRAM_ID)))!
       .lamports;
     const raiseBefore = state.realSol;
+
+    // B1 live proof (D-060): before the migrate lands, create the migration
+    // authority's wSOL ATA — the exact account the OLD `init` would have tried
+    // to allocate, and which any attacker could squat for ~0.002 SOL to brick
+    // graduation forever. On the fixed binary the staging accounts are program
+    // PDAs, so this squat is simply irrelevant and migrate still lands.
+    if (FRONTRUN) {
+      const migrationAuthority = migrationAuthorityPda(mint, PROGRAM_ID);
+      const squatAta = getAssociatedTokenAddressSync(NATIVE_MINT, migrationAuthority, true);
+      const squatSig = await send(connection, payer, [
+        cu(),
+        createAssociatedTokenAccountInstruction(
+          payer.publicKey,
+          squatAta,
+          migrationAuthority,
+          NATIVE_MINT,
+        ),
+      ]);
+      console.log(`front-run squat of ${squatAta.toBase58().slice(0, 8)}…  ${squatSig}`);
+    }
 
     // The tier comes from the LIVE config, never the cluster default — that
     // is the bug the first devnet run found and five suites missed.

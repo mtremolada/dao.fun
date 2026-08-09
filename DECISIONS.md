@@ -2314,3 +2314,28 @@ devnet redeploy, which is one command once funded.
 
 Not fixed here (out of scope / not devnet-closable): GATE L4 mainnet canary
 remains the only live proof of the lock path.
+
+### D-060 addendum — deployed and proven live (2026-08-09)
+
+The operator topped the deployer up (12.22 SOL), so the coordinated upgrade
+went out. Deploy sig `37pGF1pAebeJ1ndax2Tut6bxHuu4mvroRz66bEC5HQYzGTaHMeuv7Wux…`,
+new slot 482483284, upgrade authority unchanged (the deployer). The on-chain
+binary's prefix is BYTE-IDENTICAL to the committed fixture — the reviewed
+source with all three fixes is what is live. No orphaned buffer; the buffer
+rent refunded (net deploy cost ~0.09 SOL).
+
+`devnet-audit` passes against the new binary (11 coins, 4 migrated at that
+point). `devnet-smoke` passes (buy/sell/collect exact, including
+`collect_protocol_fee` with its new `graduated_fees` account).
+
+**B1 proven live, not just in bankrun.** `devnet-smoke --graduate --frontrun`
+took a fresh coin all the way through on the new binary AND squatted the
+migration authority's wSOL ATA first — the exact account that, on the old
+binary, would have bricked `migrate` forever. Squat `uYRHBEj4y6pAxYPosWdqhVQ…`,
+then migrate `sK9zVfRBhC5RU9xfmyL3FbTBPod3kiT352S9LrnPo1…` LANDED: curve
+drained to zero, real Raydium pool `8w9LDtYz9hwzrGBCsMZfe5rE4K9HJ6pQ43ebzHV8LUy5`
+at the config's 1% tier, LP supply zero, burn branch, post-graduation protocol
+sweep allowed. The launchpad now has 5 migrated coins; deployer at 9.24 SOL.
+
+The `--frontrun` flag is now a permanent part of `devnet-smoke` so the B1
+scenario is one command on any future redeploy.

@@ -171,3 +171,14 @@ binaries in bankrun; eslint/tsc clean.
 **Left:** the live devnet redeploy — one command once the deployer is funded
 (~3.7 SOL buffer vs 2.22 held). It is a COORDINATED program+SDK deploy: ship
 both together, never a half-state (D-060).
+
+---
+
+## SHIPPED (2026-08-09)
+
+Deployed to devnet: sig `37pGF1pA…`, slot 482483284, on-chain prefix
+byte-identical to the committed fixture. Audit + smoke green against the new
+binary. **B1 proven live** — `devnet-smoke --graduate --frontrun` squatted the
+migration authority's wSOL ATA and migrate still landed (pool `8w9LDtYz…`, LP
+zero). The three bugs are fixed, on chain, and verified live. See DECISIONS.md
+D-060 addendum.

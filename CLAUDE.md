@@ -48,13 +48,14 @@ A 15-agent adversarial audit found three real bugs, ALL in the migration path
 - **B3 MEDIUM**: `graduation_fee_lamports` read live, not snapshotted → raising
   it stranded completed coins. Fixed: immutable after init + in the validate floor.
 
-**DEPLOY COUPLING (critical):** the SDK builders changed (migrate's 2 PDA
-addresses, collect_protocol_fee's extra account), so the new SDK is
-INCOMPATIBLE with the un-redeployed devnet binary. Program + frontend must
-deploy TOGETHER. Blocked on SOL: a redeploy buffer is ~3.7 SOL vs 2.22 held —
-browser-faucet `5xqnc7on…`. Until then the branch holds the fix and the live
-site runs the OLD frontend+OLD program (consistent). Rebuild byte-reproduces
-the committed fixture; 522 tests green.
+**DEPLOYED (2026-08-09).** Operator topped up the deployer; the coordinated
+upgrade shipped — sig `37pGF1pA…`, slot 482483284, on-chain prefix
+byte-identical to the committed fixture. B1 PROVEN LIVE:
+`devnet-smoke --graduate --frontrun` squatted the migration authority's wSOL
+ATA (which would brick the OLD binary) and migrate STILL landed — fresh pool
+`8w9LDtYz…`, LP zero, burn branch. Audit + smoke green against the new binary.
+5 migrated coins; deployer ~9.24 SOL. The SDK and the deployed program are now
+back in sync, so the live frontend/scripts work again.
 
 ## ✅ DEVNET IS FINISHED (D-057, 2026-08-09) — read PLAN-DEVNET-FINISH.md
 
