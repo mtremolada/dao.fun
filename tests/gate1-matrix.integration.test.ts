@@ -43,7 +43,6 @@ import {
   withCreateProposal,
   withCreateTokenOwnerRecord,
 } from "@solana/spl-governance";
-import { start } from "solana-bankrun";
 import {
   SPL_GOVERNANCE_PROGRAM_ID,
   VSR_PROGRAM_ID,
@@ -78,6 +77,7 @@ import {
   send,
   sendExpectFail,
   startCtx,
+  startGuarded,
   warpSeconds,
 } from "./helpers/bankrun-harness";
 
@@ -145,7 +145,7 @@ describe("GATE 1 VSR leg — lockup-weighted vote power under clock warp (real b
   it(
     "unlocked deposits carry ZERO weight (cannot propose); a cliff lockup carries full weight that decays as the clock advances (spec 6.3)",
     async () => {
-      const ctx = await start(
+      const ctx = await startGuarded(
         [
           { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
           { name: "vsr", programId: VSR_PROGRAM_ID },
@@ -387,7 +387,7 @@ describe("GATE 1 VSR leg — lockup-weighted vote power under clock warp (real b
       // The mainnet D-013 attempt used the (then-wrong) literal-first
       // registrar seeds, so its failure proved nothing about Token-2022.
       // This is the clean experiment against the real binary.
-      const ctx = await start(
+      const ctx = await startGuarded(
         [
           { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
           { name: "vsr", programId: VSR_PROGRAM_ID },

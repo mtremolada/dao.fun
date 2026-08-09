@@ -371,6 +371,7 @@ graduation cost is repaid. D-049 (locker verification), D-050 (the model).
 | `launchpad-curve` (6) | The whole raise reaches the pool — the protocol vault covers the overhead |
 | `launchpad-build` (6) | Config stays 277 bytes with the new fields carved out of `reserved`, so already-deployed configs still deserialize; the tier can only ever be a Raydium-owned account |
 | `pump-migration-economics` (1) | The competitive baseline, measured rather than quoted |
+| `app/test/graduated` (7) + `e2e/profile` (3) + `e2e/coin` | The SURFACE cannot lie about which branch a coin took: a missing `["graduated", mint]` record renders as BURNED, never as a zeroed fee stream, and the recovery bar is framed as repaying the graduation rather than as fees earned — because until it clears the creator really does receive only the token side |
 
 **Layer 2 — devnet, 2026-08-09.** Program upgraded, config pointed at the 1%
 tier. Coin `42io3su15PAvmmjsNqVbPMKcaeMzjCNDzF4nf1GNCDB6`, pool

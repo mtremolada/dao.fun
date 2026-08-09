@@ -5,7 +5,13 @@
  * with the SAME sdk builders the launch flow uses, and drives proposals
  * through the production propose builder (buildProposeIxs).
  */
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { join, resolve } from "node:path";
 import { expect } from "vitest";
@@ -80,11 +86,22 @@ process.env.SBF_OUT_DIR = FIXTURES;
 
 // Program binaries are committed gzipped (zero-padded programdata
 // compresses ~10x); inflate once so bankrun can load the .so files.
+//
+// Write to a per-process temp name and rename into place. Every test file
+// runs in its own worker process and they all execute this block at import,
+// so a plain `writeFileSync` to the final path is a race: worker A is still
+// streaming 1.4 MB out when worker B's `existsSync` says yes, and B hands
+// bankrun a TRUNCATED ELF. rename(2) is atomic within a directory, so a
+// reader sees either no file or the whole file, never half of one. Costs a
+// few MB of duplicate writes on the very first run after a clone and nothing
+// thereafter.
 for (const f of readdirSync(FIXTURES)) {
   if (f.endsWith(".so.gz")) {
     const so = join(FIXTURES, f.slice(0, -".gz".length));
     if (!existsSync(so)) {
-      writeFileSync(so, gunzipSync(readFileSync(join(FIXTURES, f))));
+      const tmp = `${so}.${process.pid}.tmp`;
+      writeFileSync(tmp, gunzipSync(readFileSync(join(FIXTURES, f))));
+      renameSync(tmp, so);
     }
   }
 }
@@ -104,30 +121,156 @@ export const squadsConfig = JSON.parse(
   readFileSync(resolve(__dirname, "../fixtures/squads-program-config.json"), "utf8"),
 ) as { address: string; owner: string; lamports: number; treasury: string; dataBase64: string };
 
+// ---------- the bankrun wedge: watchdog + one retry ----------
+//
+// Six of twenty-two full-suite runs on this 4-core box died with a bare
+// "Test timed out in 300000ms" — no assertion, no error, no clue. The cause,
+// finally caught (D-051):
+//
+//   thread 'tokio-runtime-worker' panicked at solana-program-test-1.18.0:716
+//   Program file data not available for `"̌\r\0\0\0\0\x91ϥ…  (DaV3yst…)
+//
+// The program NAME is freed heap memory — those bytes are a pointer sitting in
+// a reclaimed slot — while the program ID beside it is intact. So the JS string
+// backing `AddedProgram.name` is read after release inside the native bridge,
+// solana-program-test cannot find a file by that garbage name, and it panics.
+// The panic kills the tokio task WITHOUT settling the napi promise, so the JS
+// `await` in front of `start()` waits forever: the worker's event loop goes
+// completely idle (nothing but tinypool's IPC pipes — no timers, no pending
+// libuv requests) and the test burns its full timeout in silence.
+//
+// Confirmed by the logs: every wedged run contains that panic, every green run
+// contains zero. Not starvation and not memory (13 GB free, no OOM), and not
+// reproducible by hammering `start()` alone — 80 back-to-back creations across
+// two concurrent workers, none.
+//
+// Two things follow, and both are here:
+//
+//   1. WATCHDOG. Every bankrun call races a 60s timer, so a wedge fails saying
+//      WHICH CALL wedged instead of stalling 300s and leaving orphaned workers
+//      holding cores for the next run. A suite file normally finishes in about
+//      a second, so the budget is pure headroom.
+//   2. ONE RETRY of context creation. The corruption is a per-call race, so a
+//      fresh `start()` is overwhelmingly likely to succeed — this turns a red
+//      run into a run that is 60s slower and green. Measured: of six
+//      verification runs, two wedged, both retried, all six finished 20/20.
+//      It is loud on stderr and never retries anything but context creation —
+//      re-running a transaction blind could double-apply it.
+//
+// Set BANKRUN_CALL_TIMEOUT_MS=0 to disable both (e.g. under a debugger).
+const CALL_TIMEOUT_MS = Number(process.env.BANKRUN_CALL_TIMEOUT_MS ?? 60_000);
+
+export function watchdog<T>(label: string, p: Promise<T>): Promise<T> {
+  if (!(CALL_TIMEOUT_MS > 0)) return p;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bell = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `bankrun call never settled after ${CALL_TIMEOUT_MS}ms: ${label}. ` +
+              "This is the known native-module wedge, not a slow test — see the " +
+              "watchdog note in tests/helpers/bankrun-harness.ts.",
+          ),
+        ),
+      CALL_TIMEOUT_MS,
+    );
+  });
+  // Not unref'd: when the wedge hits, this timer is the ONLY thing left
+  // holding the loop, and an unref'd one would never fire.
+  return Promise.race([p, bell]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
+/**
+ * Wrap a context so every `banksClient` call carries the watchdog. Tests use
+ * `ctx.banksClient` directly all over the place, so guarding the client once
+ * here beats asking two dozen call sites to remember.
+ */
+function guarded(ctx: ProgramTestContext): ProgramTestContext {
+  if (!(CALL_TIMEOUT_MS > 0)) return ctx;
+  const client = ctx.banksClient as unknown as Record<string, unknown>;
+  const proxy = new Proxy(client, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target) as unknown;
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        const out = (value as (...a: unknown[]) => unknown).apply(target, args);
+        return out instanceof Promise
+          ? watchdog(`banksClient.${String(prop)}`, out)
+          : out;
+      };
+    },
+  });
+  Object.defineProperty(ctx, "banksClient", {
+    value: proxy,
+    configurable: true,
+    enumerable: true,
+  });
+  return ctx;
+}
+
+/**
+ * Create a context, and survive the wedge described above by trying once more.
+ * Only creation is retried — a transaction is not safe to replay blind.
+ */
+async function startResilient(
+  label: string,
+  make: () => Promise<ProgramTestContext>,
+): Promise<ProgramTestContext> {
+  try {
+    return guarded(await watchdog(label, make()));
+  } catch (e) {
+    process.stderr.write(
+      `\n[bankrun] ${label} wedged (${(e as Error).message.split(".")[0]}); ` +
+        "retrying once — see D-051.\n",
+    );
+    return guarded(await watchdog(`${label} [retry]`, make()));
+  }
+}
+
 // ---------- bankrun harness ----------
 
-export async function startCtx(
+/**
+ * A context with exactly the programs asked for — no governance, no Squads.
+ * Use this instead of importing `start` from solana-bankrun directly, so the
+ * watchdog covers every call rather than most of them.
+ */
+export function startGuarded(
+  programs: AddedProgram[],
+  accounts: AddedAccount[] = [],
+): Promise<ProgramTestContext> {
+  return startResilient(`start(${programs.map((p) => p.name).join("+")})`, () =>
+    start(programs, accounts),
+  );
+}
+
+export function startCtx(
   extraPrograms: AddedProgram[] = [],
   extraAccounts: AddedAccount[] = [],
 ): Promise<ProgramTestContext> {
-  return start(
-    [
-      { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
-      { name: "squads_v4", programId: SQUADS_V4_PROGRAM_ID },
-      ...extraPrograms,
-    ],
-    [
-      ...extraAccounts,
-      {
-        address: new PublicKey(squadsConfig.address),
-        info: {
-          lamports: squadsConfig.lamports,
-          data: Buffer.from(squadsConfig.dataBase64, "base64"),
-          owner: new PublicKey(squadsConfig.owner),
-          executable: false,
+  const label = `start(governance+squads${extraPrograms
+    .map((p) => `+${p.name}`)
+    .join("")})`;
+  return startResilient(label, () =>
+    start(
+      [
+        { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
+        { name: "squads_v4", programId: SQUADS_V4_PROGRAM_ID },
+        ...extraPrograms,
+      ],
+      [
+        ...extraAccounts,
+        {
+          address: new PublicKey(squadsConfig.address),
+          info: {
+            lamports: squadsConfig.lamports,
+            data: Buffer.from(squadsConfig.dataBase64, "base64"),
+            owner: new PublicKey(squadsConfig.owner),
+            executable: false,
+          },
         },
-      },
-    ],
+      ],
+    ),
   );
 }
 

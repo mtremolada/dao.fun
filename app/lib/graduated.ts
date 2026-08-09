@@ -69,3 +69,32 @@ export async function fetchGraduatedFees(
   );
   return info ? decodeGraduatedFees(info.data) : null;
 }
+
+/**
+ * Same read for a whole list, in one RPC round per 100 mints. A profile with
+ * a dozen graduated launches would otherwise fire a dozen `getAccountInfo`
+ * calls, which the public RPC rate-limits (D-026) — and a rate-limited read
+ * would render as "burned", the one wrong answer that matters here.
+ *
+ * The map holds an entry for EVERY mint asked about: `null` still means
+ * BURNED. A missing key means the read never happened, so callers can tell
+ * "not loaded yet" from "no record", which a bare `null` cannot express.
+ */
+export async function fetchGraduatedFeesMap(
+  connection: Connection,
+  mints: string[],
+): Promise<Map<string, GraduatedFees | null>> {
+  const out = new Map<string, GraduatedFees | null>();
+  const programId = launchpadProgramId();
+  for (let i = 0; i < mints.length; i += 100) {
+    const batch = mints.slice(i, i + 100);
+    const infos = await connection.getMultipleAccountsInfo(
+      batch.map((m) => graduatedFeesPda(new PublicKey(m), programId)),
+    );
+    batch.forEach((mint, j) => {
+      const info = infos[j];
+      out.set(mint, info ? decodeGraduatedFees(info.data) : null);
+    });
+  }
+  return out;
+}

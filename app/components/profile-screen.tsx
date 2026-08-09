@@ -18,6 +18,7 @@ import { useWallet } from "./wallet-provider";
 import { getConnection } from "../lib/solana";
 import { claimCreatorFees, graduate, type ActionCtx } from "../lib/coin-actions";
 import { fetchClaimableCreatorFees, fetchLaunchesByCreator } from "../lib/profile";
+import { fetchGraduatedFeesMap, type GraduatedFees } from "../lib/graduated";
 import { rememberCoin } from "../lib/chain-coin";
 import type { CoinView } from "../lib/launchpad-api";
 import type { SendState } from "../lib/tx-sender";
@@ -27,12 +28,48 @@ import { truncateAddress } from "../lib/wallet-registry";
 const SOL = (lamports: bigint | number) =>
   (Number(lamports) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 4 });
 
+/**
+ * What a graduated launch is doing afterwards, said plainly.
+ *
+ * Undefined = the read has not landed, so say nothing rather than guess.
+ * Null = there is no `["graduated", mint]` record, which means the LP was
+ * BURNED — permanent liquidity, but no fee stream, and that is devnet's only
+ * branch. A record means the LP is locked with Raydium and the pool's fees
+ * keep paying this coin's creator forever.
+ *
+ * The recovery line is deliberately not called "fees earned": dao.fun fronts
+ * the graduation out of the coin's own protocol fees and the SOL side repays
+ * that before any split starts, so until it clears the creator really is
+ * seeing only the coin side.
+ */
+function GraduationStatus({ fees }: { fees: GraduatedFees | null | undefined }) {
+  if (fees === undefined) return null;
+  if (fees === null) {
+    return (
+      <div className="muted small" data-testid="graduation-status" data-branch="burned">
+        Liquidity burned — permanent, but this coin earns no trading fees.
+      </div>
+    );
+  }
+  const pct = Math.round(fees.recoveredRatio * 100);
+  return (
+    <div className="muted small" data-testid="graduation-status" data-branch="locked">
+      Liquidity locked — trading fees keep paying you.{" "}
+      {fees.outstanding === 0n
+        ? "Graduation repaid; fees now split 80/20 in your favour."
+        : `Repaying the graduation dao.fun paid for: ${pct}% (${SOL(fees.recoveredLamports)} of ${SOL(fees.costLamports)} SOL). The token side is yours either way.`}
+    </div>
+  );
+}
+
 function LaunchRow({
   coin,
+  fees,
   onGraduate,
   busy,
 }: {
   coin: CoinView;
+  fees: GraduatedFees | null | undefined;
   onGraduate: (coin: CoinView) => void;
   busy: boolean;
 }) {
@@ -51,6 +88,7 @@ function LaunchRow({
         <span style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
       <div className="muted small">Raised {SOL(BigInt(coin.realSol))} SOL</div>
+      {coin.migrated && <GraduationStatus fees={fees} />}
       <div className="launch-actions">
         <Link className="button" href={`/coin?mint=${coin.mint}`}>
           Open terminal
@@ -85,6 +123,8 @@ export function ProfileScreen() {
   const address = account?.address ?? null;
 
   const [launches, setLaunches] = useState<CoinView[]>([]);
+  /** mint -> record, or null for BURNED. Absent key = not read yet. */
+  const [graduated, setGraduated] = useState<Map<string, GraduatedFees | null>>(new Map());
   const [claimable, setClaimable] = useState<bigint | null>(null);
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -97,6 +137,7 @@ export function ProfileScreen() {
   useEffect(() => {
     if (!address) {
       setLaunches([]);
+      setGraduated(new Map());
       setClaimable(null);
       setSolBalance(null);
       return;
@@ -116,6 +157,15 @@ export function ProfileScreen() {
         l.forEach((coin) => rememberCoin(coin.mint));
         setClaimable(c);
         setSolBalance(b);
+        // Secondary, and deliberately not awaited with the rest: a slow or
+        // rate-limited read here must never keep the launches themselves
+        // off the screen. Until it lands the rows simply say nothing about
+        // the branch, which is the honest state.
+        const migrated = l.filter((coin) => coin.migrated).map((coin) => coin.mint);
+        if (migrated.length === 0) return;
+        fetchGraduatedFeesMap(connection, migrated)
+          .then((m) => live && setGraduated(m))
+          .catch(() => {});
       })
       .catch((e) => live && setError((e as Error).message))
       .finally(() => live && setLoading(false));
@@ -232,6 +282,7 @@ export function ProfileScreen() {
             <LaunchRow
               key={coin.mint}
               coin={coin}
+              fees={graduated.has(coin.mint) ? (graduated.get(coin.mint) ?? null) : undefined}
               busy={busy}
               onGraduate={(c) => void runAction(graduate, c)}
             />

@@ -3,7 +3,7 @@
 Spec-driven build per **SPEC.md** (v2.0 — the only authoritative spec).
 Doctrine: tests BEFORE code on anything touching funds/PDAs/governance;
 verify against the deployed binary before trusting any interface; record
-everything in **DECISIONS.md** (D-001..D-049 so far); gate evidence in
+everything in **DECISIONS.md** (D-001..D-051 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
@@ -31,7 +31,26 @@ holding ~3.6 SOL each; `solana program show --buffers --buffer-authority
 faucets rate-limit this datacenter IP entirely — funding must come from a
 browser faucet or the operator.
 
-## ▶ IN FLIGHT: perpetual post-graduation fees — PLAN-GRADUATED-FEES.md
+## ✅ SHIPPED: perpetual post-graduation fees (G0–G3, D-049/D-050)
+
+Program, SDK, keeper crank and app surface are all in. What remains is
+GATE L4 — one mainnet canary — which is operator-gated and cannot be
+substituted: Raydium's locker is absent from devnet and hard-codes the
+mainnet CPMM id, so bankrun against the real binaries is the primary proof
+and devnet only ever exercises the burn branch.
+
+## ⚠️ Test-suite gotcha you WILL hit: the bankrun wedge (D-051)
+
+Roughly one full integration run in three used to die with a bare "Test
+timed out in 300000ms". It is not your test: solana-bankrun occasionally
+leaves a promise unsettled and the worker's event loop goes completely idle.
+Every bankrun call now races a 60s watchdog, so it fails NAMING THE CALL
+(`BANKRUN_CALL_TIMEOUT_MS=0` disables). Before blaming a change, run `ps` —
+an orphaned vitest tree from an earlier session competing for the 4 cores
+correlated with every wedge observed, and it will not show up in your own
+logs.
+
+## ▶ REFERENCE: post-graduation fee design — PLAN-GRADUATED-FEES.md
 
 **G0 DONE (D-049, 8/8 green:
 tests/launchpad-lock-verify.integration.test.ts).** Raydium's locker
@@ -56,7 +75,7 @@ cannot be rebalanced when price leaves its range), not on capability.
 The locker hard-codes the MAINNET cpmm/clmm ids and is absent from devnet,
 so the lock path can NEVER run on devnet: bankrun-with-mainnet-binaries is
 the primary proof, devnet covers the burn branch and everything around it,
-mainnet canary (GATE L4) is the only live run. Next: G1 (program).
+mainnet canary (GATE L4) is the only live run.
 
 ## ✅ Guarded SHIPPED (2026-08-09, D-043) — unified launch page live
 

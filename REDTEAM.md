@@ -156,6 +156,34 @@ proposal is OWNED by the gate's council token-owner record, not the
 proposer's. Finalize and execute must pass that record or governance refuses
 with "Invalid Proposal Owner" — pinned in `guarded-gate-v2`.
 
+## 4c. The fee model — attacks on graduation and the perpetual stream (D-050)
+
+Three new value-moving surfaces: a per-mint protocol vault that funds
+graduation, an LP position locked with Raydium's Burn & Earn whose fee key is
+held by a PDA, and a PERMISSIONLESS `collect_graduated_fees` that splits the
+proceeds. Permissionless is the point — the DAO must accrue without anyone
+clicking — so every row below asks what a stranger gains by calling it.
+
+| # | Attack | Outcome |
+|---|---|---|
+| 4c.1 | **Redirect the payout.** Call `collect_graduated_fees` with your own token accounts as recipients. Raydium's locker leaves `recipient_token_*` UNCONSTRAINED (proven, D-049). | **Refused.** Raydium does not constrain them; WE do. Our program derives both recipients from the coin's creator and passes them itself, so the caller chooses only who pays the fee. Asserted in `launchpad-graduated-lock`. |
+| 4c.2 | **Steal the fee key.** Whoever holds the Burn & Earn NFT can collect forever. | It is minted to `["fee-authority", mint]`, a PDA with no key, and `fee_nft_owner` is not a signer at lock time so nothing else can claim it. A thief signing for themselves is refused whether they point at their own empty NFT account or the real one (D-049). |
+| 4c.3 | **Pull the liquidity.** | No unlock/withdraw/close/decrease entrypoint EXISTS in the locker — every discriminator is rejected at the dispatcher — and CPMM `withdraw` on the locked vault is refused. Note the invariant is "the deposited value never leaves the pool", NOT "`locked_lp_amount` is constant": it legitimately falls as k-growth is redeemed. |
+| 4c.4 | **Drain the protocol vault.** It holds the coin's earmarked graduation money. | Its only spend paths are the migration overhead and the lock cost, both to fixed destinations, plus `collect_protocol_fee` to the config's fee recipient. A stranger calling any of them moves nothing to themselves. |
+| 4c.5 | **Strand a graduation by front-running the vault empty.** | The vault cannot be emptied below what migration needs by an outsider, and `migrate` falls back to the raise if the vault is short — exercised for real on devnet (vault 0.023987 + raise 0.168169 = the 0.192156 overhead exactly). A coin therefore always graduates. |
+| 4c.6 | **Grief the cranker.** `lock_graduated_liquidity` creates a rent-paying record; Anchor bills the CALLER. | Would have made "permissionless" mean "whoever donates 0.0015 SOL", so the program reimburses the cranker from the coin's protocol vault. The test asserts the cranker is out exactly the 5,000-lamport signature fee. |
+| 4c.7 | **Race the lock and collect the fees yourself.** | The lock's destination is fixed by our program, so winning the race just means paying for someone else's lock. The keeper treats losing that race as SUCCESS rather than retrying. |
+| 4c.8 | **Point graduation at a hostile fee tier.** The AmmConfig is a config value. | `set_graduation_config` is authority-only, and the tier must be an account OWNED by the Raydium CPMM program — pinned in `launchpad-build`. Tiers are stored as ADDRESSES precisely because the index for 1% differs by cluster (mainnet 1, devnet 3). |
+
+**Residual, stated plainly.** Our program's upgrade authority is the trust
+anchor: a future `collect_graduated_fees` could be edited to redirect the
+stream. That was already true of `collect_creator_fee`; a perpetual stream
+raises the stakes. Retired the same way as the gate's — revoke or move to
+governance before mainnet. Second residual: the lock path CANNOT run on
+devnet (Raydium's locker is absent there and hard-codes the mainnet CPMM id),
+so bankrun against the real binaries is its only proof until the GATE L4
+mainnet canary.
+
 ## 5. Inherited / platform risks (residual, accepted with eyes open)
 
 1. **Sovereign hold-up 0 is out-of-warranty by design** (spec 12.2): the

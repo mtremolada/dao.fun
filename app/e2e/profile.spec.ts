@@ -15,13 +15,14 @@ import {
   configAccountData,
   connectWallet,
   curveAccountData,
+  graduatedFeesAccountData,
   installFakeWallet,
   installRpcStub,
   metadataAccountData,
   seedBrowser,
   type StubAccount,
 } from "./launchpad-harness";
-import { curvePda, metadataPda } from "@daofun/sdk/launchpad";
+import { curvePda, graduatedFeesPda, metadataPda } from "@daofun/sdk/launchpad";
 
 const WALLET = new PublicKey(WALLET_ADDRESS);
 const MINT_LIVE = new PublicKey("8PnhcD5R8inK9YbcS2GYTg63n6LD3FY3xxD47RaB1s5K");
@@ -97,4 +98,68 @@ test("your launches, claimable creator fees, and the graduate crank", async ({ p
   // Claiming runs the real send pipeline end to end.
   await page.getByTestId("claim-fees").click();
   await expect(page.locator('[data-phase="done"]')).toBeVisible({ timeout: 15_000 });
+});
+
+/**
+ * A graduated launch took one of two branches, and they mean opposite things
+ * to the person reading the page: LOCKED keeps paying them forever, BURNED
+ * never pays them again. The only way to tell is whether the
+ * `["graduated", mint]` record exists, so this seeds one coin with it and one
+ * without and pins BOTH — a page that renders the burn branch as a fee stream
+ * would be lying to a creator, and devnet is all burn branch.
+ */
+test("a graduated launch says whether its liquidity is locked or burned", async ({
+  page,
+}) => {
+  await seedBrowser(page);
+  await installFakeWallet(page);
+
+  const accounts = new Map<string, StubAccount>();
+  const addGraduated = (mint: PublicKey, name: string, symbol: string) => {
+    accounts.set(curvePda(mint, PROGRAM_ID).toBase58(), {
+      data: curveAccountData({
+        mint,
+        creator: WALLET,
+        virtualSol: 115_005_359_057n,
+        virtualToken: 279_900_000_000_000n,
+        realSol: 85_005_359_057n,
+        realToken: 0n,
+        complete: true,
+        migrated: true,
+      }),
+      owner: PROGRAM_ID,
+    });
+    accounts.set(metadataPda(mint, METAPLEX).toBase58(), {
+      data: metadataAccountData(name, symbol, "https://example.invalid/meta.json"),
+      owner: METAPLEX,
+    });
+  };
+  // The two module-level mints, reused: which branch each takes is decided
+  // solely by whether a graduated record is seeded below, not by the mint.
+  addGraduated(MINT_LIVE, "Locked Coin", "LOCKED");
+  addGraduated(MINT_DONE, "Burned Coin", "BURNED");
+
+  // Only the first coin has a record — 24,838,720 lamports fronted, 40% back.
+  accounts.set(graduatedFeesPda(MINT_LIVE, PROGRAM_ID).toBase58(), {
+    data: graduatedFeesAccountData(MINT_LIVE, 24_838_720n, 10_000_000n),
+    owner: PROGRAM_ID,
+  });
+
+  await installRpcStub(page, accounts, {
+    balances: new Map([[WALLET_ADDRESS, 2_500_000_000]]),
+  });
+  await page.goto("/profile");
+  await connectWallet(page);
+
+  const locked = page.getByTestId("launch-LOCKED").getByTestId("graduation-status");
+  await expect(locked).toHaveAttribute("data-branch", "locked");
+  await expect(locked).toContainText("Liquidity locked");
+  // Framed as repayment, not as earnings: until the graduation dao.fun fronted
+  // is repaid, the SOL side goes to that and the creator sees only the token side.
+  await expect(locked).toContainText("40%");
+
+  const burned = page.getByTestId("launch-BURNED").getByTestId("graduation-status");
+  await expect(burned).toHaveAttribute("data-branch", "burned");
+  await expect(burned).toContainText("Liquidity burned");
+  await expect(burned).not.toContainText("Repaying");
 });

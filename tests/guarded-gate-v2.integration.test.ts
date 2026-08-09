@@ -431,12 +431,19 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
 });
 
 describe("guarded CEREMONY — buildCreateDaoIxs('guarded') lands on real binaries", () => {
+  // ONE bankrun runtime for the whole block. Each `start()` loads
+  // spl-governance, Squads and the gate — several MB of BPF — and each one is
+  // also a roll of the dice against the native use-after-free in D-051, so
+  // the fewer the better. Sharing is correct regardless of that: createDao
+  // mints a fresh realm per call, so these tests cannot observe each other.
+  let ctx2: ProgramTestContext;
+  beforeAll(async () => {
+    ctx2 = await startCtx([{ name: "proposal_gate", programId: GATE_PROGRAM_ID }]);
+  }, TEST_TIMEOUT);
+
   it(
     "the production ceremony builds the front door, and the DAO governs through it",
     async () => {
-      const ctx2 = await startCtx([
-        { name: "proposal_gate", programId: GATE_PROGRAM_ID },
-      ]);
       const dao = await createDao(ctx2, "guarded");
 
       // The gate exists, bound to this realm's mints, in guarded mode with
@@ -588,16 +595,13 @@ describe("guarded CEREMONY — buildCreateDaoIxs('guarded') lands on real binari
       // direct author (D-042). This is the variant that works, and it has to
       // keep the direct path's contract: same Squads wrapping, same INV-9
       // hash as the proposal's descriptionLink.
-      const ctx3 = await startCtx([
-        { name: "proposal_gate", programId: GATE_PROGRAM_ID },
-      ]);
-      const dao = await createDao(ctx3, "guarded");
+      const dao = await createDao(ctx2, "guarded");
       const proposer = Keypair.generate();
       await send(
-        ctx3,
+        ctx2,
         [
           SystemProgram.transfer({
-            fromPubkey: ctx3.payer.publicKey,
+            fromPubkey: ctx2.payer.publicKey,
             toPubkey: proposer.publicKey,
             lamports: 2_000_000_000,
           }),
@@ -605,7 +609,7 @@ describe("guarded CEREMONY — buildCreateDaoIxs('guarded') lands on real binari
         [],
       );
 
-      const msAccount = await ctx3.banksClient.getAccount(dao.multisigPda);
+      const msAccount = await ctx2.banksClient.getAccount(dao.multisigPda);
       const [ms] = multisig.accounts.Multisig.fromAccountInfo({
         executable: false,
         owner: SQUADS_V4_PROGRAM_ID,
@@ -643,15 +647,15 @@ describe("guarded CEREMONY — buildCreateDaoIxs('guarded') lands on real binari
         proposalSeed: Keypair.generate().publicKey,
       });
 
-      await send(ctx3, [...made.groups.create], [proposer], proposer);
+      await send(ctx2, [...made.groups.create], [proposer], proposer);
       for (const group of made.groups.inserts) {
-        await send(ctx3, [...group], [proposer], proposer);
+        await send(ctx2, [...group], [proposer], proposer);
       }
-      await send(ctx3, [...made.groups.signOff], [proposer], proposer);
+      await send(ctx2, [...made.groups.signOff], [proposer], proposer);
 
       // D-017 holds on the guarded path too: the descriptionLink IS the hash
       // of what will actually execute.
-      const onChain = await readGov(ctx3, made.proposal, Proposal);
+      const onChain = await readGov(ctx2, made.proposal, Proposal);
       expect(onChain.descriptionLink).toBe(made.innerInstructionSetHash);
       expect(onChain.state).toBe(ProposalState.Voting);
 
@@ -684,11 +688,11 @@ describe("guarded CEREMONY — buildCreateDaoIxs('guarded') lands on real binari
           deny: undefined,
           veto: undefined,
         }),
-        ctx3.payer.publicKey,
+        ctx2.payer.publicKey,
       );
-      await send(ctx3, voteIxs, [dao.voter]);
+      await send(ctx2, voteIxs, [dao.voter]);
 
-      await warpSeconds(ctx3, BASE_VOTING_TIME_S + 10);
+      await warpSeconds(ctx2, BASE_VOTING_TIME_S + 10);
       const finalIxs: TransactionInstruction[] = [];
       await withFinalizeVote(
         finalIxs,
@@ -700,8 +704,8 @@ describe("guarded CEREMONY — buildCreateDaoIxs('guarded') lands on real binari
         gateOwnerRecord,
         dao.mint,
       );
-      await send(ctx3, finalIxs, []);
-      expect((await readGov(ctx3, made.proposal, Proposal)).state).toBe(
+      await send(ctx2, finalIxs, []);
+      expect((await readGov(ctx2, made.proposal, Proposal)).state).toBe(
         ProposalState.Succeeded,
       );
     },

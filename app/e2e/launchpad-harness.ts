@@ -87,6 +87,28 @@ export function curveAccountData(c: CurveFields): Buffer {
   ]);
 }
 
+/**
+ * `GraduatedFees` bytes per the on-chain struct: disc(8) + mint + fee NFT
+ * mint + cost + recovered + bump. Seeding one makes a coin LOCKED; leaving it
+ * out makes the same coin BURNED, which is the branch devnet always takes —
+ * both need covering, because the two say opposite things to a creator.
+ */
+export function graduatedFeesAccountData(
+  mint: PublicKey,
+  costLamports: bigint,
+  recoveredLamports: bigint,
+  feeNftMint: PublicKey = PublicKey.default,
+): Buffer {
+  return Buffer.concat([
+    Buffer.alloc(8),
+    mint.toBuffer(),
+    feeNftMint.toBuffer(),
+    u64(costLamports),
+    u64(recoveredLamports),
+    Buffer.from([255]),
+  ]);
+}
+
 /** Metaplex metadata bytes: key + updateAuthority + mint, then borsh strings. */
 export function metadataAccountData(name: string, symbol: string, uri: string): Buffer {
   return Buffer.concat([

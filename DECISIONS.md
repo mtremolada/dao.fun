@@ -1574,3 +1574,81 @@ locked, but their fee keys are custodial, which is the gap our design closes.
 cannot run on devnet at all — Raydium's locker is not deployed there and
 hard-codes the mainnet CPMM id — so bankrun against the real binaries is its
 only proof until a mainnet canary (GATE L4).
+
+## D-051 — The integration flake: a use-after-free in solana-bankrun, now survivable (2026-08-09)
+
+**Context.** The integration suite went red in six of twenty-two full runs
+with a test that simply stopped: no assertion, no error, just "Test timed out in
+300000ms". Two earlier explanations were wrong. Capping the fork pool ("CPU
+contention") only made it rarer. Then I blamed my own new test for standing
+up a third bankrun runtime in one file — plausible, and false: with that
+fixed, the next hang landed in `gate0b-token2022`, a file I had not touched.
+
+**What it actually is.** Every wedged run contains this, and every green run
+contains zero of it:
+
+```
+thread 'tokio-runtime-worker' panicked at solana-program-test-1.18.0:716
+Program file data not available for `"̌\r\0\0\0\0\x91ϥ…  (DaV3yst…)
+```
+
+The program **name** is freed heap memory — those bytes are a pointer sitting
+in a reclaimed slot — while the program **id** printed beside it is intact.
+So the JS string backing `AddedProgram.name` is read after release inside the
+native bridge; solana-program-test cannot find a file by that garbage name
+and panics. The panic kills the tokio task **without settling the napi
+promise**, so the JS `await` on `start()` can never resume. That is why the
+hung worker looked like this under the inspector:
+
+```
+{"resources":["PipeWrap","PipeWrap"],"handles":["Pipe","Socket"],"requests":[]}
+```
+
+No timers, no pending libuv requests — nothing but tinypool's IPC. An idle
+event loop, not a slow call. Ruled out along the way: memory (13 GB free, no
+OOM), CPU starvation (the native threads are parked, not spinning), and
+`start()` under load on its own (80 back-to-back creations across two
+concurrent workers, zero reproductions — it needs the GC to land in the
+wrong place).
+
+**Decision.** The bug is upstream and not ours to patch, so the harness stops
+depending on it going well:
+
+1. **Watchdog.** Every bankrun call races a 60-second timer
+   (`BANKRUN_CALL_TIMEOUT_MS`, 0 to disable), applied once via a Proxy over
+   `banksClient`, with the two direct `start()` call sites moved onto a
+   `startGuarded` helper. A wedge now fails in 60s NAMING THE CALL instead of
+   stalling 300s silently and leaving orphaned workers holding cores for the
+   next run. It earned its keep immediately, reporting
+   `start(governance+squads+launchpad_curve+cpmm+mpl_token_metadata)`.
+2. **One retry, creation only.** The corruption is a per-call race, so a
+   fresh `start()` almost certainly succeeds; retrying turns a red run into a
+   run that is 60s slower and green. Loud on stderr. Nothing else is
+   retried — replaying a transaction blind could double-apply it.
+
+**Also fixed, found while reading the harness:** the fixture inflation was a
+TOCTOU race. Every worker runs it at import, so `existsSync` could see a file
+another worker was still streaming 1.4 MB into and hand bankrun a truncated
+ELF. Now it writes to a per-pid temp name and `rename`s, which is atomic
+within a directory. Latent — it needs a fresh clone or a new `.so.gz` to
+fire — but it would have looked exactly like another mystery hang.
+
+**Proof it works.** Six verification runs after the change: two hit the wedge
+(one on `mpl_token_metadata`, one on `launchpad_curve`), both retried, and
+**all six finished 20/20 green**. Runs that would previously have been red now
+cost 60 extra seconds instead.
+
+**If the retry ever stops being enough,** the durable fix is to stop using the
+name-based loader entirely: pass each program as an `AddedAccount` (executable,
+owner `BPFLoader2111…`, data = the ELF bytes we already inflate from
+`tests/fixtures`) instead of as an `AddedProgram`. No name, no lookup, no
+string for the bridge to mishandle. That is a change across all 20 suites, so
+it is not worth the risk while a two-line retry holds.
+
+**Honest residuals.** The upstream use-after-free is unfixed; we route around
+it. The retry masks a real defect by design, which is why it is noisy and why
+this entry exists. And a contributing factor worth knowing: every wedge
+observed happened while a SECOND full suite was running concurrently on this
+4-core box (an orphaned run from an earlier session, found only by reading
+`ps`) — after killing it, eight consecutive runs were clean. That is a
+correlation, not a proof, and it is recorded as one.

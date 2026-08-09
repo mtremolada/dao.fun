@@ -457,3 +457,20 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       lamport. Suites: 61 integration, 199 sdk + 78 backend + 58 app + 25
       keeper unit, 32 e2e; eslint + tsc clean. BLOCKED: devnet deploy needs
       ~3.5 devnet SOL (faucets rate-limit this IP).
+- [x] **The fee stream is visible, and the suite is honest again
+      (2026-08-09).** The post-graduation crank is wired into the backend's
+      keeper loop (both legs are permissionless, so unwired meant "accrues
+      only if a human remembers"); the coin page and `/profile` both read the
+      `["graduated", mint]` record and say **locked or burned** rather than
+      implying a stream that may not exist — `/profile` in ONE
+      `getMultipleAccounts` round, because a rate-limited per-coin read would
+      have rendered as "burned", the single wrong answer that matters. Both
+      branches pinned by e2e (one coin seeded with a record, one without).
+      `buildGuardedProposeIxs` closes the last direct-propose path on guarded
+      realms. And the integration flake is root-caused (D-051): a
+      use-after-free in solana-bankrun corrupts `AddedProgram.name`,
+      solana-program-test panics, and the napi promise is never settled — the
+      harness now watchdogs every call and retries context creation once, so
+      the wedge costs 60s instead of 300 and lands green. Suites: 63
+      integration, 199 sdk + 78 backend + 65 app + 25 keeper unit, 33 e2e;
+      eslint + tsc clean.

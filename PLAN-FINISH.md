@@ -9,7 +9,7 @@ broken, invisible, or merely unrecorded.
 
 ---
 
-## F1 — Wire the graduated-fee crank  ⟵ a gap I created
+## F1 — Wire the graduated-fee crank  ✅ DONE (559a37a)
 
 `crankGraduatedFees` (packages/keeper/src/graduated-fees.ts) is tested and
 exported and **nothing calls it**. Both post-graduation legs are
@@ -22,7 +22,7 @@ Wire it into the backend's keeper loop beside the migration crank, reading
 locker, so every tick there must settle as `not-ready` and stay quiet — that
 is the behaviour to assert, or the logs become noise nobody reads.
 
-## F2 — Make the fee stream visible (G3)
+## F2 — Make the fee stream visible (G3)  ✅ DONE
 
 The mechanism works and is crankable, but nothing in the UI shows it. A
 launcher cannot tell that their coin is earning.
@@ -38,7 +38,14 @@ launcher cannot tell that their coin is earning.
 - Devnet shows the burn branch truthfully rather than pretending: no
   record, so the UI says liquidity was burned, not "locked".
 
-## F3 — Correct the guarded note, and route propose through the gate
+Delivered on the coin page in 559a37a; `/profile` followed after, reading
+every migrated launch in ONE `getMultipleAccounts` round (the public RPC
+rate-limits per-call reads, and a rate-limited read would have rendered as
+"burned" — the one wrong answer that matters). Both branches are pinned by
+an e2e that seeds one coin with a `["graduated", mint]` record and one
+without.
+
+## F3 — Correct the guarded note, and route propose through the gate  ✅ DONE (559a37a)
 
 **The carried-over note is wrong.** It says "dashboard/proposal screens
 still build direct proposals — they must route via the gate builders". They
@@ -56,7 +63,7 @@ Add `buildGuardedProposeIxs` — same shape and same wrapping as
 the gate's validation engine runs first. Prove it against the deployed
 GovER5 binary the way `guarded-gate-v2` already proves the pieces.
 
-## F4 — Record what exists (GATES, REDTEAM, docs)
+## F4 — Record what exists (GATES, REDTEAM, docs)  ✅ DONE (559a37a)
 
 - GATES.md: an evidence row for the fee model — bankrun lifecycle, the
   devnet run with its transaction signatures, and what is still unproven.
@@ -66,13 +73,37 @@ GovER5 binary the way `guarded-gate-v2` already proves the pieces.
   is a capture path until it is revoked.
 - PLAN-GRADUATED-FEES / PLAN-FEE-MODEL: mark the shipped phases.
 
-## F5 — The flaky integration suite
+## F5 — The flaky integration suite  ✅ ROOT-CAUSED + SURVIVABLE (D-051)
 
-Two failures in one back-to-back triple run that I could not reproduce or
-attribute, on a suite that is otherwise green. Capping the fork pool reduced
-it; "reduced" is not "fixed" and a suite you re-run on red is a suite you
-stop reading. Reproduce it under load with full output retained, then fix
-the cause rather than the symptom.
+Reproduced, caught live, and traced to a **use-after-free in solana-bankrun**:
+
+```
+thread 'tokio-runtime-worker' panicked at solana-program-test-1.18.0:716
+Program file data not available for `"̌\r\0\0\0\0\x91ϥ…  (DaV3yst…)
+```
+
+The program NAME is freed heap memory (the id beside it is intact), so
+solana-program-test panics looking for a file by that garbage name — and the
+panic kills the tokio task without settling the napi promise, leaving the JS
+`await` on `start()` unable to ever resume. Every wedged run contains that
+panic; every green run contains none. Not CPU contention, not memory, and not
+reproducible by hammering `start()` alone.
+
+My earlier attribution — my own test standing up a third runtime in one file
+— was wrong: with that fixed the next wedge landed in `gate0b-token2022`,
+which I had not touched.
+
+The bug is upstream. The harness now (1) races every bankrun call against a
+60s watchdog, so a wedge fails NAMING THE CALL instead of stalling 300s and
+orphaning workers, and (2) retries context creation exactly once. Measured
+over six verification runs: two wedged, both retried, **all six finished
+20/20 green**. Also fixed in passing: fixture inflation was a TOCTOU that
+could hand bankrun a half-written ELF on a fresh clone (now temp file +
+atomic rename).
+
+Not claimed: that the wedge is gone. It is upstream and unfixed — we route
+around it, noisily, and the label the watchdog prints is what a bug report to
+solana-bankrun would need.
 
 ## F6 — Operator-gated, NOT doable here
 
@@ -83,3 +114,13 @@ the cause rather than the symptom.
 - **Devnet gate deploy** for live guarded evidence (~2 SOL of the 4.1 left).
   Worth doing only if live evidence is wanted; bankrun already proves the
   gate against the real binary.
+
+## F7 — Red-team the fee model (added after the inventory)
+
+The inventory missed it: REDTEAM.md covered capture, execution fidelity,
+custody, distribute and guarded mode, but had NOT a single row on the fee
+model — which added a permissionless value-moving instruction, a PDA holding
+a fee-key NFT, and a per-mint vault. Now §4c, eight rows, each asking what a
+stranger gains by calling it, plus the two residuals stated plainly (our
+upgrade authority is the trust anchor; the lock path cannot be proven on
+devnet at all).
