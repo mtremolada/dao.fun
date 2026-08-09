@@ -425,3 +425,20 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       keeps the 277-byte Config (fee recipient at the same offset) from
       being decoded as a coin. Nav: Board | Create | Profile. 50 app unit +
       28 e2e.
+- [x] **G0 — Raydium liquidity locker verified on the deployed binary
+      (D-049, 2026-08-09).** Blocking spike for perpetual post-graduation
+      fees. `tests/launchpad-lock-verify.integration.test.ts` (8 tests)
+      drives `lock_cp_liquidity` + `collect_cp_fees` against the real
+      `LockrWmn…` binary in bankrun: discriminators/seeds/account orders
+      pinned, recipients proven UNCONSTRAINED (a payout landed in a non-ATA
+      account owned by an unrelated PDA), fee-key ownership proven to be the
+      sole authority, PDA collection proven via a Squads vault
+      `invoke_signed`, `fee_nft_mint` proven to accept a PDA (so `migrate`
+      stays single-signer), irreversibility proven at the dispatcher, and
+      the bill measured: 23,328,400 lamports + 166,769 CU to lock,
+      103,408 CU to collect. Also corrected a false earlier finding — the
+      locker DOES have `collect_clmm_fees_and_rewards`; CPMM is chosen on
+      its merits, not on CLMM being incapable. Fixture fixed (the first dump
+      kept the 45-byte ProgramData header and was not a loadable ELF), dump
+      script + `fixture-slots.json` now pin it at slot 362,025,476.
+      Suites: 54 integration (18 files); eslint + tsc clean.

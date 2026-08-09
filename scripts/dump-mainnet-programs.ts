@@ -35,6 +35,8 @@ import {
   RAYDIUM_CPMM_CREATE_POOL_FEE_RECEIVER,
   RAYDIUM_CPMM_PROGRAM_ID,
   RAYDIUM_CPMM_VERIFIED_SLOT,
+  RAYDIUM_LOCK_PROGRAM_ID,
+  RAYDIUM_LOCK_VERIFIED_SLOT,
   SPL_GOVERNANCE_PROGRAM_ID,
   SQUADS_V4_PROGRAM_ID,
   VSR_PROGRAM_ID,
@@ -70,6 +72,13 @@ const PROGRAMS: { name: string; id: PublicKey; minSlot?: number }[] = [
   },
   // create_coin CPIs create_metadata_accounts_v3 into this program.
   { name: "mpl_token_metadata", id: MPL_TOKEN_METADATA_PROGRAM_ID },
+  // Raydium's liquidity locker — the graduated-fee path CPIs into it
+  // (PLAN-GRADUATED-FEES.md). Upgradeable, so the slot is pinned like CPMM's.
+  {
+    name: "raydium_lock",
+    id: RAYDIUM_LOCK_PROGRAM_ID,
+    minSlot: RAYDIUM_LOCK_VERIFIED_SLOT,
+  },
 ];
 
 // Live CPMM state the graduation CPI reads/credits: the fee tier we use and

@@ -82,6 +82,33 @@ export const RAYDIUM_CPMM_AUTHORITY = new PublicKey(
   "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL",
 );
 
+/**
+ * Raydium's liquidity-locking program ("Burn & Earn"). Locking CPMM LP here
+ * is irreversible — there is no withdraw instruction — and mints a "fee key"
+ * NFT whose holder may collect the locked position's trading fees forever.
+ * That is how a graduated coin keeps paying its DAO (PLAN-GRADUATED-FEES.md).
+ *
+ * MAINNET ONLY. The binary hard-codes the mainnet CPMM and CLMM program ids
+ * and the account does not exist on devnet, so the migration's lock branch is
+ * config-gated and devnet keeps burning the LP.
+ */
+export const RAYDIUM_LOCK_PROGRAM_ID = new PublicKey(
+  "LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE",
+);
+
+/** Lock program's CPMM-side authority PDA: ["lock_cp_authority_seed"]. */
+export const RAYDIUM_LOCK_CP_AUTHORITY = new PublicKey(
+  "3f7GcQFG397GAaEnv51zR6tsTVihYRydnydDD1cXekxH",
+);
+
+/**
+ * Slot of the lock-program deployment G0 verified against
+ * (362,025,476 — 2025-08-23T17:58:08Z). Like the CPMM pin, fixture dumps must
+ * be at or after this slot. This program is UPGRADEABLE (authority
+ * FytDrVzDybM1TwFQPGb8qaxZR7dBCzNeqT3vtQsceZQK), so the ops runbook watches it.
+ */
+export const RAYDIUM_LOCK_VERIFIED_SLOT = 362_025_476;
+
 /** Metaplex Token Metadata — same address on every cluster. */
 export const MPL_TOKEN_METADATA_PROGRAM_ID = new PublicKey(
   "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",

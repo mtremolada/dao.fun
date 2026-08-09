@@ -3,21 +3,36 @@
 Spec-driven build per **SPEC.md** (v2.0 — the only authoritative spec).
 Doctrine: tests BEFORE code on anything touching funds/PDAs/governance;
 verify against the deployed binary before trusting any interface; record
-everything in **DECISIONS.md** (D-001..D-042 so far); gate evidence in
+everything in **DECISIONS.md** (D-001..D-049 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
-## ▶ NEXT: perpetual post-graduation fees — PLAN-GRADUATED-FEES.md
+## ▶ IN FLIGHT: perpetual post-graduation fees — PLAN-GRADUATED-FEES.md
 
-Research done against the DEPLOYED binaries (lock program dumped to
-tests/fixtures/raydium_lock.so.gz). Finding that decides the design:
-Raydium's locker has lock_cp_liquidity, lock_clmm_position and
-collect_cp_fees — there is NO collect_clmm_fees, so only the CPMM path
-supports "permanent liquidity + claimable fees". It also hard-codes the
-MAINNET cpmm/clmm ids and is absent from devnet, so the lock path can
-NEVER be exercised on devnet — bankrun-with-mainnet-binaries is the
-primary proof, devnet covers everything around it, mainnet canary is the
-only live run. Phases G0..G4 in the plan; G0 (spike) is blocking.
+**G0 DONE (D-049, 8/8 green:
+tests/launchpad-lock-verify.integration.test.ts).** Raydium's locker
+`LockrWmn…` verified on the DEPLOYED binary in bankrun. Facts G1 builds on:
+`recipient_token_*` are UNCONSTRAINED (so our program can hard-wire the
+destination and the crank stays permissionless); the fee-key NFT is the
+SOLE collect authority; a PDA can both hold the key and `invoke_signed` the
+collect; `fee_nft_mint` also accepts a PDA, so `migrate` stays
+single-signer and the fee key's address is derivable; the lock is
+irreversible (no unlock/withdraw/close entrypoint exists). Cost:
+23,328,400 lamports + 166,769 CU to lock, 103,408 CU to collect — the
+curve's 192,156,720 migration reserve must GROW by the lock cost in G1.
+`locked_lp_amount` legitimately DECREASES as fees are claimed (k-growth is
+redeemed as LP); the guarantee is "deposited value never leaves the pool",
+not "LP count constant".
+
+CORRECTED an earlier claim: the locker DOES have
+`collect_clmm_fees_and_rewards` — both venues can lock AND collect. CPMM
+is chosen on merit (full-range by construction; a locked CLMM position
+cannot be rebalanced when price leaves its range), not on capability.
+
+The locker hard-codes the MAINNET cpmm/clmm ids and is absent from devnet,
+so the lock path can NEVER run on devnet: bankrun-with-mainnet-binaries is
+the primary proof, devnet covers the burn branch and everything around it,
+mainnet canary (GATE L4) is the only live run. Next: G1 (program).
 
 ## ✅ Guarded SHIPPED (2026-08-09, D-043) — unified launch page live
 
@@ -58,7 +73,7 @@ first). GATE 2 and GATE L2 sign-off lines are filled (same delegation).
 ## Where the build stands (end of session …sbqvy)
 
 - Branch: `claude/spec-driven-repo-reset-yqzenh` (push ONLY here; no PRs
-  unless asked). Suites: 234 unit + 21 integration (real mainnet
+  unless asked). Suites: 234 unit + 54 integration (real mainnet
   binaries in bankrun, hermetic) + 12 Playwright e2e; eslint+tsc clean.
 - Stage 0 + Stage 1: DONE and operator-signed (GATES.md). GATE 2
   technical legs determined (property/fuzz/CU suites, observability,

@@ -57,11 +57,19 @@ binaries, D-034; fixture provenance in `tests/fixtures/fixture-slots.json`):
 | CPMM `create_pool_fee` receiver (wSOL) | `DNXgeM9EiiaAbaWvwjHj9fQQLAX5ZsfHyvmYUNRAdNC8` | `3oE58BKVt8KuYkGxx8zBojugnymWmBiyafWgMrnb6eYy` |
 | CPMM vault/LP-mint authority | `GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL` | same seed, same address |
 | Metaplex Token Metadata | `metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s` | same |
+| Raydium liquidity lock ("Burn & Earn") | `LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE` | **NOT DEPLOYED** |
+| Lock CPMM authority (`["lock_cp_authority_seed"]`) | `3f7GcQFG397GAaEnv51zR6tsTVihYRydnydDD1cXekxH` | — |
 | `launchpad-curve` | minted at first devnet deploy (Phase 8) | — |
 
 CPMM fixture deploy slot: **425,801,539** (2026-06-11). The program is
 upgradeable — monitor the live ProgramData slot against this pin; an
 unnoticed upgrade is how the spl-governance fork burned us (D-031).
+
+Lock-program fixture deploy slot: **362,025,476** (2025-08-23), upgrade
+authority `FytDrVzDybM1TwFQPGb8qaxZR7dBCzNeqT3vtQsceZQK` — also
+upgradeable, also monitored (D-049). It hard-codes the MAINNET CPMM/CLMM
+program ids and has no devnet deployment, so the graduated-fee lock branch
+is mainnet-only by construction; devnet migrations keep burning the LP.
 
 DEVNET TRAP: `raydium-cpi-example`'s README still advertises an older,
 parallel devnet deployment (`CPMDWBwJ…` / `9zSzfkYy…` / `G11FKB…`). Pools

@@ -6,5 +6,9 @@
   "mpl_token_metadata": {
     "programId": "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
     "deploySlot": 380725176
+  },
+  "raydium_lock": {
+    "programId": "LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE",
+    "deploySlot": 362025476
   }
 }

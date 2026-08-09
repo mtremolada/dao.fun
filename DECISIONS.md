@@ -1411,3 +1411,94 @@ holdings" into "holds zero" and hid the position card in another spec;
 a real RPC ERRORS on a missing account and the app depends on that
 distinction. The stub now returns a JSON-RPC error frame — the fabricated
 RPC must copy the real one's failure modes, not just its successes.
+
+## D-049 — G0: Raydium's liquidity locker verified on the binary; graduated coins can pay their DAO forever (2026-08-09)
+
+**Context.** `migrate` burns the LP today. That makes liquidity unpullable
+but throws the fee rights away, so a graduated coin earns nobody anything
+— the gap PLAN-GRADUATED-FEES.md exists to close. The fix is Raydium's
+"Burn & Earn" locker `LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE`: lock
+the LP, receive a fee-key NFT, and let the key's holder sweep the locked
+position's trading fees forever. Before a line of program code, G0 drove
+the DEPLOYED binary (deploy slot 362,025,476) in bankrun.
+`tests/launchpad-lock-verify.integration.test.ts`, 8/8 green.
+
+**A correction first.** An earlier strings-based inventory of that binary
+found three instruction source-paths and I wrote "there is NO
+`collect_clmm_fees`", using it to argue CPMM over CLMM. The program's
+on-chain Anchor IDL (`HzLkUWn57cdtyQNQLJpyu2EPF8qQAiGt4iuiEo1XnEFK`)
+disproves it: there are FOUR instructions, including
+`collect_clmm_fees_and_rewards`. Both venues can lock AND collect. §2 of
+the plan now argues CPMM on its real merits — full-range by construction
+(a locked CLMM position cannot be rebalanced when price leaves its range,
+which is exactly what launchpad coins do), a much smaller account/CU
+footprint, and a small delta from a migration already proven end to end.
+CLMM is deferred, not excluded.
+
+**What the binary actually enforces.**
+
+- Discriminators reproduce as `sha256("global:<name>")[..8]`:
+  `lock_cp_liquidity` `[216,157,29,78,38,51,31,26]`, `collect_cp_fees`
+  `[8,30,51,199,209,184,247,133]`. Seeds: authority
+  `["lock_cp_authority_seed"]` = `3f7Gc…`, record
+  `["locked_liquidity", fee_nft_mint]`, locked LP vault =
+  `ATA(authority, lp_mint)`. The 19- and 18-account IDL orders are accepted
+  verbatim.
+- **`recipient_token_0/1_account` are unconstrained.** A payout landed in a
+  non-ATA token account owned by an unrelated PDA. This is the fact the
+  whole design rests on: our program can hard-wire the destination to the
+  coin's creator and let ANYONE crank the collect, exactly like
+  `collect_creator_fee`.
+- **The fee key is the sole authority.** A thief signing for themselves is
+  refused both with their own empty fee-NFT account and while pointing at
+  the real one. `locked_owner` in the record is bookkeeping, not authority.
+- **A PDA can hold the key and collect**, proven by routing a collect
+  through a Squads vault PDA signing via `invoke_signed` — the exact shape
+  a dao.fun treasury has.
+- **`fee_nft_mint` may be a PDA too.** It is the one slot that must sign,
+  and Squads' ephemeral signers (PDAs the Squads program signs for) filled
+  it. So `migrate` keeps its single-signer shape — no throwaway keypair
+  rides along — and the fee key lands at an address derivable from the coin
+  mint.
+- **Irreversible.** The dispatcher has exactly four arms: `unlock_*`,
+  `withdraw`, `decrease_liquidity`, `close_locked_liquidity` and
+  `harvest_*` all bounce with `InstructionFallbackNotFound` before an
+  account is read, and CPMM `withdraw` against the locked vault is refused.
+- **Idempotent.** A second collect with nothing accrued pays zero and does
+  not fail — safe for an unconditional keeper loop.
+
+**The invariant needs restating, and the naive version is false.**
+`INV-LP-BURNED` becomes `INV-LP-LOCKED`, but `locked_lp_amount` *decreases*
+over time: CPMM keeps the LP share of each trade fee in the vaults, so k
+grows and each LP token redeems for more; collecting burns exactly the
+slice whose redemption value equals that growth. G0 asserts the bookkeeping
+is exact (`Δlocked == Δclaimed`) and that `last_k` never decreases. The
+guarantee is **the deposited value never leaves the pool**, not "the LP
+count is constant". Anyone reading `locked_lp_amount` as shrinking
+liquidity would be misreading it — worth writing down because the
+mis-reading is the natural one.
+
+**Costs, measured.** A lock costs **23,328,400 lamports** with metadata
+(1,461,600 mint + 2,039,280 fee-NFT ATA + 2,672,640 record + 2,039,280
+locked-LP vault + 15,115,600 metadata). Only 5,115,600 of the metadata leg
+is rent; the other **10,000,000 is Metaplex's flat create fee**. Without
+metadata a lock is 8,212,800, but the fee key then has no on-chain name.
+Compute: lock **166,769 CU**, collect **103,408 CU** — a collect fits the
+default 200k budget, so the crank needs no ComputeBudget instruction.
+Consequence for G1: the curve's migration reserve must rise from
+192,156,720 by the full lock cost, or graduations strand mid-flight.
+
+**Fixture note.** The first dump of `raydium_lock.so.gz` kept the 45-byte
+ProgramData header, so the "binary" was not an ELF and would never have
+loaded. Caught by checking the elf length against `programdata - 45`
+rather than by a test failing. The dump script now covers this program
+with the same `minSlot` pin CPMM has (D-034), and `fixture-slots.json`
+records the slot.
+
+**Devnet, honestly.** `LockrWmn…` is not deployed on devnet and hard-codes
+the MAINNET CPMM/CLMM ids, so the lock path can NEVER run there. Deploying
+our own copy would test our fork, not the program production uses — the
+exact mistake D-031/D-032 exist to prevent. Bankrun against the real binary
+is the primary proof; devnet keeps the burn branch (config-gated on the
+lock program address) and proves everything around the feature; a mainnet
+canary is the only true end-to-end and becomes GATE L4.
