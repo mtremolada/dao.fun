@@ -77,7 +77,6 @@ export class NativeCurveRail implements LaunchRail {
             user: p.launcher,
             mint: mint.publicKey,
             creator,
-            feeRecipient: this.opts.feeRecipient,
             tokenAmount,
             maxSolCost: cost,
             programId: this.programId,

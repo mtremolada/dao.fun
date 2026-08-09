@@ -200,7 +200,6 @@ export async function runLaunch(
           user: wallet,
           mint: mint.publicKey,
           creator: vaultPda,
-          feeRecipient: cfg.feeRecipient,
           tokenAmount: tokensOut,
           maxSolCost: cost + cost / 50n,
           programId,

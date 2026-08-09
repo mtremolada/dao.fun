@@ -32,6 +32,7 @@ import {
   configPda,
   cpmmPoolAccounts,
   creatorVaultPda,
+  protocolVaultPda,
   curvePda,
   metadataPda,
   migrationAuthorityPda,
@@ -159,6 +160,7 @@ export function buildCreateCoinIx(args: {
       AM(getAssociatedTokenAddressSync(args.mint, curve, true), false, true),
       AM(solVaultPda(args.mint, programId), false, true),
       AM(creatorVaultPda(args.creator, programId), false, true),
+      AM(protocolVaultPda(args.mint, programId), false, true),
       AM(metadataPda(args.mint, MPL_TOKEN_METADATA_PROGRAM_ID), false, true),
       AM(MPL_TOKEN_METADATA_PROGRAM_ID, false, false),
       AM(TOKEN_PROGRAM_ID, false, false),
@@ -174,7 +176,6 @@ function tradeKeys(args: {
   user: PublicKey;
   mint: PublicKey;
   creator: PublicKey;
-  feeRecipient: PublicKey;
   programId: PublicKey;
 }) {
   const curve = curvePda(args.mint, args.programId);
@@ -186,7 +187,7 @@ function tradeKeys(args: {
     AM(getAssociatedTokenAddressSync(args.mint, curve, true), false, true),
     AM(solVaultPda(args.mint, args.programId), false, true),
     AM(getAssociatedTokenAddressSync(args.mint, args.user, true), false, true),
-    AM(args.feeRecipient, false, true),
+    AM(protocolVaultPda(args.mint, args.programId), false, true),
     AM(creatorVaultPda(args.creator, args.programId), false, true),
     AM(TOKEN_PROGRAM_ID, false, false),
     AM(ASSOCIATED_TOKEN_PROGRAM_ID, false, false),
@@ -199,7 +200,6 @@ export function buildBuyIx(args: {
   user: PublicKey;
   mint: PublicKey;
   creator: PublicKey;
-  feeRecipient: PublicKey;
   tokenAmount: bigint;
   maxSolCost: bigint;
   programId?: PublicKey;
@@ -219,7 +219,6 @@ export function buildSellIx(args: {
   user: PublicKey;
   mint: PublicKey;
   creator: PublicKey;
-  feeRecipient: PublicKey;
   tokenAmount: bigint;
   minSolOutput: bigint;
   programId?: PublicKey;
@@ -258,6 +257,7 @@ export function buildMigrateIx(args: {
       AM(curve, false, true),
       AM(getAssociatedTokenAddressSync(args.mint, curve, true), false, true),
       AM(solVaultPda(args.mint, programId), false, true),
+      AM(protocolVaultPda(args.mint, programId), false, true),
       AM(migration, false, true),
       AM(getAssociatedTokenAddressSync(NATIVE_MINT, migration, true), false, true),
       AM(getAssociatedTokenAddressSync(args.mint, migration, true), false, true),
@@ -278,6 +278,35 @@ export function buildMigrateIx(args: {
       AM(SystemProgram.programId, false, false),
       AM(SYSVAR_RENT_PUBKEY, false, false),
       ...eventCpiKeys(programId),
+    ],
+  });
+}
+
+/**
+ * Sweeps a coin's accrued protocol fees to the configured fee recipient.
+ * Permissionless to call — the destination is fixed on chain. Before the
+ * curve has migrated the program keeps the graduation overhead back, so a
+ * pre-graduation sweep never pushes that cost onto the raise.
+ */
+export function buildCollectProtocolFeeIx(args: {
+  payer: PublicKey;
+  mint: PublicKey;
+  feeRecipient: PublicKey;
+  ammConfig: PublicKey;
+  programId?: PublicKey;
+}): TransactionInstruction {
+  const programId = args.programId ?? LAUNCHPAD_PROGRAM_ID;
+  return new TransactionInstruction({
+    programId,
+    data: ixDiscriminator("collect_protocol_fee"),
+    keys: [
+      AM(args.payer, true, true),
+      AM(configPda(programId), false, false),
+      AM(args.feeRecipient, false, true),
+      AM(curvePda(args.mint, programId), false, false),
+      AM(protocolVaultPda(args.mint, programId), false, true),
+      AM(args.ammConfig, false, false),
+      AM(SystemProgram.programId, false, false),
     ],
   });
 }

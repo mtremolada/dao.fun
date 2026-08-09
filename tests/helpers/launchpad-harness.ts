@@ -32,6 +32,7 @@ import {
   raydiumCpmmAddresses,
   buildBuyIx,
   buildCollectCreatorFeeIx,
+  buildCollectProtocolFeeIx,
   buildCreateCoinIx,
   buildInitializeConfigIx,
   buildMigrateIx,
@@ -40,6 +41,7 @@ import {
   configPda,
   cpmmPoolAccounts as sdkCpmmPoolAccounts,
   creatorVaultPda,
+  protocolVaultPda,
   curvePda,
   decodeCurve,
   metadataPda as sdkMetadataPda,
@@ -57,6 +59,7 @@ export {
   curvePda,
   solVaultPda,
   creatorVaultPda,
+  protocolVaultPda,
   migrationAuthorityPda,
   poolStatePda,
 };
@@ -143,7 +146,9 @@ export function buyIx(args: {
   user: PublicKey;
   mint: PublicKey;
   creator: PublicKey;
-  feeRecipient: PublicKey;
+  /** Ignored: the protocol fee now accrues in a per-mint PDA the builder
+   *  derives. Kept so existing suites read unchanged. */
+  feeRecipient?: PublicKey;
   tokenAmount: bigint;
   maxSolCost: bigint;
 }): TransactionInstruction {
@@ -154,7 +159,8 @@ export function sellIx(args: {
   user: PublicKey;
   mint: PublicKey;
   creator: PublicKey;
-  feeRecipient: PublicKey;
+  /** Ignored — see buyIx. */
+  feeRecipient?: PublicKey;
   tokenAmount: bigint;
   minSolOutput: bigint;
 }): TransactionInstruction {
@@ -167,6 +173,14 @@ export function migrateIx(args: {
   feeRecipient: PublicKey;
 }): TransactionInstruction {
   return buildMigrateIx({ ...args, cluster: "mainnet", ray: RAY });
+}
+
+export function collectProtocolFeeIx(args: {
+  payer: PublicKey;
+  mint: PublicKey;
+  feeRecipient: PublicKey;
+}): TransactionInstruction {
+  return buildCollectProtocolFeeIx({ ...args, ammConfig: RAY.ammConfig });
 }
 
 export function collectCreatorFeeIx(args: {

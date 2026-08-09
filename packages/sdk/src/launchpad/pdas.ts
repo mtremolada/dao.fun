@@ -7,6 +7,7 @@ import { NATIVE_MINT, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
   CONFIG_SEED,
   CREATOR_VAULT_SEED,
+  PROTOCOL_VAULT_SEED,
   CURVE_SEED,
   LAUNCHPAD_PROGRAM_ID,
   MIGRATION_AUTHORITY_SEED,
@@ -29,6 +30,11 @@ export const curvePda = (mint: PublicKey, programId = LAUNCHPAD_PROGRAM_ID) =>
 
 export const solVaultPda = (mint: PublicKey, programId = LAUNCHPAD_PROGRAM_ID) =>
   derive([SOL_VAULT_SEED, mint.toBuffer()], programId);
+
+export const protocolVaultPda = (
+  mint: PublicKey,
+  programId = LAUNCHPAD_PROGRAM_ID,
+) => derive([PROTOCOL_VAULT_SEED, mint.toBuffer()], programId);
 
 export const creatorVaultPda = (
   creator: PublicKey,

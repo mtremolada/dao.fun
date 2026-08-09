@@ -82,6 +82,14 @@ pub const CURVE_SEED: &[u8] = b"bonding-curve";
 /// match" rejection that blocked graduation (SPEC-LAUNCHPAD §2.1).
 pub const SOL_VAULT_SEED: &[u8] = b"sol-vault";
 pub const CREATOR_VAULT_SEED: &[u8] = b"creator-vault";
+/// Per-mint protocol-fee accrual. Trades pay the protocol's share here
+/// instead of forwarding it to an external wallet, so that at graduation the
+/// coin's OWN fees can pay for its OWN pool and the entire raise reaches
+/// liquidity (PLAN-FEE-MODEL.md §2). Per-mint rather than global on purpose:
+/// a shared vault would make the permissionless `migrate` crank depend on
+/// somebody keeping it funded, and a drained vault would strand holders' SOL
+/// in a completed curve.
+pub const PROTOCOL_VAULT_SEED: &[u8] = b"protocol-vault";
 pub const MIGRATION_AUTHORITY_SEED: &[u8] = b"migration-authority";
 pub const POOL_SEED: &[u8] = b"cpmm-pool";
 
@@ -209,6 +217,7 @@ pub mod launchpad_curve {
         for vault in [
             ctx.accounts.creator_vault.to_account_info(),
             ctx.accounts.sol_vault.to_account_info(),
+            ctx.accounts.protocol_vault.to_account_info(),
         ] {
             let missing = rent_floor.saturating_sub(vault.lamports());
             if missing > 0 {
@@ -276,7 +285,7 @@ pub mod launchpad_curve {
         transfer_from_user(
             &ctx.accounts.system_program,
             &ctx.accounts.user,
-            &ctx.accounts.fee_recipient,
+            &ctx.accounts.protocol_vault,
             quote.protocol_fee,
         )?;
         transfer_from_user(
@@ -372,7 +381,7 @@ pub mod launchpad_curve {
         transfer_signed(
             &ctx.accounts.system_program,
             &sol_vault,
-            &ctx.accounts.fee_recipient,
+            &ctx.accounts.protocol_vault,
             quote.protocol_fee,
             sol_vault_seeds,
         )?;
@@ -419,9 +428,24 @@ pub mod launchpad_curve {
             .checked_add(CPMM_RENT_LAMPORTS)
             .ok_or(LaunchpadError::MathOverflow)?;
         let graduation_fee = ctx.accounts.config.graduation_fee_lamports;
+
+        // The coin's own accrued protocol fees pay for the coin's own pool
+        // (PLAN-FEE-MODEL.md §2). On production parameters the vault holds
+        // ~0.595 SOL against ~0.215 SOL of overhead, so the ENTIRE raise
+        // reaches liquidity. Whatever the vault cannot cover falls back to
+        // the raise exactly as before — Raydium's `create_pool_fee` is
+        // admin-mutable, and a graduation must never strand because a third
+        // party raised a price on us.
+        let protocol_vault_info = ctx.accounts.protocol_vault.to_account_info();
+        let vault_available = protocol_vault_info
+            .lamports()
+            .saturating_sub(Rent::get()?.minimum_balance(0));
+        let from_vault = overhead.min(vault_available);
+        let from_raise = overhead - from_vault;
+
         let pool_sol = curve
             .real_sol
-            .checked_sub(overhead)
+            .checked_sub(from_raise)
             .and_then(|v| v.checked_sub(graduation_fee))
             .ok_or(LaunchpadError::GraduationUnderfunded)?;
         require!(pool_sol > 0, LaunchpadError::GraduationUnderfunded);
@@ -448,16 +472,29 @@ pub mod launchpad_curve {
         let sol_vault = ctx.accounts.sol_vault.to_account_info();
         let sol_vault_seeds: &[&[u8]] =
             &[SOL_VAULT_SEED, mint_key.as_ref(), &[ctx.bumps.sol_vault]];
-        let total = pool_sol
-            .checked_add(overhead)
+        let from_sol_vault = pool_sol
+            .checked_add(from_raise)
             .ok_or(LaunchpadError::MathOverflow)?;
         transfer_signed(
             &ctx.accounts.system_program,
             &sol_vault,
             &migration_info,
-            total,
+            from_sol_vault,
             sol_vault_seeds,
         )?;
+        if from_vault > 0 {
+            transfer_signed(
+                &ctx.accounts.system_program,
+                &protocol_vault_info,
+                &migration_info,
+                from_vault,
+                &[
+                    PROTOCOL_VAULT_SEED,
+                    mint_key.as_ref(),
+                    &[ctx.bumps.protocol_vault],
+                ],
+            )?;
+        }
         transfer_signed(
             &ctx.accounts.system_program,
             &sol_vault,
@@ -604,12 +641,16 @@ pub mod launchpad_curve {
         // be moved by the system program signing for our PDA — a direct
         // debit here is exactly the "spent from an account it does not own"
         // failure. Everything left is unspent overhead plus reclaimed rent.
+        // Residue returns to the PROTOCOL VAULT, not to the fee recipient:
+        // the vault fronted the overhead, so unspent overhead and reclaimed
+        // rent belong back there where `collect_protocol_fee` can sweep them
+        // under the same rules as everything else the coin earned.
         let residue = migration_info.lamports();
         if residue > 0 {
             transfer_signed(
                 &ctx.accounts.system_program,
                 &migration_info,
-                &ctx.accounts.fee_recipient,
+                &ctx.accounts.protocol_vault.to_account_info(),
                 residue,
                 migration_seeds,
             )?;
@@ -631,6 +672,43 @@ pub mod launchpad_curve {
             create_pool_fee,
             graduation_fee,
         });
+        Ok(())
+    }
+
+    /// Sweeps a coin's accrued PROTOCOL fees to `config.fee_recipient`.
+    /// Permissionless to call, and the destination is fixed by config, so a
+    /// crank can pay the protocol and nothing else.
+    ///
+    /// While the curve has not migrated the sweep must leave the graduation
+    /// overhead behind: these lamports are earmarked to pay for the coin's
+    /// own pool (PLAN-FEE-MODEL.md §2), and sweeping them early would push
+    /// the cost back onto the raise. After migration there is nothing left
+    /// to reserve and everything above the rent floor is swept.
+    pub fn collect_protocol_fee(ctx: Context<CollectProtocolFee>) -> Result<()> {
+        let vault = ctx.accounts.protocol_vault.to_account_info();
+        let rent_floor = Rent::get()?.minimum_balance(0);
+        let mut available = vault.lamports().saturating_sub(rent_floor);
+
+        if !ctx.accounts.bonding_curve.migrated {
+            let reserve = read_create_pool_fee(&ctx.accounts.cpmm_amm_config)?
+                .checked_add(CPMM_RENT_LAMPORTS)
+                .ok_or(LaunchpadError::MathOverflow)?;
+            available = available.saturating_sub(reserve);
+        }
+        require!(available > 0, LaunchpadError::NothingToCollect);
+
+        let mint_key = ctx.accounts.bonding_curve.mint;
+        transfer_signed(
+            &ctx.accounts.system_program,
+            &vault,
+            &ctx.accounts.fee_recipient.to_account_info(),
+            available,
+            &[
+                PROTOCOL_VAULT_SEED,
+                mint_key.as_ref(),
+                &[ctx.bumps.protocol_vault],
+            ],
+        )?;
         Ok(())
     }
 
@@ -1173,6 +1251,14 @@ pub struct CreateCoin<'info> {
         bump
     )]
     pub creator_vault: UncheckedAccount<'info>,
+    /// CHECK: system-owned PDA holding this coin's protocol fees; funded to
+    /// the rent floor here for the same reason as the creator vault.
+    #[account(
+        mut,
+        seeds = [PROTOCOL_VAULT_SEED, mint.key().as_ref()],
+        bump
+    )]
+    pub protocol_vault: UncheckedAccount<'info>,
     /// CHECK: validated by the Metaplex program during the CPI.
     #[account(mut)]
     pub metadata: UncheckedAccount<'info>,
@@ -1221,9 +1307,15 @@ pub struct Trade<'info> {
         associated_token::authority = user,
     )]
     pub user_token_account: Box<Account<'info, TokenAccount>>,
-    /// CHECK: pinned to the address recorded in config.
-    #[account(mut, address = config.fee_recipient @ LaunchpadError::InvalidFeeRecipient)]
-    pub fee_recipient: UncheckedAccount<'info>,
+    /// CHECK: system-owned PDA holding this coin's accrued protocol fees.
+    /// It pays for the coin's own graduation and is swept only to
+    /// config.fee_recipient (PLAN-FEE-MODEL.md §2).
+    #[account(
+        mut,
+        seeds = [PROTOCOL_VAULT_SEED, mint.key().as_ref()],
+        bump
+    )]
+    pub protocol_vault: UncheckedAccount<'info>,
     /// CHECK: system-owned PDA keyed to the curve's creator; swept only to
     /// that creator.
     #[account(
@@ -1267,6 +1359,15 @@ pub struct Migrate<'info> {
         bump
     )]
     pub sol_vault: UncheckedAccount<'info>,
+    /// CHECK: system-owned PDA holding this coin's accrued protocol fees;
+    /// funds the graduation overhead so the whole raise reaches liquidity,
+    /// and receives the unspent residue afterwards.
+    #[account(
+        mut,
+        seeds = [PROTOCOL_VAULT_SEED, mint.key().as_ref()],
+        bump
+    )]
+    pub protocol_vault: UncheckedAccount<'info>,
     /// CHECK: system-owned PDA — Raydium pays its fee with a system transfer
     /// from the pool creator, which a program-owned account cannot do.
     #[account(
@@ -1339,6 +1440,35 @@ pub struct Migrate<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct CollectProtocolFee<'info> {
+    /// Anyone may crank this; the destination is fixed below.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    /// CHECK: pinned to the address recorded in config — the only possible
+    /// destination.
+    #[account(mut, address = config.fee_recipient @ LaunchpadError::InvalidFeeRecipient)]
+    pub fee_recipient: UncheckedAccount<'info>,
+    #[account(
+        seeds = [CURVE_SEED, bonding_curve.mint.as_ref()],
+        bump = bonding_curve.bump,
+    )]
+    pub bonding_curve: Box<Account<'info, BondingCurve>>,
+    /// CHECK: system-owned PDA keyed to the coin.
+    #[account(
+        mut,
+        seeds = [PROTOCOL_VAULT_SEED, bonding_curve.mint.as_ref()],
+        bump
+    )]
+    pub protocol_vault: UncheckedAccount<'info>,
+    /// CHECK: Raydium's fee tier, read to size the graduation reserve.
+    #[account(address = config.cpmm_amm_config @ LaunchpadError::InvalidCpmmAccount)]
+    pub cpmm_amm_config: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

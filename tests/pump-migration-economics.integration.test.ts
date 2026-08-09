@@ -20,6 +20,18 @@
  * sellable, 1e15 supply), so every lamport here is directly comparable to
  * ours. If pump changes their model, this suite fails and we find out.
  *
+ * VINTAGE, and it matters. These numbers are true of the pump binaries in
+ * tests/fixtures, which predate pump's "BOOST" change (reported to have
+ * landed 2026-07-21). Today's deployed pump_amm contains a `boost_vault`
+ * seed string that our fixture does not, and third-party analysis of live
+ * migrations reports that `migrate_v2` now pulls ~20.69% of the seeded SOL
+ * back out of the new pool into that vault — offset by a virtual reserve so
+ * the quoted price is unchanged — and buys-and-burns it. We have NOT
+ * independently measured that, and the assertion below (everything but the
+ * fee reaches the pool) is what the fixture does, not necessarily what
+ * mainnet does today. Re-dump the pump fixtures before relying on the
+ * "seeded into the pool" figure as a statement about live pump.
+ *
  * Run: pnpm test:integration
  */
 import { describe, expect, it } from "vitest";

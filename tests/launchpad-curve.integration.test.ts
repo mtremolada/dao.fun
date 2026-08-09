@@ -61,6 +61,7 @@ import {
   solVaultPda,
   startLaunchpadCtx,
   tokenBalance,
+  protocolVaultPda,
 } from "./helpers/launchpad-harness";
 
 const CPMM_RENT_LAMPORTS = 42_156_720n;
@@ -210,7 +211,7 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
         const quote = buyQuote(model, amount);
         const before = {
           trader: await balance(ctx, trader.publicKey),
-          fee: await balance(ctx, feeRecipient.publicKey),
+          fee: await balance(ctx, protocolVaultPda(mint.publicKey)),
           creatorVault: await balance(ctx, creatorVaultPda(creator.publicKey)),
           tokens: await tokenBalance(ctx, traderAta),
         };
@@ -233,8 +234,13 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
         model = applyBuy(model, quote);
 
         // Fees land where they are supposed to, exactly.
+        // The protocol fee accrues in the coin's OWN vault (PLAN-FEE-MODEL
+        // §2) rather than being forwarded to a wallet, which is what lets
+        // the coin pay for its own graduation later.
         expect(
-          BigInt((await balance(ctx, feeRecipient.publicKey)) - before.fee),
+          BigInt(
+            (await balance(ctx, protocolVaultPda(mint.publicKey))) - before.fee,
+          ),
         ).toBe(quote.protocolFee);
         expect(
           BigInt(
@@ -420,7 +426,15 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
 
         const pool = cpmmPoolAccounts(mint.publicKey);
         const feeBefore = await balance(ctx, RAYDIUM_CPMM_CREATE_POOL_FEE_RECEIVER);
-        const poolSol = completed.realSol - MIGRATION_OVERHEAD;
+        // The coin's own protocol fees (0.70% of an 85 SOL raise = 0.595
+        // SOL) cover the 0.192 SOL graduation overhead, so NONE of the raise
+        // is spent on it: the entire raise becomes liquidity. That is the
+        // headline claim of PLAN-FEE-MODEL and this is where it is enforced.
+        const protocolVaultBefore = BigInt(
+          await balance(ctx, protocolVaultPda(mint.publicKey)),
+        );
+        expect(protocolVaultBefore).toBeGreaterThan(MIGRATION_OVERHEAD);
+        const poolSol = completed.realSol;
 
         await send(
           ctx,

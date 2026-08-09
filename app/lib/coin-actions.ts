@@ -72,7 +72,6 @@ export async function buy(
   args: { tokensOut: bigint; maxSolCost: bigint; slippageBps: number },
   ctx: ActionCtx,
 ): Promise<SendState> {
-  const feeRecipient = await getFeeRecipient(ctx.connection);
   const maxSolCost = args.maxSolCost + (args.maxSolCost * BigInt(args.slippageBps)) / 10_000n;
   return sendTransaction({
     instructions: [
@@ -80,7 +79,6 @@ export async function buy(
         user: new PublicKey(ctx.wallet.address),
         mint: new PublicKey(coin.mint),
         creator: new PublicKey(coin.creator),
-        feeRecipient,
         tokenAmount: args.tokensOut,
         maxSolCost,
         programId: launchpadProgramId(),
@@ -95,7 +93,6 @@ export async function sell(
   args: { tokenAmount: bigint; minSolOutput: bigint; slippageBps: number },
   ctx: ActionCtx,
 ): Promise<SendState> {
-  const feeRecipient = await getFeeRecipient(ctx.connection);
   const minSolOutput = args.minSolOutput - (args.minSolOutput * BigInt(args.slippageBps)) / 10_000n;
   return sendTransaction({
     instructions: [
@@ -103,7 +100,6 @@ export async function sell(
         user: new PublicKey(ctx.wallet.address),
         mint: new PublicKey(coin.mint),
         creator: new PublicKey(coin.creator),
-        feeRecipient,
         tokenAmount: args.tokenAmount,
         minSolOutput: minSolOutput < 0n ? 0n : minSolOutput,
         programId: launchpadProgramId(),

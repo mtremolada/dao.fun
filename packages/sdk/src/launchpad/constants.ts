@@ -34,6 +34,8 @@ export const CONFIG_SEED = Buffer.from("config");
 export const CURVE_SEED = Buffer.from("bonding-curve");
 export const SOL_VAULT_SEED = Buffer.from("sol-vault");
 export const CREATOR_VAULT_SEED = Buffer.from("creator-vault");
+/** Per-mint protocol-fee accrual — funds the coin's own graduation. */
+export const PROTOCOL_VAULT_SEED = Buffer.from("protocol-vault");
 export const MIGRATION_AUTHORITY_SEED = Buffer.from("migration-authority");
 export const POOL_SEED = Buffer.from("cpmm-pool");
 
