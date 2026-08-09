@@ -62,9 +62,17 @@ async function main(): Promise<void> {
 
   // Read the on-chain config once for the fee recipient the migrate needs.
   let feeRecipient: PublicKey | null = null;
+  // The Raydium fee tier is address-checked by migrate and CAN change
+  // (set_graduation_config); the cluster default goes stale the moment it
+  // does, which is how the first live devnet graduation failed.
+  let ammConfig: PublicKey | null = null;
   try {
     const cfg = await connection.getAccountInfo(configPda(programId));
-    if (cfg) feeRecipient = decodeConfig(cfg.data).feeRecipient;
+    if (cfg) {
+      const decoded = decodeConfig(cfg.data);
+      feeRecipient = decoded.feeRecipient;
+      ammConfig = decoded.cpmmAmmConfig;
+    }
   } catch (e) {
     log.warn("could not read on-chain config; keeper migrate disabled until it appears", {
       err: (e as Error).message,
@@ -108,7 +116,14 @@ async function main(): Promise<void> {
       const mint = new PublicKey(c.mint);
       try {
         const sig = await sendAndConfirm(
-          buildMigrateIx({ payer: keeperKp.publicKey, mint, feeRecipient, cluster, programId }),
+          buildMigrateIx({
+            payer: keeperKp.publicKey,
+            mint,
+            feeRecipient,
+            ...(ammConfig ? { ammConfig } : {}),
+            cluster,
+            programId,
+          }),
           `migrate ${c.mint}`,
         );
         log.info("graduation", { mint: c.mint, status: "migrated", sig });

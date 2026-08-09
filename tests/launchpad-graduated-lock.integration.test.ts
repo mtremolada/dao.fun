@@ -31,6 +31,7 @@ import type { ProgramTestContext } from "solana-bankrun";
 import { PUMP_CLASSIC } from "../packages/sdk/src/curve-math";
 import {
   MPL_TOKEN_METADATA_PROGRAM_ID,
+  RAYDIUM_CPMM_AMM_CONFIG_1PCT,
   RAYDIUM_CPMM_PROGRAM_ID,
   RAYDIUM_LOCK_CP_AUTHORITY,
   RAYDIUM_LOCK_PROGRAM_ID,
@@ -40,6 +41,7 @@ import {
   buildCpmmSwapBaseInputIx,
   decodeCpmmPool,
   buildLockGraduatedLiquidityIx,
+  buildMigrateIx,
   buildSetGraduationConfigIx,
   feeAuthorityPda,
   feeNftMintPda,
@@ -556,6 +558,110 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
       expect(await tokenBalance(ctx, holding)).toBe(0n);
       // Recovery does not restart once repaid.
       expect(await recovered()).toBe(cost);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "graduates into the fee tier the CONFIG names, not the cluster default",
+    async () => {
+      // This is the bug the first live devnet run found and no test did.
+      // set_graduation_config exists so the tier can move — it is the DAO's
+      // perpetual income rate — but buildMigrateIx was still passing the
+      // cluster's default AmmConfig, so the first migration after a tier
+      // change failed with InvalidCpmmAccount. Nothing caught it because
+      // every suite migrated with the same tier initialize_config wrote.
+      const other = RAYDIUM_CPMM_AMM_CONFIG_1PCT;
+      expect(other.toBase58()).not.toBe(RAY.ammConfig.toBase58());
+      await send(
+        ctx,
+        [
+          cu(),
+          buildSetGraduationConfigIx({
+            authority: authority.publicKey,
+            ammConfig: other,
+            lockProgram: PublicKey.default,
+            graduatedFeeProtocolBps: 0,
+          }),
+        ],
+        [authority],
+      );
+
+      const mint = grindMint(false);
+      const creator = Keypair.generate();
+      const whale = Keypair.generate();
+      await send(
+        ctx,
+        [
+          cu(),
+          SystemProgram.transfer({
+            fromPubkey: ctx.payer.publicKey,
+            toPubkey: whale.publicKey,
+            lamports: 120_000_000_000,
+          }),
+        ],
+        [],
+      );
+      await send(
+        ctx,
+        [cu(), createCoinIx({ payer: ctx.payer.publicKey, mint: mint.publicKey, creator: creator.publicKey })],
+        [mint],
+      );
+      await send(
+        ctx,
+        [
+          cu(),
+          buyIx({
+            user: whale.publicKey,
+            mint: mint.publicKey,
+            creator: creator.publicKey,
+            tokenAmount: PUMP_CLASSIC.initialRealToken,
+            maxSolCost: 120_000_000_000n,
+          }),
+        ],
+        [whale],
+      );
+
+      // A builder still using the cluster default is REFUSED — the program
+      // address-checks the tier against Config.
+      const stale = await sendExpectFail(
+        ctx,
+        [
+          cu(1_400_000),
+          migrateIx({
+            payer: ctx.payer.publicKey,
+            mint: mint.publicKey,
+            feeRecipient: feeRecipient.publicKey,
+          }),
+        ],
+        [],
+      );
+      expect(stale).toMatch(/InvalidCpmmAccount|does not match the configured/i);
+
+      // Passing the tier the config names succeeds, and the pool really is
+      // created in it: Raydium records the amm_config on the PoolState.
+      await send(
+        ctx,
+        [
+          cu(1_400_000),
+          buildMigrateIx({
+            payer: ctx.payer.publicKey,
+            mint: mint.publicKey,
+            feeRecipient: feeRecipient.publicKey,
+            cluster: "mainnet",
+            ray: RAY,
+            ammConfig: other,
+          }),
+        ],
+        [],
+      );
+      const pool = cpmmPoolAccounts(mint.publicKey).poolState;
+      const decoded = decodeCpmmPool(
+        Buffer.from((await ctx.banksClient.getAccount(pool))!.data),
+      );
+      expect(decoded.ammConfig.toBase58()).toBe(other.toBase58());
+
+      await disableLocking(); // restore the shared config for other tests
     },
     TEST_TIMEOUT,
   );

@@ -11,6 +11,7 @@ import {
   buildMigrateIx,
   buildSellIx,
   decodeConfig,
+  type DecodedConfig,
   configPda,
   explainLaunchpadError,
 } from "@daofun/sdk/launchpad";
@@ -40,13 +41,20 @@ export function coinState(coin: CoinView): CurveState {
   };
 }
 
-let configCache: { feeRecipient: PublicKey } | null = null;
-async function getFeeRecipient(connection: Connection): Promise<PublicKey> {
-  if (configCache) return configCache.feeRecipient;
+/**
+ * The whole config, not just the fee recipient: `migrate` is address-checked
+ * against `cpmm_amm_config` too, and that one MOVES — it is the Raydium fee
+ * tier graduated pools are created in, and `set_graduation_config` can change
+ * it. Building migrate from the cluster default instead of this value is
+ * exactly the bug the first live devnet graduation hit.
+ */
+let configCache: DecodedConfig | null = null;
+async function getConfig(connection: Connection): Promise<DecodedConfig> {
+  if (configCache) return configCache;
   const info = await connection.getAccountInfo(configPda(launchpadProgramId()));
   if (!info) throw new Error("launchpad config not found on chain");
-  configCache = { feeRecipient: decodeConfig(info.data).feeRecipient };
-  return configCache.feeRecipient;
+  configCache = decodeConfig(info.data);
+  return configCache;
 }
 
 export interface ActionCtx {
@@ -168,14 +176,15 @@ export async function claimCreatorFees(
  * that has finished its raise.
  */
 export async function graduate(coin: CoinView, ctx: ActionCtx): Promise<SendState> {
-  const feeRecipient = await getFeeRecipient(ctx.connection);
+  const cfg = await getConfig(ctx.connection);
   return sendTransaction({
     instructions: [
       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
       buildMigrateIx({
         payer: new PublicKey(ctx.wallet.address),
         mint: new PublicKey(coin.mint),
-        feeRecipient,
+        feeRecipient: cfg.feeRecipient,
+        ammConfig: cfg.cpmmAmmConfig,
         cluster: cluster() === "mainnet" ? "mainnet" : "devnet",
         programId: launchpadProgramId(),
       }),

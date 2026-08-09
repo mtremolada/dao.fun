@@ -275,11 +275,21 @@ export function buildMigrateIx(args: {
   mint: PublicKey;
   feeRecipient: PublicKey;
   cluster: Cluster;
+  /**
+   * The Raydium fee tier to graduate into. The PROGRAM address-checks this
+   * against `Config.cpmm_amm_config`, which `set_graduation_config` can move
+   * (that is the point — the tier is the DAO's perpetual income rate). Always
+   * pass the value decoded from the live Config; the cluster default is only
+   * a fallback for callers that have not read it, and it is wrong the moment
+   * the tier is changed.
+   */
+  ammConfig?: PublicKey;
   programId?: PublicKey;
   ray?: RaydiumCpmmAddresses;
 }): TransactionInstruction {
   const programId = args.programId ?? LAUNCHPAD_PROGRAM_ID;
-  const ray = args.ray ?? raydiumCpmmAddresses(args.cluster);
+  const base = args.ray ?? raydiumCpmmAddresses(args.cluster);
+  const ray = args.ammConfig ? { ...base, ammConfig: args.ammConfig } : base;
   const curve = curvePda(args.mint, programId);
   const migration = migrationAuthorityPda(args.mint, programId);
   const p = cpmmPoolAccounts(args.mint, ray, programId);

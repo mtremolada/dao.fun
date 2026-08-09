@@ -61,6 +61,19 @@ export const RAYDIUM_CPMM_PROGRAM_ID_DEVNET = new PublicKey(
 export const RAYDIUM_CPMM_AMM_CONFIG = new PublicKey(
   "D4FPEruKEHrG5TenZ2mpDGEfu1iUvTiqBxvpU8HLBvC2",
 );
+/**
+ * The 1.00% tier — 4x the perpetual income of index 0 at the same 0.15 SOL
+ * creation cost (research/launchpad/graduation-economics.md §3). NOTE the
+ * indices differ by cluster: 1% is index 1 on mainnet and index 3 on devnet,
+ * which is why every tier is referred to by ADDRESS and never by index.
+ */
+export const RAYDIUM_CPMM_AMM_CONFIG_1PCT = new PublicKey(
+  "G95xxie3XbkCqtE39GgQ9Ggc7xBC8Uceve7HFDEFApkc",
+);
+export const RAYDIUM_CPMM_AMM_CONFIG_1PCT_DEVNET = new PublicKey(
+  "EsTevfacYXpuho5VBuzBjDZi8dtWidGnXoSYAr8krTvz",
+);
+
 export const RAYDIUM_CPMM_AMM_CONFIG_DEVNET = new PublicKey(
   "5MxLgy9oPdTC3YgkiePHqr3EoCRD9uLVYRQS2ANAs7wy",
 );
