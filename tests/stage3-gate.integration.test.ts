@@ -85,6 +85,8 @@ function initializeIx(
       disc("initialize"),
       dao.realm.toBuffer(),
       dao.governance.toBuffer(),
+      dao.mint.toBuffer(), // community mint (v2 electorate pin)
+      (dao.councilMint ?? PublicKey.default).toBuffer(),
       Buffer.from([0]), // mode: guarded
       vec,
       ...whitelist.map((p) => p.toBuffer()),
@@ -127,8 +129,8 @@ function ratchetIx(
 
 async function gateMode(ctx: ProgramTestContext, dao: Dao): Promise<number> {
   const info = await ctx.banksClient.getAccount(gatePda(dao.realm));
-  // layout: 8 disc + realm 32 + governance 32 + mode u8 + bump u8 + vec
-  return Buffer.from(info!.data)[72]!;
+  // v2 layout: 8 disc + realm + governance + community + council mints + mode
+  return Buffer.from(info!.data)[136]!;
 }
 
 describe("Stage 3 proposal-gate v1: on-chain menu validation + structural ratchet (real binaries)", () => {
