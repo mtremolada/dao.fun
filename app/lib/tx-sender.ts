@@ -98,7 +98,27 @@ export async function sendTransaction(p: SendParams): Promise<SendState> {
 
   // --- preflight: wallet-cluster guard ---
   emit({ phase: "preflight" });
-  if (p.wallet.chains && p.wallet.chains.length > 0 && !p.wallet.chains.includes(p.chainId)) {
+  // `chains` is what a wallet SUPPORTS, not the network it currently has
+  // selected — wallet-standard exposes no way to read the active one, and
+  // real wallets (Phantom in Testnet Mode) omit devnet from the list while
+  // sitting on devnet. Gating every send on it therefore rejects legitimate
+  // devnet users.
+  //
+  // It only tells us anything when the WALLET is the one broadcasting, since
+  // then the wallet picks the network. On the sign-only path we broadcast the
+  // signed bytes to OUR rpc, which fixes the cluster by construction: the
+  // blockhash is ours, the transaction lands on our cluster, and the wallet's
+  // selected network is irrelevant to where it goes. (A wallet-broadcast
+  // signature that never appears on our rpc is still caught downstream and
+  // reported as wrong-cluster — that check is the real trap detector.)
+  const walletWillBroadcast =
+    (p.preferWalletBroadcast || !p.wallet.signOnly) && !!p.wallet.signAndSend;
+  if (
+    walletWillBroadcast &&
+    p.wallet.chains &&
+    p.wallet.chains.length > 0 &&
+    !p.wallet.chains.includes(p.chainId)
+  ) {
     return emit({
       phase: "failed",
       reason: "wrong-cluster",

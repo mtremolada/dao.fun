@@ -55,12 +55,42 @@ describe("sendTransaction", () => {
     expect(phases).toEqual(["preflight", "building", "signing", "broadcasting", "confirming", "confirmed"]);
   });
 
-  it("refuses at preflight when the wallet doesn't advertise the target cluster", async () => {
+  it("SIGNS for a wallet advertising only mainnet — we broadcast to our own rpc", async () => {
+    // Phantom in Testnet Mode reports a chains list without devnet while
+    // sitting on devnet. On the sign-only path the wallet never picks the
+    // network — our rpc and our blockhash do — so this must not be blocked.
     const r = await sendTransaction({
       ...base,
       wallet: signOnlyWallet(["solana:mainnet"]),
       connection: rpc(),
     });
+    expect(r.phase).toBe("confirmed");
+  });
+
+  it("refuses at preflight only when the WALLET will broadcast on the wrong cluster", async () => {
+    const wallet: SigningWallet = {
+      address: payer.publicKey.toBase58(),
+      chains: ["solana:mainnet"],
+      signAndSend: async () => "sigABC",
+    };
+    const r = await sendTransaction({
+      ...base,
+      wallet,
+      preferWalletBroadcast: true,
+      connection: rpc(),
+    });
+    expect(r).toMatchObject({ phase: "failed", reason: "wrong-cluster" });
+  });
+
+  it("refuses when a signAndSend-only wallet would broadcast on the wrong cluster", async () => {
+    // No sign-only capability: the wallet broadcasts whether we prefer it or
+    // not, so its advertised chains bind again.
+    const wallet: SigningWallet = {
+      address: payer.publicKey.toBase58(),
+      chains: ["solana:mainnet"],
+      signAndSend: async () => "sigABC",
+    };
+    const r = await sendTransaction({ ...base, wallet, connection: rpc() });
     expect(r).toMatchObject({ phase: "failed", reason: "wrong-cluster" });
   });
 

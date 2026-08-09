@@ -69,7 +69,11 @@ test("a buy runs the full send pipeline to confirmed with a devnet explorer link
   await expect(link).toHaveAttribute("href", `https://explorer.solana.com/tx/${FAKE_SIG}?cluster=devnet`);
 });
 
-test("a mainnet-only wallet is stopped at preflight with the devnet hint (the broadcast trap)", async ({ page }) => {
+test("a wallet advertising only mainnet still trades on devnet (we broadcast, not it)", async ({ page }) => {
+  // Regression: Phantom in Testnet Mode reports a chains list WITHOUT devnet
+  // even while sitting on devnet, and the old preflight rejected every send
+  // because of it. On the sign-only path the wallet never chooses the
+  // network — our rpc and our blockhash do — so the trade must go through.
   await seedBrowser(page);
   await installFakeWallet(page, { chains: ["solana:mainnet"] });
   await installRpcStub(page, coinAccounts(MINT, midCurve(MINT), { name: "Gate Coin", symbol: "GATE" }));
@@ -79,10 +83,8 @@ test("a mainnet-only wallet is stopped at preflight with the devnet hint (the br
   await page.getByTestId("trade-amount").fill("0.5");
   await page.getByTestId("trade-submit").click();
 
-  // fails BEFORE signing — nothing was broadcast anywhere
-  const status = page.locator('[data-phase="error"]');
-  await expect(status).toContainText(/isn't set to solana:devnet/);
-  await expect(status).toContainText(/Testnet Mode → Solana Devnet/);
+  await expect(page.locator('[data-phase="done"]')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('[data-phase="error"]')).toHaveCount(0);
 });
 
 test("a graduated coin closes trading and links the Raydium pool", async ({ page }) => {

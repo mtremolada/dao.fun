@@ -1316,3 +1316,36 @@ would see their Config decoded as a phantom coin. The e2e stub now
 applies dataSize + memcmp the way a validator does and seeds the Config
 decoy, so the FILTERS are what the spec proves; the harness's fabricated
 curve grew its bump byte to match the deployed size.
+
+## D-046 — FIX: the wallet-cluster preflight blocked legitimate devnet users (2026-08-09)
+
+**Symptom (operator, live):** wallet on Phantom devnet, profile page
+correctly showing its 2 devnet SOL, and every send refused before signing
+with "Your wallet isn't set to solana:devnet."
+
+**Cause.** The D-038 preflight compared the wallet-standard `chains` list
+against the target chain id. That list is what a wallet SUPPORTS, not the
+network it currently has selected — wallet-standard exposes no way to read
+the active one — and Phantom in Testnet Mode reports a list without
+`solana:devnet` while sitting on devnet. The guard therefore rejected the
+exact configuration it was meant to serve.
+
+**Fix.** The list only carries information when the WALLET does the
+broadcasting, because only then does the wallet pick the network. The
+guard now runs exactly when that is true (`(preferWalletBroadcast ||
+no signOnly) && signAndSend`). On devnet we take the sign-only path and
+broadcast the signed bytes to OUR rpc with OUR blockhash, so the cluster
+is fixed by construction and the wallet's selected network cannot affect
+where the transaction lands — signing is over message bytes and is
+network-agnostic.
+
+The real trap detector is untouched: a wallet-broadcast signature that
+never appears on our rpc is still reported as wrong-cluster with the
+per-wallet switch hints (D-038's substantive protection).
+
+**Doctrine note.** The e2e that "proved" the guard encoded the bug: it
+asserted a mainnet-advertising wallet is stopped. It now asserts the
+opposite — that such a wallet trades successfully on devnet — which is
+the behavior a real user has. A test can only pin what it was told to
+pin; this one pinned an assumption about wallets that the wallets do not
+honor.
