@@ -23,6 +23,18 @@ raise earns only 0.0198 SOL of protocol fee against 0.1922 of overhead, so
 the vault paid 0.023987 and the raise covered 0.168169 — summing to the
 overhead exactly. On mainnet the vault covers it 2.76×.
 
+**Coordinated program+SDK deploy ORDER (D-060, learned the hard way):** the
+`deploy-pages.yml` workflow auto-publishes the frontend on every push to this
+branch, running `next build` against the SDK source. So when a change touches
+BOTH the program and the SDK's account layouts (e.g. migrate's PDA accounts),
+you must **deploy the program to devnet FIRST (local build → `solana program
+deploy --use-rpc`), THEN push** — otherwise the push deploys the new frontend
+before the program exists, and the crank paths (migrate, collect_protocol_fee)
+break for the gap between the two. Buy/sell/create are unaffected (their
+builders don't change), and a failed crank only reverts, but do it in the
+right order anyway. Verify the live bundle afterward: it must contain the
+deployed program id and the new seeds (`migration-wsol`/`migration-token`).
+
 **Deploy gotchas (runbook):** `solana program deploy` needs `--use-rpc` from
 this container — the CLI's TPU/pubsub path fails TLS through the agent proxy
 with `InvalidCertificate(UnknownIssuer)`. Failed attempts orphan buffers

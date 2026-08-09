@@ -2339,3 +2339,21 @@ sweep allowed. The launchpad now has 5 migrated coins; deployer at 9.24 SOL.
 
 The `--frontrun` flag is now a permanent part of `devnet-smoke` so the B1
 scenario is one command on any future redeploy.
+
+### D-060 second addendum — live frontend hard-verified (2026-08-09)
+
+Confirmed the deploy is genuinely coordinated, not just CI-green. The GitHub
+Pages workflow auto-publishes on push to this branch, so `deploy-pages` run #72
+(commit `0c7d55d`) rebuilt the app against the new SDK. Fetched the live site
+(`mtremolada.github.io/dao.fun`, HTTP 200) and grepped the content-hashed JS
+bundle: it carries the deployed launchpad id `DaV3ystSgyM9…` (no stale id), the
+current gate id `4UioBmH3…` (no leftover `3QgQJ4Eu…`), and BOTH new migrate
+seeds `migration-wsol` and `migration-token` — strings that exist only in the
+post-B1 SDK. So the served frontend runs the new SDK against the new program.
+
+The one honest wrinkle: the SDK/fix commit was pushed (auto-deploying the
+frontend) ~40 min BEFORE the program was deployed, so for that window the live
+site ran new-SDK-vs-old-program — the crank paths (migrate, collect_protocol_fee)
+would have failed, buy/sell/create unaffected, no funds at risk. Closed now.
+The correct order (program first, then push) is written into the CLAUDE.md
+runbook so it does not recur.
