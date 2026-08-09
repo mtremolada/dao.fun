@@ -18,7 +18,6 @@ import {
   type MarketCapTier,
 } from "@daofun/sdk/launch-form";
 import { useWallet } from "./wallet-provider";
-import { makeSigningWallet } from "../lib/signing-wallet";
 import { getConnection } from "../lib/solana";
 import { createCoin } from "../lib/coin-actions";
 import { runLaunch, type LaunchResult, type LaunchStepState } from "../lib/launch";
@@ -99,7 +98,7 @@ async function fileToBase64(file: File): Promise<{ base64: string; mime: string 
 }
 
 export function CreateScreen() {
-  const { wallet, account, sender, openModal } = useWallet();
+  const { wallet, account, sender, getSigner, openModal } = useWallet();
   const router = useRouter();
 
   const [kind, setKind] = useState<Kind>("simple");
@@ -209,7 +208,11 @@ export function CreateScreen() {
 
       if (kind === "simple") {
         setSteps((s) => [...s, "Creating the coin…"]);
-        const signer = makeSigningWallet(wallet, account);
+        const signer = getSigner();
+        if (!signer) {
+          setError("This wallet cannot sign transactions.");
+          return;
+        }
         const { state: st, mint } = await createCoin(
           { name, symbol, uri },
           { connection: getConnection(), wallet: signer, onState: setState },

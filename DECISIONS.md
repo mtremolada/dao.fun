@@ -1349,3 +1349,35 @@ opposite — that such a wallet trades successfully on devnet — which is
 the behavior a real user has. A test can only pin what it was told to
 pin; this one pinned an assumption about wallets that the wallets do not
 honor.
+
+## D-047 — FIX: injected-provider connections could not sign anything (2026-08-09)
+
+**Symptom (operator, live):** "wallet cannot sign transactions" on create,
+immediately after D-046 unblocked the cluster guard.
+
+**Cause.** The app has TWO connect paths. Wallet-standard yields
+`{wallet, account}` with signing features. The INJECTED path — preferred
+for Phantom/Solflare because wallet-standard connect throws Phantom's
+-32603 in some setups (see lib/injected.ts) — yields a provider plus a
+BARE `{address}` account, no wallet-standard account object. Yet all
+three screens built their signer with `makeSigningWallet(wallet,
+account)`, which reads wallet-standard features and needs the real
+account. On an injected connection it found nothing to sign with, so the
+pipeline reported "wallet cannot sign transactions". Trading and the
+profile actions had the same defect; the operator simply hit create
+first.
+
+**Fix.** Signer construction moved INTO the wallet provider as
+`getSigner()`, which returns the adapter matching the ACTIVE connection —
+`signingWalletFromProvider` (new) for injected, `makeSigningWallet` for
+wallet-standard. Screens no longer choose. The injected adapter exposes
+signOnly (provider.signTransaction) and signAndSend
+(provider.signAndSendTransaction), so the devnet rule still holds: sign
+only, and we broadcast to our own rpc.
+
+**Why it shipped.** The e2e installed only a wallet-standard fake, so the
+path real wallets take was never executed. The harness now also installs
+a fake INJECTED provider (window.phantom.solana) and
+app/e2e/injected-wallet.spec.ts creates a coin and trades through it —
+both fail against the previous code. Coverage of the shape a test
+fabricates is not coverage of the shape production uses.

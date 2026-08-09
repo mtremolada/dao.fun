@@ -15,7 +15,6 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "./wallet-provider";
-import { makeSigningWallet } from "../lib/signing-wallet";
 import { getConnection } from "../lib/solana";
 import { claimCreatorFees, graduate, type ActionCtx } from "../lib/coin-actions";
 import { fetchClaimableCreatorFees, fetchLaunchesByCreator } from "../lib/profile";
@@ -82,7 +81,7 @@ function LaunchRow({
 }
 
 export function ProfileScreen() {
-  const { account, wallet, openModal } = useWallet();
+  const { account, wallet, getSigner, openModal } = useWallet();
   const address = account?.address ?? null;
 
   const [launches, setLaunches] = useState<CoinView[]>([]);
@@ -134,12 +133,17 @@ export function ProfileScreen() {
       openModal();
       return;
     }
+    const signer = getSigner();
+    if (!signer) {
+      setState({ phase: "failed", reason: "rpc-error", message: "This wallet cannot sign transactions." });
+      return;
+    }
     setBusy(true);
     setState(null);
     try {
       const st = await fn(coin, {
         connection: getConnection(),
-        wallet: makeSigningWallet(wallet, account),
+        wallet: signer,
         onState: setState,
       });
       if (st.phase === "confirmed") refresh();

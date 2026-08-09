@@ -504,6 +504,28 @@ export async function installFakeWallet(
   );
 }
 
+/**
+ * Register a fake INJECTED provider (window.phantom.solana) — the path
+ * Phantom actually uses and the wallet-standard fake does NOT exercise.
+ * It signs by echoing the transaction bytes back, like the standard fake.
+ */
+export async function installInjectedWallet(page: Page): Promise<void> {
+  await page.addInitScript(({ address }) => {
+    const provider = {
+      isPhantom: true,
+      publicKey: { toString: () => address },
+      connect: async () => ({ publicKey: { toString: () => address } }),
+      disconnect: async () => {},
+      // Legacy injected API: takes and returns a Transaction-like object.
+      signTransaction: async (tx: { serialize: (o?: unknown) => Uint8Array }) => ({
+        serialize: () => tx.serialize({ requireAllSignatures: false, verifySignatures: false }),
+      }),
+    };
+    (window as unknown as Record<string, unknown>)["phantom"] = { solana: provider };
+    (window as unknown as Record<string, unknown>)["solana"] = provider;
+  }, { address: WALLET_ADDRESS });
+}
+
 /** Connect the fake wallet through the real top-right modal. */
 export async function connectWallet(page: Page): Promise<void> {
   await page.getByTestId("connect-wallet").click();

@@ -33,7 +33,6 @@ import {
 } from "../lib/amm-actions";
 import { computePosition, topTraders } from "../lib/position";
 import { useWallet } from "./wallet-provider";
-import { makeSigningWallet } from "../lib/signing-wallet";
 import { getConnection } from "../lib/solana";
 import { buy, quoteBuy, quoteSell, sell } from "../lib/coin-actions";
 import type { SendState } from "../lib/tx-sender";
@@ -218,7 +217,7 @@ function TradePanel({
   tokenBalance: bigint | null;
   onConfirmed: () => void;
 }) {
-  const { wallet, account } = useWallet();
+  const { wallet, account, getSigner } = useWallet();
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [amount, setAmount] = useState("");
   const [slippageBps, setSlippage] = useState(100);
@@ -248,7 +247,11 @@ function TradePanel({
 
   async function submit() {
     if (!wallet || !account) return;
-    const signer = makeSigningWallet(wallet, account);
+    const signer = getSigner();
+    if (!signer) {
+      setState({ phase: "failed", reason: "rpc-error", message: "This wallet cannot sign transactions." });
+      return;
+    }
     const ctx = {
       connection: getConnection(),
       wallet: signer,

@@ -27,7 +27,14 @@ import {
   type WalletAccountLike,
 } from "../lib/wallet-standard";
 import { makeWalletSender, type WalletSender } from "../lib/wallet-sender";
-import { connectInjected, injectedProvider } from "../lib/injected";
+import {
+  connectInjected,
+  injectedProvider,
+  signingWalletFromProvider,
+  type SolanaProvider,
+} from "../lib/injected";
+import { makeSigningWallet } from "../lib/signing-wallet";
+import type { SigningWallet } from "../lib/tx-sender";
 import {
   allowedDetected,
   clearLastWalletName,
@@ -46,6 +53,13 @@ export interface WalletContextValue {
   connectedName: string | null;
   /** Sender for the vote/deposit flows (wallet signs + broadcasts); null until connected. */
   sender: WalletSender | null;
+  /**
+   * The send pipeline's signer for the ACTIVE connection. Injected providers
+   * (Phantom's preferred path) have no wallet-standard account, so the
+   * adapter differs per connection — screens must ask for it here rather
+   * than building one themselves.
+   */
+  getSigner: () => SigningWallet | null;
   connecting: boolean;
   error: string | null;
   modalOpen: boolean;
@@ -90,7 +104,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [modalOpen, setModalOpen] = useState(false);
   const eagerTried = useRef(false);
   const ledgerRef = useRef<{ disconnect: () => Promise<void> } | null>(null);
-  const injectedRef = useRef<{ disconnect?: () => Promise<void> } | null>(null);
+  const injectedRef = useRef<SolanaProvider | null>(null);
 
   // Live wallet-standard discovery, restricted to the supported wallets.
   useEffect(
@@ -250,6 +264,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const openModal = useCallback(() => setModalOpen(true), []);
   const closeModal = useCallback(() => setModalOpen(false), []);
 
+  /**
+   * Pick the signer that matches how we are actually connected. The injected
+   * provider takes precedence because that is the connection we made: for
+   * those, `account` is a bare address and the wallet-standard features
+   * cannot sign for it.
+   */
+  const getSigner = useCallback((): SigningWallet | null => {
+    if (!account) return null;
+    if (injectedRef.current) {
+      return signingWalletFromProvider(injectedRef.current, account.address);
+    }
+    if (wallet) return makeSigningWallet(wallet, account);
+    return null;
+  }, [wallet, account]);
+
   const value = useMemo<WalletContextValue>(
     () => ({
       wallets,
@@ -257,6 +286,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       account,
       connectedName,
       sender,
+      getSigner,
       connecting,
       error,
       modalOpen,
@@ -272,6 +302,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       account,
       connectedName,
       sender,
+      getSigner,
       connecting,
       error,
       modalOpen,
