@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { boardBucket, type BoardBucket } from "@daofun/sdk/launchpad";
+import { boardBucket, type BoardBucket, type DecodedCurve } from "@daofun/sdk/launchpad";
 import {
   apiConfigured,
   launchpadApi,
@@ -23,6 +23,8 @@ import {
 } from "../lib/chain-coin";
 import { watchAllCurves, type LiveStatus } from "../lib/live";
 import { getConnection } from "../lib/solana";
+import { readPreferApi } from "../lib/read-path";
+import { batchByFrame } from "../lib/coalesce";
 import { truncateAddress } from "../lib/wallet-registry";
 
 /**
@@ -61,31 +63,60 @@ function CoinCard({ coin }: { coin: CoinView }) {
   );
 }
 
+/**
+ * Placeholders while the first read is in flight.
+ *
+ * A slow RPC used to render an empty column, which reads as "there are no
+ * coins" — the one message the board must never send by accident. Cards of
+ * roughly the right shape say "loading" without a spinner, and keep the layout
+ * from jumping when the real ones arrive.
+ */
+function SkeletonCards({ count = 3 }: { count?: number }) {
+  return (
+    <div aria-hidden data-testid="board-skeleton">
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="card coin-card skeleton">
+          <div className="skeleton-line" style={{ width: "60%" }} />
+          <div className="skeleton-line" style={{ width: "35%" }} />
+          <div className="progress">
+            <span style={{ width: "0%" }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function BoardScreen() {
   const [buckets, setBuckets] = useState<Buckets>(emptyBuckets());
   const [error, setError] = useState<string | null>(null);
+  /** The indexer was configured and did not answer; we are on the chain path. */
+  const [degraded, setDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
 
   const load = useCallback(async (): Promise<Buckets> => {
-    if (apiConfigured()) {
+    const { value, degraded } = await readPreferApi<Buckets>({
+      apiConfigured: apiConfigured(),
       // The indexer buckets server-side; ask for all three at once.
-      const [fresh, nearly, done] = await Promise.all([
-        launchpadApi.board("new"),
-        launchpadApi.board("graduating"),
-        launchpadApi.board("graduated"),
-      ]);
-      return { new: fresh, graduating: nearly, graduated: done };
-    }
-    // No indexer: read the board from the program itself — bucketed, ranked
-    // and capped before any metadata is fetched, so the cost does not grow
-    // with the launchpad. Discovery cannot come from localStorage; that showed
-    // each visitor only their own history and hid every coin created
-    // elsewhere. It stays only as a HINT, for a coin too new to be in the
-    // scan's snapshot.
-    const connection = getConnection();
-    const out = await fetchBoardFromChain(connection, { hints: loadLocalCoins() });
-    return out;
+      fromApi: async () => {
+        const [fresh, nearly, done] = await Promise.all([
+          launchpadApi.board("new"),
+          launchpadApi.board("graduating"),
+          launchpadApi.board("graduated"),
+        ]);
+        return { new: fresh, graduating: nearly, graduated: done };
+      },
+      // No indexer, or the indexer is down: read the board from the program
+      // itself — bucketed, ranked and capped before any metadata is fetched,
+      // so the cost does not grow with the launchpad. Discovery cannot come
+      // from localStorage; that showed each visitor only their own history and
+      // hid every coin created elsewhere. It stays only as a HINT, for a coin
+      // too new to be in the scan's snapshot.
+      fromChain: () => fetchBoardFromChain(getConnection(), { hints: loadLocalCoins() }),
+    });
+    setDegraded(degraded);
+    return value;
   }, []);
 
   useEffect(() => {
@@ -104,11 +135,14 @@ export function BoardScreen() {
     };
   }, [load]);
 
-  // Live updates: every column refreshes when the feed reports activity.
+  // Live updates: every column refreshes when the feed reports activity, and
+  // on every (re)connection — a stream that dropped has a hole in it, and a
+  // hole in a board looks exactly like a quiet market.
   useEffect(() => {
-    return subscribeLaunchpad(() => {
+    const reload = () => {
       load().then(setBuckets).catch(() => {});
-    });
+    };
+    return subscribeLaunchpad(reload, { onResync: reload });
   }, [load]);
 
   // Live board. One program subscription covers the whole launchpad: every
@@ -132,30 +166,41 @@ export function BoardScreen() {
       }, RELOAD_DEBOUNCE_MS);
     };
 
-    const handle = watchAllCurves(
-      connection,
-      (curve) => {
-        const mint = curve.mint.toBase58();
+    // One state commit per frame. During a busy launch this feed delivers
+    // tens of updates a second, and a setState per push re-buckets and
+    // re-sorts every column that many times — work the screen cannot show.
+    // Keyed by mint, so a coin's older state is superseded rather than queued.
+    const batch = batchByFrame<DecodedCurve>(
+      (curves) => {
         setBuckets((prev) => {
-          const known = (Object.keys(prev) as BoardBucket[])
-            .flatMap((k) => prev[k])
-            .find((c) => c.mint === mint);
-          if (!known) {
-            scheduleReload();
-            return prev;
+          const byMint = new Map(
+            (Object.keys(prev) as BoardBucket[]).flatMap((k) => prev[k]).map((c) => [c.mint, c]),
+          );
+          const updates = new Map<string, CoinView>();
+          for (const curve of curves) {
+            const mint = curve.mint.toBase58();
+            const known = byMint.get(mint);
+            if (!known) {
+              scheduleReload();
+              continue;
+            }
+            updates.set(
+              mint,
+              coinViewFromCurve(mint, curve, {
+                name: known.name,
+                symbol: known.symbol,
+                uri: known.uri,
+              }),
+            );
           }
-          const updated = coinViewFromCurve(mint, curve, {
-            name: known.name,
-            symbol: known.symbol,
-            uri: known.uri,
-          });
+          if (updates.size === 0) return prev;
           // Re-bucket as well as re-render: a trade can be the one that
           // pushes a coin past the graduating threshold, and the column it
           // sits in is part of the information.
           const next = { new: [], graduating: [], graduated: [] } as Buckets;
           for (const key of Object.keys(prev) as BoardBucket[]) {
             for (const coin of prev[key]) {
-              const view = coin.mint === mint ? updated : coin;
+              const view = updates.get(coin.mint) ?? coin;
               next[boardBucket(view)].push(view);
             }
           }
@@ -165,10 +210,15 @@ export function BoardScreen() {
           return next;
         });
       },
-      { onStatus: setLiveStatus },
+      { key: (c) => c.mint.toBase58() },
     );
+
+    const handle = watchAllCurves(connection, (curve) => batch.push(curve), {
+      onStatus: setLiveStatus,
+    });
     return () => {
       if (reloadTimer) clearTimeout(reloadTimer);
+      batch.stop();
       handle.stop();
     };
   }, [load]);
@@ -198,6 +248,11 @@ export function BoardScreen() {
         </p>
       )}
       {error && <div className="errors">Could not load the board: {error}</div>}
+      {degraded && (
+        <div className="errors" data-testid="degraded-banner">
+          Live feed unavailable — reading the board directly from the chain.
+        </div>
+      )}
 
       <div className="board-columns">
         {COLUMNS.map((col) => (
@@ -208,7 +263,7 @@ export function BoardScreen() {
             </header>
             <div className="board-column-body">
               {loading ? (
-                <p className="muted small">Loading…</p>
+                <SkeletonCards />
               ) : buckets[col.key].length === 0 ? (
                 <p className="muted small">
                   {col.key === "new" && total === 0 ? (

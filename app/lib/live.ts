@@ -101,6 +101,12 @@ export function watchAllCurves(
   };
 
   const reconcile = () => {
+    // A hidden tab has nothing to show, and this read is a full program scan.
+    // Multiplied by every background tab every 30 seconds it is one of the
+    // largest avoidable costs in the client, and skipping it changes nothing
+    // a user can see: the visibility handler below reconciles the moment the
+    // tab comes back, so returning to it is still correct immediately.
+    if (isHidden()) return;
     fetchCurvesFromChain(connection)
       .then((curves) => {
         if (!stopped) for (const c of curves) onCurve(c);
@@ -146,16 +152,31 @@ export function watchAllCurves(
   // than a data-loss bug.
   const reconcileTimer = setInterval(reconcile, RECONCILE_MS);
 
+  // Coming back to a tab is exactly when a stale screen is most likely and
+  // most noticeable, so reconcile on becoming visible rather than waiting out
+  // the rest of the interval.
+  const onVisible = () => {
+    if (!stopped && !isHidden()) reconcile();
+  };
+  const doc = typeof document !== "undefined" ? document : null;
+  doc?.addEventListener("visibilitychange", onVisible);
+
   return {
     stop() {
       stopped = true;
       clearInterval(reconcileTimer);
+      doc?.removeEventListener("visibilitychange", onVisible);
       if (pollTimer) clearInterval(pollTimer);
       if (subId !== null) {
         connection.removeProgramAccountChangeListener(subId).catch(() => {});
       }
     },
   };
+}
+
+/** True when the tab is in the background. False anywhere without a document. */
+function isHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
 /** The slice of the ws client we use, kept narrow since it is not public API. */

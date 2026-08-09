@@ -21,6 +21,7 @@ import {
   type LaunchpadHandlerDeps,
 } from "../src/launchpad/handler";
 import { withCors } from "../src/cors";
+import { Metrics } from "../src/launchpad/metrics";
 
 const servers: Server[] = [];
 afterEach(() => {
@@ -391,5 +392,70 @@ describe("cors", () => {
       headers: { origin: "https://evil.example" },
     });
     expect(denied.status).toBe(403);
+  });
+});
+
+describe("metrics endpoint", () => {
+  it("serves the snapshot, and Prometheus text on demand", async () => {
+    const store = memStore();
+    const metrics = new Metrics({ indexedSlot: () => store.maxSlot(), chainSlot: async () => 500 });
+    const base = await start(createLaunchpadHandler({ store, metrics }));
+
+    const snap = (await (await fetch(`${base}/metrics`)).json()) as Record<string, unknown>;
+    expect(snap).toHaveProperty("indexerLagSlots");
+    expect(snap).toHaveProperty("sseClients");
+
+    const prom = await fetch(`${base}/metrics?format=prom`);
+    expect(prom.headers.get("content-type")).toContain("text/plain");
+    expect(await prom.text()).toContain("daofun_chain_slot 500");
+  });
+
+  it("says metrics are not configured rather than inventing zeros", async () => {
+    const base = await start(createLaunchpadHandler({ store: memStore() }));
+    expect((await fetch(`${base}/metrics`)).status).toBe(501);
+  });
+
+  it("counts proxy calls including the refusals — a probe is the thing to see", async () => {
+    const fakeFetch = (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
+    const metrics = new Metrics();
+    const base = await start(
+      createLaunchpadHandler({
+        store: memStore(),
+        metrics,
+        rpcProxy: { upstreamUrl: "https://x", fetchImpl: fakeFetch, burst: 5, ratePerSecond: 5 },
+      }),
+    );
+    const call = (method: string) =>
+      fetch(`${base}/rpc/devnet`, {
+        method: "POST",
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: [] }),
+      });
+    await call("getLatestBlockhash");
+    await call("getProgramAccounts"); // refused
+    const snap = await metrics.snapshot();
+    expect(snap.rpcProxyCallsTotal).toBe(2);
+    expect(snap.rpcProxyErrorsTotal).toBe(1);
+  });
+
+  it("allows the priority-fee sample through the proxy", async () => {
+    // Without this the browser's fee estimator is silently 403'd behind the
+    // API and every trade falls back to the constant it was meant to replace.
+    let forwarded = 0;
+    const fakeFetch = (async () => {
+      forwarded += 1;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const base = await start(
+      createLaunchpadHandler({
+        store: memStore(),
+        rpcProxy: { upstreamUrl: "https://x", fetchImpl: fakeFetch, burst: 5, ratePerSecond: 5 },
+      }),
+    );
+    const r = await fetch(`${base}/rpc/devnet`, {
+      method: "POST",
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getRecentPrioritizationFees", params: [] }),
+    });
+    expect(r.status).toBe(200);
+    expect(forwarded).toBe(1);
   });
 });

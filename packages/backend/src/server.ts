@@ -40,6 +40,7 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { SseHub } from "./launchpad/sse";
+import { Metrics } from "./launchpad/metrics";
 import { SelfHostUploader } from "./launchpad/metadata-uploader";
 import { createLaunchpadHandler, type LaunchpadHandlerDeps } from "./launchpad/handler";
 import { withCors, parseOrigins } from "./cors";
@@ -70,7 +71,59 @@ async function main(): Promise<void> {
   const programId = new PublicKey(env("LAUNCHPAD_PROGRAM_ID"));
   const store = SqliteLaunchpadStore.fromEnv(env("LAUNCHPAD_STORE", "sqlite:.data/launchpad.db"));
   const connection = new Connection(rpcUrl, "confirmed");
-  const sse = new SseHub({ heartbeatMs: Number(env("SSE_HEARTBEAT_MS", "25000")) });
+  // Metrics first: the SSE hub and the indexer both report into it.
+  const metrics = new Metrics({
+    sseClients: () => sse.size,
+    indexedSlot: () => store.maxSlot(),
+    chainSlot: () => chainSlot(),
+    keeperLamports: () => keeperBalance(),
+  });
+  const sse = new SseHub({
+    heartbeatMs: Number(env("SSE_HEARTBEAT_MS", "25000")),
+    maxClients: Number(env("SSE_MAX_CLIENTS", "1000")),
+    maxPerClient: Number(env("SSE_MAX_PER_CLIENT", "12")),
+    onRejected: (reason, key) => {
+      metrics.sseRejected();
+      log.warn("sse refused", { reason, key });
+    },
+  });
+
+  /**
+   * The chain head, cached: indexer lag needs it on every scrape, and a
+   * scrape must never become a way to burn RPC quota. Failure returns null,
+   * which reports as UNKNOWN lag rather than as a healthy zero.
+   */
+  let chainSlotCache: { at: number; slot: number } | null = null;
+  async function chainSlot(): Promise<number | null> {
+    if (chainSlotCache && Date.now() - chainSlotCache.at < 5_000) return chainSlotCache.slot;
+    try {
+      const slot = await connection.getSlot("confirmed");
+      metrics.upstreamCall(true);
+      chainSlotCache = { at: Date.now(), slot };
+      return slot;
+    } catch {
+      metrics.upstreamCall(false);
+      return null;
+    }
+  }
+
+  /** A drained keeper stops graduations silently; this is how that surfaces. */
+  let keeperBalanceCache: { at: number; lamports: number } | null = null;
+  async function keeperBalance(): Promise<number | null> {
+    if (!keeperKp) return null;
+    if (keeperBalanceCache && Date.now() - keeperBalanceCache.at < 30_000) {
+      return keeperBalanceCache.lamports;
+    }
+    try {
+      const lamports = await connection.getBalance(keeperKp.publicKey);
+      metrics.upstreamCall(true);
+      keeperBalanceCache = { at: Date.now(), lamports };
+      return lamports;
+    } catch {
+      metrics.upstreamCall(false);
+      return null;
+    }
+  }
 
   // Read the on-chain config once for the fee recipient the migrate needs.
   let feeRecipient: PublicKey | null = null;
@@ -97,7 +150,12 @@ async function main(): Promise<void> {
   const indexer = new LaunchpadIndexer({
     store,
     source: new RpcTxSource(connection, programId),
-    sink: (event, ctx) => sse.broadcast({ event: `launchpad:${event.kind}`, data: { event, ...ctx } }),
+    sink: (event, ctx) => {
+      metrics.eventPublished();
+      sse.broadcast({ event: `launchpad:${event.kind}`, data: { event, ...ctx } });
+    },
+    fetchConcurrency: Number(env("INDEXER_FETCH_CONCURRENCY", "8")),
+    onRpcCall: (ok) => metrics.upstreamCall(ok),
     onError: (err, where) => log.error("indexer", { where, err: (err as Error).message }),
   });
 
@@ -242,6 +300,7 @@ async function main(): Promise<void> {
   const deps: LaunchpadHandlerDeps = {
     store,
     sse,
+    metrics,
     healthExtra: () => ({ cluster }),
     ...(process.env.RPC_PROXY_UPSTREAM
       ? { rpcProxy: { upstreamUrl: env("RPC_PROXY_UPSTREAM") } }

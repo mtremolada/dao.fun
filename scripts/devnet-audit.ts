@@ -1,15 +1,29 @@
 /**
- * Devnet audit — read the LIVE state and check it against what the program,
+ * Cluster audit — read the LIVE state and check it against what the program,
  * the SDK and the docs claim. Read-only: it signs nothing and spends nothing,
  * so it is safe to run any time, and it is the thing to run before believing
- * a devnet gate.
+ * a gate.
  *
  * The point is not "does it print nicely" — it is that every invariant we
  * assert in bankrun is re-checked against real accounts a real deploy
  * produced. A test suite can only prove things about the binary it loads;
  * this proves the deployed binary was configured and driven correctly.
  *
- *   pnpm tsx scripts/devnet-audit.ts [--rpc <url>]
+ *   pnpm tsx scripts/devnet-audit.ts [--cluster devnet|mainnet] [--rpc <url>]
+ *
+ * `--cluster mainnet` exists so the mainnet audit (LAUNCH.md L-26) is a FLAG
+ * on a script proven over months on devnet, rather than a new script written
+ * on launch day. The cluster changes three expectations and nothing else:
+ *
+ *   - the CPMM program and the 1% AmmConfig are different ADDRESSES per
+ *     cluster (the tier's INDEX differs too — 1 on mainnet, 3 on devnet —
+ *     which is exactly why the config stores an address, not an index);
+ *   - `lockProgram` MUST be unset on devnet, because Raydium's locker is not
+ *     deployed there and migrate must burn; on mainnet it must be SET, or
+ *     every graduation silently takes the burn branch and the whole
+ *     post-graduation fee model quietly does not exist;
+ *   - migrated pools therefore have LP supply zero on devnet (burned), and
+ *     LP held by the locker on mainnet.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -27,16 +41,45 @@ import {
 } from "../packages/sdk/src/launchpad";
 import {
   PROPOSAL_GATE_PROGRAM_ID,
+  RAYDIUM_CPMM_AMM_CONFIG_1PCT,
   RAYDIUM_CPMM_AMM_CONFIG_1PCT_DEVNET,
+  RAYDIUM_CPMM_PROGRAM_ID,
   RAYDIUM_CPMM_PROGRAM_ID_DEVNET,
+  RAYDIUM_LOCK_PROGRAM_ID,
 } from "../packages/sdk/src/constants";
 
 const PROGRAM_ID = new PublicKey(
   process.env.LAUNCHPAD_PROGRAM_ID ?? "DaV3ystSgyM9ALDCbtv9AzyfEtAuPe9x8jVacYDdSU7V",
 );
-const rpcArg = process.argv.indexOf("--rpc");
+function arg(name: string): string | null {
+  const i = process.argv.indexOf(`--${name}`);
+  return i > -1 ? process.argv[i + 1] ?? null : null;
+}
+
+const CLUSTER = (arg("cluster") ?? "devnet") as "devnet" | "mainnet";
+if (CLUSTER !== "devnet" && CLUSTER !== "mainnet") {
+  throw new Error(`--cluster must be devnet or mainnet, got ${CLUSTER}`);
+}
+const IS_DEVNET = CLUSTER === "devnet";
 const RPC =
-  rpcArg > -1 ? process.argv[rpcArg + 1]! : "https://api.devnet.solana.com";
+  arg("rpc") ??
+  (IS_DEVNET ? "https://api.devnet.solana.com" : "https://api.mainnet-beta.solana.com");
+
+/** What the config must name on this cluster. */
+const EXPECTED = IS_DEVNET
+  ? {
+      cpmm: RAYDIUM_CPMM_PROGRAM_ID_DEVNET,
+      tier: RAYDIUM_CPMM_AMM_CONFIG_1PCT_DEVNET,
+      tierLabel: "devnet index 3",
+      // Not "we chose not to lock": there is no locker on devnet to point at.
+      lock: PublicKey.default,
+    }
+  : {
+      cpmm: RAYDIUM_CPMM_PROGRAM_ID,
+      tier: RAYDIUM_CPMM_AMM_CONFIG_1PCT,
+      tierLabel: "mainnet index 1",
+      lock: RAYDIUM_LOCK_PROGRAM_ID,
+    };
 
 /** Curve account length — the size filter that keeps Config out of the scan. */
 const CURVE_LEN = 8 + 32 + 32 + 8 * 4 + 2 + 2 + 1 + 1 + 32 + 1;
@@ -51,7 +94,7 @@ function check(ok: boolean, label: string, detail = ""): void {
 
 async function main(): Promise<void> {
   const connection = new Connection(RPC, "confirmed");
-  console.log(`RPC ${RPC}\nprogram ${PROGRAM_ID.toBase58()}\n`);
+  console.log(`cluster ${CLUSTER}\nRPC ${RPC}\nprogram ${PROGRAM_ID.toBase58()}\n`);
 
   // ---- the program account itself ----
   const programInfo = await connection.getAccountInfo(PROGRAM_ID);
@@ -140,12 +183,17 @@ async function main(): Promise<void> {
     `${cfg.protocolFeeBps}+${cfg.creatorFeeBps}`);
   check(cfg.graduationFeeLamports === 0n, "no separate graduation fee is charged",
     `${SOL(cfg.graduationFeeLamports)} SOL`);
-  check(cfg.cpmmProgram.equals(RAYDIUM_CPMM_PROGRAM_ID_DEVNET),
-    "cpmmProgram is Raydium's DEVNET CPMM");
-  check(cfg.cpmmAmmConfig.equals(RAYDIUM_CPMM_AMM_CONFIG_1PCT_DEVNET),
-    "graduation tier is the 1% AmmConfig (devnet index 3)");
-  check(cfg.lockProgram.equals(PublicKey.default),
-    "lockProgram is unset — devnet BURNS, as it must (no locker there)");
+  check(cfg.cpmmProgram.equals(EXPECTED.cpmm),
+    `cpmmProgram is Raydium's ${CLUSTER.toUpperCase()} CPMM`,
+    cfg.cpmmProgram.toBase58());
+  check(cfg.cpmmAmmConfig.equals(EXPECTED.tier),
+    `graduation tier is the 1% AmmConfig (${EXPECTED.tierLabel})`,
+    cfg.cpmmAmmConfig.toBase58());
+  check(cfg.lockProgram.equals(EXPECTED.lock),
+    IS_DEVNET
+      ? "lockProgram is unset — devnet BURNS, as it must (no locker there)"
+      : "lockProgram is Raydium's locker — mainnet must LOCK, not burn",
+    cfg.lockProgram.equals(PublicKey.default) ? "unset" : cfg.lockProgram.toBase58());
 
   // The tier must be an account Raydium owns, or a hostile 'config' could be
   // handed to `initialize` (REDTEAM 4c.8).
@@ -219,26 +267,46 @@ async function main(): Promise<void> {
           `vault0 ${v0?.value.uiAmountString ?? "?"}  vault1 ${v1?.value.uiAmountString ?? "?"}`,
       );
       const lpSupply = await connection.getTokenSupply(pool.lpMint).catch(() => null);
-      // Devnet has no locker, so migrate BURNS. The check is on the LP MINT's
-      // real supply, not on the pool's `lp_supply` field: Raydium never mints
-      // the 100 it locks at initialize (it just subtracts it) and only
-      // decrements its own counter on withdraw, so after our burn the pool
-      // still reports its original number while the mint reports the truth.
-      // Zero is the strongest form of the guarantee — not "the LP is held
-      // somewhere safe" but "no LP exists, so no withdraw is possible".
-      check(
-        lpSupply !== null && BigInt(lpSupply.value.amount) === 0n,
-        `  ${tag} LP supply is ZERO — every LP token was burned`,
-        lpSupply
-          ? `mint ${lpSupply.value.amount}, pool counter ${pool.lpSupply}`
-          : "unreadable",
-      );
+      // The check is on the LP MINT's real supply, not on the pool's
+      // `lp_supply` field: Raydium never mints the 100 it locks at initialize
+      // (it just subtracts it) and only decrements its own counter on
+      // withdraw, so the pool still reports its original number while the
+      // mint reports the truth.
+      if (IS_DEVNET) {
+        // No locker here, so migrate BURNS. Zero is the strongest form of the
+        // guarantee — not "the LP is held somewhere safe" but "no LP exists,
+        // so no withdraw is possible".
+        check(
+          lpSupply !== null && BigInt(lpSupply.value.amount) === 0n,
+          `  ${tag} LP supply is ZERO — every LP token was burned`,
+          lpSupply
+            ? `mint ${lpSupply.value.amount}, pool counter ${pool.lpSupply}`
+            : "unreadable",
+        );
+      } else {
+        // On mainnet the LP is LOCKED, not burned, and that is what earns the
+        // perpetual fee. A zero supply here would mean the lock branch
+        // silently did not run — the exact failure that would leave the whole
+        // post-graduation fee model non-existent while every screen still
+        // said "graduated".
+        check(
+          lpSupply !== null && BigInt(lpSupply.value.amount) > 0n,
+          `  ${tag} LP supply is NON-ZERO — the LP was locked, not burned`,
+          lpSupply ? `mint ${lpSupply.value.amount}` : "unreadable",
+        );
+      }
     }
 
-    // ...and on the burn branch there must be NO graduated-fee record, which
-    // is exactly what the UI keys off to say "burned" rather than "locked".
+    // The graduated-fee record is the branch marker: absent means burned,
+    // present means locked. It is what the UI keys off, so an audit that
+    // ignored it could pass while the surface told users the opposite.
     const gradInfo = await connection.getAccountInfo(graduatedFeesPda(mint, PROGRAM_ID));
-    check(gradInfo === null, `  ${tag} has no graduated-fee record (burn branch)`);
+    check(
+      IS_DEVNET ? gradInfo === null : gradInfo !== null,
+      IS_DEVNET
+        ? `  ${tag} has no graduated-fee record (burn branch)`
+        : `  ${tag} HAS a graduated-fee record (lock branch)`,
+    );
   }
 
   // ---- creator vaults ----

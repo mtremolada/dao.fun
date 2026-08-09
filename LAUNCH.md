@@ -52,7 +52,7 @@ Secondary but needed before money moves:
 | **L-10** | Execute the L-01 policy on `launchpad-curve` (revoke or transfer). | operator | **YES** |
 | **L-11** | Execute the L-01 policy on `proposal-gate`. | operator | **YES** |
 | **L-12** | Decide and execute the policy for `config.authority` — it can move the fee recipient, the graduation tier, the lock program and the graduated split. An upgrade-locked program with a hot config authority is still a hot program. | operator | **YES** |
-| **L-13** | Document in-product what a user is trusting: who can upgrade, who holds config authority, what they can and cannot change. | me | no |
+| **L-13** | ~~Document in-product what a user is trusting.~~ **DONE (D-057)** — `/disclaimer` separates chain-enforced, people-held (upgrade authority, config authority, the site, your RPC) and not-guaranteed, each with the command to verify it. | me | no |
 
 **Verification (L-10/L-11):** `solana program show <id>` reports the intended
 authority (or none), and the devnet audit's binary-match check still passes.
@@ -79,7 +79,7 @@ cluster and, for governance, not even the same programs (D-053).
 | **L-23** | `set_graduation_config` with the **1% tier** `G95xxie3XbkCqtE39GgQ9Ggc7xBC8Uceve7HFDEFApkc` (mainnet index 1 — the indices differ per cluster, which is why tiers are addresses) and the **locker** `LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE`. This is what turns on the lock branch. | **YES** |
 | **L-24** | Deploy `proposal-gate` to mainnet. `/launch` DEFAULTS to guarded; with no gate deployed every guarded launch fails, which is exactly the live break found on devnet (D-053). | **YES** |
 | **L-25** | Point the app at mainnet: `NEXT_PUBLIC_CLUSTER`, program ids, RPC. | **YES** |
-| **L-26** | Port `scripts/devnet-audit.ts` to a `--cluster mainnet` mode and run it. | **YES** |
+| **L-26** | Port `scripts/devnet-audit.ts` to a `--cluster mainnet` mode and run it. **CODE DONE (D-057)** — the flag exists and inverts the lock-branch expectations (LP non-zero, graduated-fee record present); the RUN still needs a mainnet deploy. | **YES** |
 
 **Verification:** the audit passes every check against mainnet, including
 both binaries matching their fixtures and the config reading the intended
@@ -94,13 +94,13 @@ not polish.
 
 | # | Item | Blocking |
 |---|---|---|
-| **L-30** | **Dynamic priority fee.** `ConstantFeeEstimator` returns a fixed 10,000 µlamports: it overpays when quiet and fails to land exactly when a launch is hot. Sample `getRecentPrioritizationFees`, take a high percentile, apply a floor AND a ceiling, show it in the confirm UI, escalate on retry. `FeeEstimator` is already an interface. | **YES** — a trade that does not land is the product failing |
-| **L-31** | Coalesce live updates into one state commit per animation frame. | **YES** at L-04 ≥ a few hundred |
-| **L-32** | Reconnect with exponential backoff + jitter, resuming from a cursor so a reconnect backfills instead of silently skipping. | **YES** |
-| **L-33** | Throttle hidden tabs (render and reconcile). | no |
+| **L-30** | ~~**Dynamic priority fee.**~~ **DONE (D-057)** — `RecentFeeEstimator` samples per WRITTEN account, p75, floor + ceiling + 5s cache, escalates on a new attempt (never on an in-flight rebroadcast), shows the fee in the status line, falls back to the old constant when the RPC refuses the method. Proxy allowlist fixed to pass `getRecentPrioritizationFees`. | ~~YES~~ done |
+| **L-31** | ~~Coalesce live updates into one state commit per animation frame.~~ **DONE (D-057)** — `coalesce.ts`, keyed by mint so the buffer is bounded in a hidden tab. | ~~YES~~ done |
+| **L-32** | ~~Reconnect with exponential backoff + jitter, resuming from a cursor.~~ **DONE (D-057)** — backoff + FULL jitter, and **resync on every connect** instead of a cursor replay: we keep no server-side event log, and a resync cannot have a gap while a replay window can. | ~~YES~~ done |
+| **L-33** | ~~Throttle hidden tabs (render and reconcile).~~ **DONE (D-057)** — the 30s reconcile is a full program scan; it is skipped while hidden and runs on return. | no |
 | **L-34** | Virtualise the trade tape and any column past ~100 rows. | no |
 | **L-35** | Optimistic local echo of your own trade, replaced by the confirmed event. | no |
-| **L-36** | Skeletons and explicit error states on every chain-reading screen. | no |
+| **L-36** | Skeletons and explicit error states on every chain-reading screen. **PARTLY DONE (D-057)** — board skeletons + degraded banners on board and coin; the remaining screens still show plain text. | no |
 | **L-37** | Code-split `/create` (324 kB first load; most visitors never launch). | no |
 
 **Verification:** a synthetic feed at 50 events/s through the e2e harness with
@@ -118,8 +118,8 @@ crowd is affordable.
 |---|---|---|
 | **L-40** | Deploy `packages/backend` (indexer + API + SSE + keeper) on the L-02 RPC. | **YES** |
 | **L-41** | Set `NEXT_PUBLIC_API_URL` so the app uses it. | **YES** |
-| **L-42** | **When the API is configured, the client must stop scanning and stop subscribing to the RPC.** Today the chain-direct live path still runs; without this the per-user RPC cost stays. | **YES** |
-| **L-43** | Keep chain-direct as an explicit degraded fallback, so an API outage is survivable. | **YES** |
+| **L-42** | ~~**When the API is configured, the client must stop scanning and stop subscribing to the RPC.**~~ **DONE (D-057)** — `read-path.ts`; the coin page's unconditional `fetchCoinFromChain` was the surviving leak. Wallet balances, pool reserves for quoting and the signing path stay chain-direct on purpose. | ~~YES~~ done |
+| **L-43** | ~~Keep chain-direct as an explicit degraded fallback.~~ **DONE (D-057)** — and it SAYS so; chain-direct with no API configured is deliberately not flagged as degraded. | ~~YES~~ done |
 | **L-44** | CDN the board endpoint with a short TTL + `stale-while-revalidate`. | no |
 | **L-45** | Fund and monitor the keeper wallet (L-06). Graduations and fee collection are permissionless but happen only if somebody cranks. | **YES** |
 | **L-46** | Domain, TLS, CORS pinned to the real origins (not open). | **YES** |
@@ -159,10 +159,10 @@ look at.
 
 | # | Item | Blocking |
 |---|---|---|
-| **L-60** | Server metrics: **indexer lag in slots** (the number that says the feed is behind), SSE client count, events/s, RPC calls/min and error rate. | **YES** |
+| **L-60** | ~~Server metrics.~~ **DONE (D-057)** — `GET /metrics` (JSON, or Prometheus text with `?format=prom`): indexer lag in slots reported as ABSENT rather than a false zero when the head cannot be read, SSE clients, events/s, proxy and upstream RPC rates and errors, keeper balance. | ~~YES~~ done |
 | **L-61** | Alerts on indexer lag, SSE disconnect rate, RPC 429s, keeper balance below floor. | **YES** |
 | **L-62** | Client telemetry: connection-state transitions, reconnects, event age, failed sends with reason. The status plumbing exists; nothing collects it. | no |
-| **L-63** | Per-IP SSE connection caps (`maxClients` is global, not per client), body-size limits, method allowlist on the RPC proxy. | **YES** |
+| **L-63** | ~~Per-IP SSE connection caps, body-size limits, method allowlist.~~ **DONE (D-057)** — per-client cap added beside the global one (keyed on the forwarded address; a fairness cap, not a security boundary — the global cap is the spoof-proof backstop). Body limits and the allowlist already existed. | ~~YES~~ done |
 | **L-64** | A status page or banner the operator can flip during an incident. | no |
 
 ---
@@ -210,8 +210,8 @@ loudly for every user.
 
 | # | Item |
 |---|---|
-| **L-90** | Finish GATE L5: `pnpm tsx scripts/devnet-guarded-advance.ts vfwHWftREkcTUGiqRdaMhCVEFB1tU6LpJvKHg4F6Wy3` — finalizable ~3 days after 2026-08-09, then execute after the 72h hold-up. |
-| **L-91** | Indexer transaction fetch is serial inside the tick loop; fine at devnet volume, will fall behind a busy mainnet. Concurrency within a batch (SCALING.md). |
+| **L-90** | Finish GATE L5's PRODUCTION-params proposal: `pnpm tsx scripts/devnet-guarded-advance.ts vfwHWftREkcTUGiqRdaMhCVEFB1tU6LpJvKHg4F6Wy3` — finalizable ~3 days after 2026-08-09, then execute after the 72h hold-up. **The lifecycle itself is already proven live** by `--fast` (D-057); this run confirms it at production timings. |
+| **L-91** | ~~Indexer transaction fetch is serial inside the tick loop.~~ **DONE (D-057)** — bounded concurrency, applied strictly in slot order, and anything fetched past a read failure is discarded rather than applied. |
 | **L-92** | SQLite → Postgres and split ingester/SSE nodes — only at ~5,000 concurrent (PLAN-FRONTEND-SCALE Stage 3). |
 
 ---
@@ -246,8 +246,6 @@ Short enough to hold in your head:
 - Mainnet binaries not verified against fixtures (**L-21, L-26**)
 - Locker and 1% tier not set in config (**L-23**)
 - proposal-gate not deployed — the DEFAULT launch path (**L-24**)
-- Priority fee still a constant (**L-30**)
-- Client still hitting the RPC per user with the API configured (**L-42**)
-- No indexer-lag metric or alerting (**L-60, L-61**)
+- No alerting destination wired (**L-61**) — the metrics behind it are done
 - Keeper unfunded or unmonitored (**L-45**)
 - GATE L4 canary unsigned (**L-50**)

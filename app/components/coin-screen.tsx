@@ -76,6 +76,7 @@ import { computePosition, topTraders } from "../lib/position";
 import { formatTokenAmount, parseTokenAmount } from "../lib/amount";
 import { useWallet } from "./wallet-provider";
 import { getConnection } from "../lib/solana";
+import { readPreferApi } from "../lib/read-path";
 import { fetchGraduatedFees, type GraduatedFees } from "../lib/graduated";
 import { watchCurve, type LiveStatus } from "../lib/live";
 import {
@@ -272,6 +273,13 @@ function TradePanel({
   const [amount, setAmount] = useState("");
   const [slippageBps, setSlippage] = useState(100);
   const [state, setState] = useState<SendState | null>(null);
+  /**
+   * How many times this trade has expired. A retry at the price that already
+   * lost the auction loses it again, so the estimator escalates on it. Bounded
+   * because an unbounded exponent is a way to spend someone's money by
+   * accident; the estimator's ceiling is the second bound.
+   */
+  const [feeAttempt, setFeeAttempt] = useState(0);
   const onAmm = coin.migrated && amm != null;
 
   const quote = useMemo(() => {
@@ -305,9 +313,21 @@ function TradePanel({
     const ctx = {
       connection: getConnection(),
       wallet: signer,
+      feeAttempt,
       onState: (s: SendState) => {
-        setState(s);
-        if (s.phase === "confirmed") onConfirmed();
+        // The fee is known once, at signing; carry it forward so the status
+        // line can keep showing what this trade is paying for its place in
+        // the block rather than dropping it on the next phase.
+        setState((prev) =>
+          s.priorityFee || !prev?.priorityFee ? s : { ...s, priorityFee: prev.priorityFee },
+        );
+        if (s.phase === "confirmed") {
+          setFeeAttempt(0);
+          onConfirmed();
+        }
+        if (s.phase === "failed" && s.reason === "expired") {
+          setFeeAttempt((a) => Math.min(a + 1, 4));
+        }
       },
     };
     try {
@@ -450,6 +470,14 @@ function TradePanel({
 }
 
 function TxStatus({ state }: { state: SendState }) {
+  // Spending a user's money on urgency without telling them is not something
+  // a trading app gets to do quietly.
+  const fee = state.priorityFee ? (
+    <span className="muted small" data-testid="priority-fee">
+      {" "}· priority fee {SOL(BigInt(state.priorityFee.lamports))} SOL
+    </span>
+  ) : null;
+
   if (state.phase === "confirmed") {
     return (
       <p className="status" data-phase="done">
@@ -457,6 +485,7 @@ function TxStatus({ state }: { state: SendState }) {
         {state.signature && (
           <a href={explorerTx(state.signature)} target="_blank" rel="noreferrer">view on explorer</a>
         )}
+        {fee}
       </p>
     );
   }
@@ -474,7 +503,11 @@ function TxStatus({ state }: { state: SendState }) {
       </p>
     );
   }
-  return <p className="status" data-phase={state.phase}>⏳ {state.phase}…</p>;
+  return (
+    <p className="status" data-phase={state.phase}>
+      ⏳ {state.phase}…{fee}
+    </p>
+  );
 }
 
 /* ------------------------------------------------------------- activity -- */
@@ -602,28 +635,34 @@ export function CoinScreen() {
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
+  /** The indexer was configured and did not answer; we are on the chain path. */
+  const [degraded, setDegraded] = useState(false);
   const tradeWatch = useRef<TradeWatch | null>(null);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
-  // Coin state: chain first (works with only an RPC), indexer as enhancement.
+  // Coin state. With an indexer configured it answers, and the chain is only
+  // read if it could not — reading BOTH is what makes the RPC cost scale with
+  // viewers, which is the thing the indexer exists to stop (read-path.ts).
   useEffect(() => {
     if (!mint) return;
     let live = true;
     rememberCoin(mint);
-    fetchCoinFromChain(getConnection(), mint)
-      .then((c) => {
+    readPreferApi<CoinView | null>({
+      apiConfigured: apiConfigured(),
+      fromApi: () => launchpadApi.coin(mint),
+      fromChain: () => fetchCoinFromChain(getConnection(), mint),
+    })
+      .then(({ value, degraded }) => {
         if (!live) return;
-        if (c) {
-          setCoin(c);
+        setDegraded(degraded);
+        if (value) {
+          setCoin(value);
           setError(null);
-        } else if (!apiConfigured()) {
+        } else {
           setError("No curve found for this mint on this cluster.");
         }
       })
-      .catch(() => {});
-    if (apiConfigured()) {
-      launchpadApi.coin(mint).then((c) => live && setCoin(c)).catch(() => {});
-    }
+      .catch((e) => live && setError((e as Error).message));
     return () => {
       live = false;
     };
@@ -639,13 +678,18 @@ export function CoinScreen() {
         launchpadApi.candles(mint, 60).then((c) => live && setApiCandles(c)).catch(() => {});
       };
       load();
-      const unsub = subscribeLaunchpad((_k, data) => {
-        const d = data as { event?: { mint?: string } };
-        if (d.event?.mint === mint) {
-          load();
-          refresh();
-        }
-      });
+      const unsub = subscribeLaunchpad(
+        (_k, data) => {
+          const d = data as { event?: { mint?: string } };
+          if (d.event?.mint === mint) {
+            load();
+            refresh();
+          }
+        },
+        // Every reconnect re-reads: trades published while the stream was
+        // down are simply gone from it, and a gap in a tape is invisible.
+        { onResync: load },
+      );
       return () => {
         live = false;
         unsub();
@@ -744,6 +788,14 @@ export function CoinScreen() {
   return (
     <div className="terminal">
       <div className="terminal-main">
+        {degraded && (
+          // Not an error — the page works. But the fast path is down, so say
+          // so rather than let it look like an ordinary slow day.
+          <div className="errors" data-testid="degraded-banner">
+            Live feed unavailable — reading directly from the chain. Prices are
+            correct; history and updates may lag.
+          </div>
+        )}
         <div className="card">
           <div className="coin-title">
             <h1>{coin.name}</h1>

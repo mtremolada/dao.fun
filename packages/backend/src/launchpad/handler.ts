@@ -23,6 +23,7 @@ import { PublicKey } from "@solana/web3.js";
 import type { SqliteLaunchpadStore, CoinRow, TradeRow } from "./store";
 import type { SseHub } from "./sse";
 import { Cooldown, TokenBucket } from "./ratelimit";
+import { toPrometheus, type Metrics } from "./metrics";
 
 export interface MetadataUploadInput {
   name: string;
@@ -62,6 +63,8 @@ export interface LaunchpadHandlerDeps {
   metadataDir?: string;
   /** Extra fields merged into /health. */
   healthExtra?: () => Record<string, unknown>;
+  /** Serves GET /metrics. Absent → the route reports 501 rather than lying. */
+  metrics?: Metrics;
 }
 
 const DEFAULT_ALLOWED_RPC_METHODS = [
@@ -79,6 +82,10 @@ const DEFAULT_ALLOWED_RPC_METHODS = [
   "getTokenLargestAccounts",
   "getFeeForMessage",
   "getGenesisHash",
+  // The client prices its priority fee from this (app/lib/fees.ts). Without
+  // it here the proxy answers 403, the estimator silently falls back to the
+  // constant, and the dynamic fee quietly stops existing behind the API.
+  "getRecentPrioritizationFees",
 ];
 
 const METADATA_MAX_BYTES = 8 * 1024 * 1024;
@@ -190,6 +197,23 @@ async function handle(
       sseClients: deps.sse?.size ?? 0,
       ...(deps.healthExtra?.() ?? {}),
     });
+  }
+
+  // GET /metrics[?format=prom]
+  if (method === "GET" && url.pathname === "/metrics") {
+    if (!deps.metrics) return json(res, 501, { error: "metrics not configured" });
+    const snap = await deps.metrics.snapshot();
+    if (url.searchParams.get("format") === "prom") {
+      const body = toPrometheus(snap);
+      res.writeHead(200, {
+        "content-type": "text/plain; version=0.0.4",
+        "content-length": Buffer.byteLength(body),
+        "cache-control": "no-store",
+      });
+      res.end(body);
+      return;
+    }
+    return json(res, 200, snap);
   }
 
   // GET /launchpad/board
@@ -309,11 +333,19 @@ async function handle(
   if (method === "POST" && seg[0] === "rpc") {
     if (!deps.rpcProxy || !rpcBucket) return json(res, 501, { error: "rpc proxy not configured" });
     const ip = clientIp(req);
-    if (!rpcBucket.take(ip)) return json(res, 429, { error: "rate limited" });
+    // Every outcome is counted, including the refusals — a spike in refused
+    // calls is the signal that someone is probing, and counting only the
+    // successes would hide exactly that.
+    const count = (ok: boolean) => deps.metrics?.rpcProxyCall(ok);
+    if (!rpcBucket.take(ip)) {
+      count(false);
+      return json(res, 429, { error: "rate limited" });
+    }
     let body: unknown;
     try {
       body = JSON.parse((await readRawBody(req, JSON_MAX_BYTES)).toString("utf8"));
     } catch {
+      count(false);
       return json(res, 400, { error: "invalid json-rpc body" });
     }
     const allow = new Set(deps.rpcProxy.allowedMethods ?? DEFAULT_ALLOWED_RPC_METHODS);
@@ -321,15 +353,23 @@ async function handle(
     for (const c of calls) {
       const m = (c as { method?: unknown }).method;
       if (typeof m !== "string" || !allow.has(m)) {
+        count(false);
         return json(res, 403, { error: `method not allowed: ${String(m)}` });
       }
     }
     const doFetch = deps.rpcProxy.fetchImpl ?? fetch;
-    const upstream = await doFetch(deps.rpcProxy.upstreamUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let upstream: Awaited<ReturnType<typeof fetch>>;
+    try {
+      upstream = await doFetch(deps.rpcProxy.upstreamUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      count(false);
+      return json(res, 502, { error: (e as Error).message });
+    }
+    count(upstream.ok);
     const text = await upstream.text();
     res.writeHead(upstream.status, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(text);

@@ -29,11 +29,9 @@ import {
   type DecodedCpmmPool,
 } from "@daofun/sdk/launchpad";
 import { sendTransaction, type SendRpc, type SendState, type SigningWallet } from "./tx-sender";
-import { ConstantFeeEstimator } from "./fees";
+import { feeEstimatorFor } from "./fees";
 import { chainId, isDevnet, launchpadProgramId } from "./cluster";
 import type { CoinView } from "./launchpad-api";
-
-const feeEstimator = new ConstantFeeEstimator();
 
 export interface AmmContext {
   poolState: PublicKey;
@@ -182,6 +180,12 @@ export interface AmmActionCtx {
   connection: Connection;
   wallet: SigningWallet;
   onState?: (s: SendState) => void;
+  /**
+   * Retry counter for THIS logical trade — escalates the priority fee on a
+   * re-attempt after an expiry. A retry at the price that already lost the
+   * auction loses it again.
+   */
+  feeAttempt?: number;
 }
 
 export async function ammBuy(
@@ -229,7 +233,8 @@ function sendCommon(ctx: AmmActionCtx) {
     wallet: ctx.wallet,
     connection: ctx.connection as unknown as SendRpc,
     chainId: chainId(),
-    feeEstimator,
+    feeEstimator: feeEstimatorFor(ctx.connection),
+    feeAttempt: ctx.feeAttempt ?? 0,
     explainError: explainLaunchpadError,
     preferWalletBroadcast: !isDevnet(),
     onState: ctx.onState,

@@ -126,6 +126,44 @@ describe("watchAllCurves", () => {
     expect(reconciles).toBe(1);
   });
 
+  it("does not scan the program while the tab is hidden, and catches up on return", async () => {
+    // The reconcile read is a FULL program scan. Left running in every
+    // background tab it is one of the largest avoidable costs in the client,
+    // and a hidden tab has nothing to show for it.
+    vi.useFakeTimers();
+    const listeners: Record<string, (() => void)[]> = {};
+    const doc = {
+      visibilityState: "hidden" as string,
+      addEventListener: (ev: string, cb: () => void) => {
+        (listeners[ev] ??= []).push(cb);
+      },
+      removeEventListener: () => {},
+    };
+    vi.stubGlobal("document", doc);
+    let reconciles = 0;
+    const connection = {
+      onProgramAccountChange: () => 1,
+      removeProgramAccountChangeListener: async () => {},
+      getProgramAccounts: async () => {
+        reconciles++;
+        return [{ pubkey: MINT, account: { data: curveBytes(3n) } }];
+      },
+    } as unknown as Connection;
+
+    const h = watchAllCurves(connection, () => {});
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(reconciles).toBe(0); // four intervals elapsed, no scans
+
+    doc.visibilityState = "visible";
+    listeners.visibilitychange!.forEach((cb) => cb());
+    await vi.advanceTimersByTimeAsync(1);
+    // Back in front: reconcile immediately rather than showing a stale board
+    // for the remainder of the interval.
+    expect(reconciles).toBe(1);
+    h.stop();
+    vi.unstubAllGlobals();
+  });
+
   it("reports the SOCKET's state, not the fact that subscribe() returned", () => {
     const listeners: Record<string, () => void> = {};
     const connection = {

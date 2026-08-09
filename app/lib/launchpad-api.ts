@@ -95,30 +95,109 @@ export const launchpadApi = {
   },
 };
 
+export type FeedStatus = "connecting" | "open" | "reconnecting";
+
+export interface SubscribeOptions {
+  /**
+   * Called on every (re)connection, including the first.
+   *
+   * This is the correctness half of the feed. A stream that drops has a HOLE
+   * in it, and a hole in a trade tape is invisible — it looks like a quiet
+   * minute. Rather than trying to replay the gap (which needs a server-side
+   * event log we do not keep, and which is only ever as good as its retention
+   * window), the client RE-READS state on every connect. A resync cannot have
+   * a gap by construction; a replay window can.
+   */
+  onResync?: () => void;
+  onStatus?: (s: FeedStatus) => void;
+  /** Seams, so the reconnect policy is testable without a network. */
+  EventSourceImpl?: typeof EventSource;
+  setTimeoutImpl?: (cb: () => void, ms: number) => number;
+  clearTimeoutImpl?: (h: number) => void;
+  random?: () => number;
+}
+
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
+
 /**
- * Subscribe to the live event feed. EventSource reconnects automatically, so a
- * dropped connection (Railway's 15-min cap) is transparent. Returns an
- * unsubscribe function; a no-op when the API or EventSource is unavailable.
+ * Subscribe to the live event feed.
+ *
+ * EventSource reconnects on its own, but on a fixed timer every client shares:
+ * when the server restarts, every viewer comes back at the same instant and
+ * the herd finishes what the restart started. So the retry is managed here
+ * instead — exponential, and JITTERED, which is the part that actually
+ * spreads the herd out.
+ *
+ * Returns an unsubscribe function; a no-op when the API or EventSource is
+ * unavailable.
  */
 export function subscribeLaunchpad(
   onEvent: (kind: string, data: unknown) => void,
+  opts: SubscribeOptions = {},
 ): () => void {
-  if (!apiConfigured() || typeof EventSource === "undefined") return () => {};
-  const es = new EventSource(`${API}/launchpad/events`);
+  const ES = opts.EventSourceImpl ?? (typeof EventSource !== "undefined" ? EventSource : undefined);
+  if (!apiConfigured() || !ES) return () => {};
+
+  const setT = opts.setTimeoutImpl ?? ((cb, ms) => setTimeout(cb, ms) as unknown as number);
+  const clearT = opts.clearTimeoutImpl ?? ((h) => clearTimeout(h as unknown as ReturnType<typeof setTimeout>));
+  const random = opts.random ?? Math.random;
   const kinds = ["launchpad:create", "launchpad:trade", "launchpad:complete", "launchpad:migrate"];
-  const handlers = kinds.map((k) => {
-    const h = (e: MessageEvent) => {
-      try {
-        onEvent(k, JSON.parse(e.data));
-      } catch {
-        /* ignore malformed frame */
-      }
+
+  let stopped = false;
+  let attempt = 0;
+  let es: EventSource | null = null;
+  let timer: number | null = null;
+
+  const connect = () => {
+    if (stopped) return;
+    opts.onStatus?.(attempt === 0 ? "connecting" : "reconnecting");
+    const source = new ES(`${API}/launchpad/events`);
+    es = source;
+
+    source.onopen = () => {
+      if (stopped) return;
+      attempt = 0;
+      opts.onStatus?.("open");
+      // Every connect, not just reconnects: the first one also needs the
+      // state that existed before the stream started.
+      opts.onResync?.();
     };
-    es.addEventListener(k, h as EventListener);
-    return { k, h };
-  });
+
+    for (const k of kinds) {
+      source.addEventListener(k, ((e: MessageEvent) => {
+        if (stopped) return;
+        try {
+          onEvent(k, JSON.parse(e.data));
+        } catch {
+          /* ignore malformed frame */
+        }
+      }) as EventListener);
+    }
+
+    source.onerror = () => {
+      if (stopped) return;
+      // Close before scheduling: EventSource would otherwise retry on its own
+      // timer as well, and we would hold two connections per client.
+      source.close();
+      if (es === source) es = null;
+      const backoff = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt);
+      attempt += 1;
+      // Full jitter. Half of a synchronised herd retrying at the same
+      // millisecond is still a herd; a uniform draw over [0, backoff) is what
+      // actually spreads them across the window.
+      const delay = Math.floor(random() * backoff);
+      opts.onStatus?.("reconnecting");
+      timer = setT(connect, delay);
+    };
+  };
+
+  connect();
+
   return () => {
-    for (const { k, h } of handlers) es.removeEventListener(k, h as EventListener);
-    es.close();
+    stopped = true;
+    if (timer !== null) clearT(timer);
+    es?.close();
+    es = null;
   };
 }

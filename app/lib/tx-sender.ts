@@ -17,7 +17,14 @@ import {
   type Keypair,
   type TransactionInstruction,
 } from "@solana/web3.js";
-import type { FeeEstimator } from "./fees";
+import { priorityFeeLamports, type FeeEstimator } from "./fees";
+
+/** Stable, de-duplicated write set — the same accounts must hash to one key. */
+function dedupeKeys(keys: PublicKey[]): PublicKey[] {
+  const seen = new Map<string, PublicKey>();
+  for (const k of keys) seen.set(k.toBase58(), k);
+  return [...seen.values()];
+}
 
 export type SendPhase =
   | "preflight"
@@ -40,6 +47,12 @@ export interface SendState {
   signature?: string;
   reason?: FailReason;
   message?: string;
+  /**
+   * What this send is bidding for block space, once known. Surfaced so the UI
+   * can say it out loud: an app that spends a user's money on urgency without
+   * telling them is not one they will keep trusting.
+   */
+  priorityFee?: { microLamports: number; computeUnits: number; lamports: number };
 }
 
 export interface SigningWallet {
@@ -84,6 +97,13 @@ export interface SendParams {
   extraSigners?: Keypair[] | undefined;
   sleep?: ((ms: number) => Promise<void>) | undefined;
   pollLimit?: number | undefined;
+  /**
+   * 0 for a first attempt, 1 for the first retry. This escalates the PRICE of
+   * a NEW attempt; it must never change an in-flight one. The rebroadcast loop
+   * below deliberately resends the same signed bytes, because re-signing under
+   * a fresh blockhash is how a retry becomes a second, duplicate trade.
+   */
+  feeAttempt?: number | undefined;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -137,7 +157,17 @@ export async function sendTransaction(p: SendParams): Promise<SendState> {
   }
 
   const feePayer = new PublicKey(p.wallet.address);
-  const microLamports = await p.feeEstimator.priorityFeeMicroLamports();
+  // Price against what this transaction LOCKS FOR WRITING — congestion is
+  // per-account, so the fee to touch a hot coin's curve has nothing to do with
+  // the fee to touch a quiet one. The fee payer is always written (it pays).
+  const writableAccounts = [
+    feePayer,
+    ...p.instructions.flatMap((ix) => ix.keys.filter((k) => k.isWritable).map((k) => k.pubkey)),
+  ];
+  const microLamports = await p.feeEstimator.priorityFeeMicroLamports({
+    writableAccounts: dedupeKeys(writableAccounts),
+    attempt: p.feeAttempt ?? 0,
+  });
   const build = (unitLimit: number): Transaction => {
     const tx = new Transaction();
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports }));
@@ -172,7 +202,15 @@ export async function sendTransaction(p: SendParams): Promise<SendState> {
   if (p.extraSigners && p.extraSigners.length > 0) tx.partialSign(...p.extraSigners);
 
   // --- signing ---
-  emit({ phase: "signing" });
+  // The compute limit is only known after simulation, so this is the first
+  // point at which the priority fee can be stated as an amount of SOL rather
+  // than as a price per unit.
+  const priorityFee = {
+    microLamports,
+    computeUnits: unitLimit,
+    lamports: priorityFeeLamports(microLamports, unitLimit),
+  };
+  emit({ phase: "signing", priorityFee });
   const useWalletBroadcast = p.preferWalletBroadcast && !!p.wallet.signAndSend;
 
   let signature = "";

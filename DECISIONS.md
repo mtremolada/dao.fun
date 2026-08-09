@@ -1974,3 +1974,174 @@ program touches to every connected client: the right trade at this size, the
 wrong one at a hundred times it, which is exactly where the backend's SSE
 fan-out takes over (SCALING.md). Live-by-default now, one env var away from
 server-fanned later.
+
+## D-057 — Finishing what devnet can finish (2026-08-09)
+
+Operator: *"Whatever is left to do on devnet — let's finish that now."*
+`PLAN-DEVNET-FINISH.md` is the scope: every LAUNCH.md item completable without
+mainnet SOL and without a decision that is not mine. What follows is what was
+built, and — more usefully — what each thing is defending against.
+
+### The gate's last two legs, proven live by outwaiting a real clock
+
+GATE L5 left `finalize` and `execute` untested on a real cluster, because the
+production params are a 3-day window and a 72-hour hold-up. Those are the legs
+where the gate hands control back to ordinary governance, so leaving them
+unrun was leaving the interesting part unproven.
+
+Rather than wait three days, `devnet-guarded-run.ts --fast` runs the SAME
+production ceremony against a governance whose window and hold-up are short,
+and drives it to `Completed`. Only two numbers differ, and they are governance
+CONFIG: every account, every builder, every CPI and the deployed gate binary
+are the production ones.
+
+The window is ONE HOUR rather than minutes, and not by choice —
+`withCreateGovernance` refuses anything shorter ("baseVotingTime should be at
+least 1 hour"). Hand-building the instruction would have bought a faster run
+at the cost of no longer exercising `buildCreateDaoIxs`, which is the entire
+reason to run this live. An hour of waiting was the cheaper price.
+
+The hold-up is short but **non-zero** on purpose, and the run attempts an
+execution inside it and requires the refusal. A hold-up that is configured and
+not enforced looks identical on a passing run; the only way to tell is to try
+it. And the final check is on the treasury's LAMPORTS, not on the proposal's
+state — a proposal that reaches `Completed` without moving the money it
+promised passes every state check and is still broken.
+
+The advance logic (finalize / hold-up / execute) moved into
+`scripts/lib/gov-advance.ts` so the fast run and the real one cannot drift. If
+the fast run proved a different code path than the one that finishes the
+production proposal in three days, it would prove nothing about it.
+
+### The priority fee was a constant, which is wrong in both directions
+
+`ConstantFeeEstimator` bid a flat 10,000 µlamports: too much on a quiet chain,
+and far too little exactly when a launch is hot and everyone is bidding for
+the same block. A trade that does not land is the product failing.
+
+`RecentFeeEstimator` samples `getRecentPrioritizationFees` **for the accounts
+the transaction writes** — congestion is per-account, so the price of touching
+a hot coin's curve has nothing to do with a quiet one's — takes a high
+percentile, and clamps. Three guards, each for a different failure:
+
+- a **ceiling**, so a fee spike cannot quietly drain a wallet;
+- a **floor**, because the RPC reports the MINIMUM fee per slot and a quiet
+  chain reports mostly zeros; bidding zero is how you sit unconfirmed the
+  moment the chain wakes up;
+- a **fallback to the old constant** when the RPC does not serve the method,
+  because degrading below today's behaviour would be a regression dressed as
+  an upgrade.
+
+Retries escalate. Critically, that applies to a NEW attempt — the rebroadcast
+loop still resends the SAME signed bytes, because re-signing under a fresh
+blockhash is how a retry becomes a second, duplicate trade.
+
+And it is shown in the UI. An app that spends a user's money on urgency
+without telling them is not one they keep trusting.
+
+**A trap this nearly walked into:** the browser's RPC goes through our proxy
+when the API is configured, and the proxy is method-allowlisted.
+`getRecentPrioritizationFees` was not on the list, so behind the API every
+estimate would have 403'd and fallen back to the constant — the dynamic fee
+would have silently not existed in production while passing every test.
+
+### Metrics, and the number that actually matters
+
+**Indexer lag in slots** is the one metric that distinguishes "the market is
+quiet" from "the feed is behind". Every other symptom — a stale board, a
+missing trade, a flat chart tail — is downstream of it and looks identical
+either way.
+
+It is reported as **absent, not zero**, when the chain head cannot be read. A
+metric that reports 0 because it failed looks exactly like perfect health, and
+it will be believed. `toPrometheus` omits unknowns for the same reason: a
+scraped `lag 0` would silence the alert the metric exists for. Gauges that
+throw are caught — an observability surface that fails when things are going
+wrong is worse than none, because it fails precisely when it is needed.
+
+### One client could deny the fan-out to everybody
+
+`maxClients` was global. One browser opening a thousand connections reached it
+alone and every other viewer got a 503 — a denial of service that needs no
+exploit, just a loop. There is now a per-client cap alongside it, keyed on the
+forwarded address (the socket address is the proxy's, so it would have lumped
+every visitor together and locked the site at a dozen users).
+
+That key is client-supplied and therefore spoofable, which is why it is a
+FAIRNESS cap and not a security boundary; the global cap remains the backstop.
+Both events that can end a connection decrement exactly once — a double
+decrement would let the cap drift upward until it capped nothing.
+
+### The client kept reading the chain even with an indexer configured
+
+The board already skipped the chain-direct live path when the API was set, but
+the coin page read `fetchCoinFromChain` unconditionally, so the per-viewer RPC
+cost survived the change that was supposed to remove it. `read-path.ts` makes
+the rule explicit and testable: the indexer serves what it can, the chain is a
+FALLBACK, and falling back is **visible** — a silent fallback restores the cost
+and hides the outage that caused it.
+
+Reading chain-direct with no indexer configured is NOT degraded; it is the
+zero-config design, and flagging it would put an outage banner on a healthy
+site. Reads only the chain can answer — a wallet's own balance, a pool's live
+reserves for quoting, the whole signing path — stay chain-direct at any scale.
+The trading path must not centralise.
+
+### Renders, reconnects, and the tab you are not looking at
+
+- **Coalescing** (`coalesce.ts`): one state commit per frame, keyed by mint so
+  a coin's older state is superseded rather than queued. Not a debounce — the
+  update still lands on the very next frame, so latency is unchanged and the
+  work is a fraction. The key also bounds the buffer, which matters in a
+  hidden tab where `requestAnimationFrame` never fires at all.
+- **Reconnect** with exponential backoff and **full jitter**. EventSource
+  retries on a fixed timer every client shares, so a server restart brings the
+  whole herd back at the same instant and finishes what the restart started.
+  The jitter is the actual fix; a test that only checked "it retries" would
+  pass without it.
+- **Resync on every connect**, rather than replaying from a cursor. Events
+  published while a client was disconnected are gone from the stream, and a
+  gap in a trade tape is invisible — it reads as a quiet minute. A resync
+  cannot have a gap by construction; a replay window is only ever as good as
+  its retention. We keep no server-side event log, so replay would have been
+  the weaker guarantee AND the larger build.
+- **Hidden tabs stop scanning.** The 30-second reconcile is a full program
+  scan; multiplied by every background tab it was one of the largest avoidable
+  costs in the client. It now skips while hidden and reconciles the moment the
+  tab returns, so nothing a user can see changes.
+
+### Indexer throughput
+
+Transactions were fetched one at a time inside the tick loop, capping the feed
+at (page size × round trip) regardless of how fast the chain moved. They now
+fetch concurrently — but apply STRICTLY in slot order, and anything fetched
+beyond a read failure is DISCARDED rather than applied. Concurrency is an I/O
+detail; ordering is a correctness property, and the cursor advancing only over
+the applied prefix is what makes the whole thing resumable.
+
+### The audit grew a --cluster flag
+
+So the mainnet audit (L-26) is a flag on a script proven over months, not a
+script written under launch-day pressure. Three expectations invert:
+
+- the CPMM program and the 1% tier are different ADDRESSES per cluster (the
+  tier's INDEX differs too — 1 on mainnet, 3 on devnet — which is exactly why
+  the config stores an address);
+- `lockProgram` must be UNSET on devnet and SET on mainnet;
+- migrated pools therefore have LP supply **zero** on devnet (burned) and
+  **non-zero** on mainnet (locked), with the graduated-fee record absent and
+  present respectively.
+
+That inversion is the point. On mainnet, a zero LP supply would mean the lock
+branch silently did not run — the entire post-graduation fee model would not
+exist while every screen still said "graduated". The devnet-only audit would
+have called that a pass.
+
+### And a disclosure page that names what is not enforced by code
+
+"The LP is burned" is not the whole truth while somebody can still upgrade the
+program or move the fee recipient. `/disclaimer` now separates what the chain
+enforces, what people hold (upgrade authority, config authority, this website,
+your RPC), and what is not guaranteed at all — each with the command to verify
+it. A user who learns about these later, rather than here, is right to feel
+misled.

@@ -487,3 +487,24 @@ tr.sell td:first-child { color: var(--red); }
   .live-dot { animation: none; }
   .tick[data-dir="up"], .tick[data-dir="down"] { animation: none; }
 }
+
+/* Loading placeholders — see SkeletonCards in board-screen.tsx. The pulse is
+   suppressed under prefers-reduced-motion, where a moving placeholder is
+   worse than a still one. */
+.skeleton {
+  pointer-events: none;
+}
+.skeleton-line {
+  height: 0.7rem;
+  margin: 0.45rem 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-line { animation: none; }
+}

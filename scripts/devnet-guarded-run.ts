@@ -19,11 +19,20 @@
  * binary, real rent, real transaction sizes and the production builders all
  * work together outside a simulator.
  *
- * Finalize/execute are NOT attempted: production params use a 3-day voting
- * window and a 72-hour hold-up, and a live cluster's clock cannot be warped.
- * The run stops at a cast vote and reports the state honestly.
+ * Finalize/execute are NOT attempted by default: production params use a
+ * 3-day voting window and a 72-hour hold-up, and a live cluster's clock cannot
+ * be warped. The run stops at a cast vote and reports the state honestly;
+ * `devnet-guarded-advance.ts` finishes it days later.
  *
- *   pnpm tsx scripts/devnet-guarded-run.ts
+ * `--fast` runs the SAME ceremony against a governance whose window and
+ * hold-up are minutes rather than days, and drives the lifecycle to the end:
+ * finalize, an execution the hold-up must REFUSE, then a real execution whose
+ * effect is checked on chain. Only two numbers change, and they are governance
+ * CONFIG, not gate logic — every account, builder, CPI and the deployed gate
+ * binary are the production ones. The hold-up is short but NON-ZERO on
+ * purpose: zero would skip the check instead of proving it.
+ *
+ *   pnpm tsx scripts/devnet-guarded-run.ts [--fast]
  */
 import { readFileSync } from "node:fs";
 import {
@@ -74,12 +83,41 @@ import {
   gatePda,
   tokenOwnerRecordPda,
 } from "../packages/sdk/src/gate";
+import {
+  advanceProposal,
+  buildExecuteTransactions,
+  readProposalContext,
+} from "./lib/gov-advance";
 
 const RPC = process.env.DEVNET_RPC ?? "https://api.devnet.solana.com";
 const PROGRAM_VERSION = 3;
 const SUPPLY = 200_000_000_000n;
-/** Short enough to be usable, long enough to be a real window. */
-const BASE_VOTING_TIME_S = 3 * 86400;
+
+/** `--fast`: a clock we can outwait, so finalize and execute run in this run. */
+const FAST = process.argv.includes("--fast");
+/**
+ * Short enough to be usable, long enough to be a real window.
+ *
+ * The fast value is ONE HOUR because that is the floor `withCreateGovernance`
+ * enforces ("baseVotingTime should be at least 1 hour"). Shorter windows are
+ * reachable only by hand-building the instruction, which would mean the run no
+ * longer exercises the production builder — and the builder being the
+ * production one is the entire point of running this live. An hour of waiting
+ * is the cheaper price.
+ */
+const BASE_VOTING_TIME_S = FAST ? 3600 : 3 * 86400;
+/**
+ * The instruction hold-up. Kept identical to the governance minimum so the
+ * "executable at" arithmetic has one source rather than two that can disagree,
+ * and NON-ZERO in fast mode so the refusal below is a real check.
+ */
+const HOLD_UP_S = FAST ? 120 : null;
+/** Funds the DAO treasury so the executed transfer moves real lamports. */
+const TREASURY_FUNDING = 20_000_000;
+/** What the proposal's instruction moves — the observable effect of execute. */
+const EXECUTED_TRANSFER = 1_000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let failures = 0;
 function check(ok: boolean, label: string, detail = ""): void {
@@ -120,6 +158,100 @@ async function sendExpectFail(
     const err = e as Error & { logs?: string[] };
     return [err.message, ...(err.logs ?? [])].join("\n");
   }
+}
+
+/**
+ * `--fast` only: the two legs a production-params run cannot reach.
+ *
+ * Finalize is what converts a cast vote into a Succeeded proposal, and execute
+ * is where governance actually spends the treasury. Between them sits the
+ * hold-up — the window that exists so a DAO can see what is about to happen
+ * and leave. A hold-up that is merely CONFIGURED and not ENFORCED would look
+ * identical on a passing run, so this attempts an execution inside the window
+ * and requires it to be refused.
+ */
+async function driveToCompletion(
+  connection: Connection,
+  signer: Keypair,
+  proposal: PublicKey,
+  treasury: PublicKey,
+): Promise<void> {
+  console.log("\n--fast: driving the lifecycle to the end —");
+
+  // 1. Wait out the voting window. Vote tipping is Disabled by design (a full
+  //    exit window, always), so the window elapsing is what makes finalize
+  //    possible — there is no early tip to shortcut it.
+  let announced = Infinity;
+  for (;;) {
+    const ctx = await readProposalContext(connection, proposal);
+    const left = ctx.votingEndsAt - Math.floor(Date.now() / 1000);
+    if (left <= 0) break;
+    if (announced - left >= 300 || announced === Infinity) {
+      console.log(`  voting window: ${Math.ceil(left / 60)}min left`);
+      announced = left;
+    }
+    await sleep(Math.min(left + 2, 60) * 1000);
+  }
+
+  const finalized = await advanceProposal(connection, signer, proposal);
+  check(
+    finalized.outcome.step === "finalized",
+    "the voting window elapsing makes FINALIZE possible",
+    finalized.outcome.step,
+  );
+  if (finalized.outcome.step === "finalized") {
+    console.log(`  finalize     ${finalized.outcome.signature}`);
+    check(
+      finalized.outcome.state === ProposalState.Succeeded,
+      "finalize moves the proposal to SUCCEEDED",
+      ProposalState[finalized.outcome.state],
+    );
+  }
+
+  // 2. The hold-up must REFUSE an execution, not merely be configured.
+  const ctx = await readProposalContext(connection, proposal);
+  const pending = await buildExecuteTransactions(connection, ctx);
+  check(pending.length === 1, "the proposal carries its one transaction", `${pending.length}`);
+  const early = await sendExpectFail(connection, signer, [cu(), ...pending[0]!.ixs]);
+  check(
+    early !== "" && /hold.?up/i.test(early),
+    "execution INSIDE the hold-up window is refused",
+    early === "" ? "IT EXECUTED" : early.split("\n").find((l) => /hold.?up/i.test(l))?.trim() ?? early.split("\n")[0]!,
+  );
+
+  // 3. Wait it out, then execute for real and check the EFFECT, not the
+  //    return code: a proposal that "completes" without moving the lamports
+  //    it promised would pass every state check and still be broken.
+  for (;;) {
+    const left = ctx.executableAt - Math.floor(Date.now() / 1000);
+    if (left <= 0) break;
+    console.log(`  hold-up: ${left}s left`);
+    await sleep(Math.min(left + 2, 30) * 1000);
+  }
+
+  const before = await connection.getBalance(treasury);
+  const executed = await advanceProposal(connection, signer, proposal);
+  check(
+    executed.outcome.step === "executed",
+    "the hold-up elapsing makes EXECUTE possible",
+    executed.outcome.step,
+  );
+  if (executed.outcome.step === "executed") {
+    for (const [i, sig] of executed.outcome.signatures.entries()) {
+      console.log(`  execute[${i}]  ${sig}`);
+    }
+    check(
+      executed.outcome.state === ProposalState.Completed,
+      "the proposal is COMPLETED",
+      ProposalState[executed.outcome.state],
+    );
+  }
+  const after = await connection.getBalance(treasury);
+  check(
+    before - after === EXECUTED_TRANSFER,
+    "the DAO treasury actually paid out what the proposal said",
+    `${before} -> ${after} (${before - after} lamports)`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -187,11 +319,13 @@ async function main(): Promise<void> {
   await send(connection, signer, [cu(), treasury.ix], [createKey]);
 
   // ---- the production guarded ceremony ----
-  const params = resolveGovernanceParams({
+  const resolved = resolveGovernanceParams({
     mode: "guarded",
     tier: "micro",
     communitySupply: SUPPLY,
   });
+  const params =
+    HOLD_UP_S === null ? resolved : { ...resolved, holdUpSeconds: HOLD_UP_S };
   const dao = await buildCreateDaoIxs({
     mint: mint.publicKey,
     payer: signer.publicKey,
@@ -215,6 +349,21 @@ async function main(): Promise<void> {
   console.log(`  realm        ${dao.realm.toBase58()}`);
   console.log(`  governance   ${dao.governance.toBase58()}`);
   console.log(`  treasury     ${dao.nativeTreasury.toBase58()}`);
+
+  if (FAST) {
+    // The native treasury is created rent-exempt and nothing more. Executing a
+    // transfer out of it would drop it below the rent floor and fail on the
+    // System program, so the effect we are trying to observe would be masked
+    // by an unrelated failure. Fund it first.
+    await send(connection, signer, [
+      cu(),
+      SystemProgram.transfer({
+        fromPubkey: signer.publicKey,
+        toPubkey: dao.nativeTreasury,
+        lamports: TREASURY_FUNDING,
+      }),
+    ]);
+  }
 
   // ---- the gate exists and holds the ONE council token ----
   const gateInfo = await connection.getAccountInfo(gatePda(dao.realm));
@@ -328,7 +477,7 @@ async function main(): Promise<void> {
             SystemProgram.transfer({
               fromPubkey: dao.nativeTreasury,
               toPubkey: proposer.publicKey,
-              lamports: 1_000,
+              lamports: EXECUTED_TRANSFER,
             }),
           ],
         }).ix,
@@ -379,12 +528,16 @@ async function main(): Promise<void> {
     "the proposal is live with the COMMUNITY as its electorate",
     ProposalState[state],
   );
-  console.log(
-    `\nproposal state ${ProposalState[state]}` +
-      (state === ProposalState.Voting
-        ? ` — finalize needs the ${BASE_VOTING_TIME_S / 86400}-day window to elapse; a live cluster's clock cannot be warped, so this run stops here.`
-        : ""),
-  );
+  if (!FAST) {
+    console.log(
+      `\nproposal state ${ProposalState[state]}` +
+        (state === ProposalState.Voting
+          ? ` — finalize needs the ${BASE_VOTING_TIME_S / 86400}-day window to elapse; a live cluster's clock cannot be warped, so this run stops here.`
+          : ""),
+    );
+  } else {
+    await driveToCompletion(connection, signer, made.proposal, dao.nativeTreasury);
+  }
 
   console.log(
     `\nend ${(await connection.getBalance(signer.publicKey)) / 1e9} SOL — ` +

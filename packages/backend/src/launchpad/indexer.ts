@@ -50,7 +50,39 @@ export interface IndexerOptions {
   sink?: IndexerSink;
   /** Max signatures pulled per tick. */
   pageLimit?: number;
+  /**
+   * How many transaction fetches are in flight at once.
+   *
+   * One at a time is fine at devnet volume and falls behind a busy mainnet:
+   * a tick of 100 signatures costs 100 sequential round trips, so the feed's
+   * throughput is capped at (page size / RTT) no matter how fast the chain
+   * moves. The cursor semantics already tolerate concurrency — results are
+   * applied in slot order and the cursor advances only over the prefix that
+   * applied — which is what makes this safe rather than merely faster.
+   */
+  fetchConcurrency?: number;
   onError?: (err: unknown, where: string) => void;
+  /** Every upstream RPC call, so the bill and the error rate are visible. */
+  onRpcCall?: (ok: boolean) => void;
+}
+
+/** Run `f` over `items` with at most `limit` in flight, preserving order. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  f: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await f(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 export class LaunchpadIndexer {
@@ -62,7 +94,9 @@ export class LaunchpadIndexer {
     let sigs: SignatureRef[];
     try {
       sigs = await this.o.source.fetchSignatures(cursor.lastSignature, this.o.pageLimit ?? 100);
+      this.o.onRpcCall?.(true);
     } catch (err) {
+      this.o.onRpcCall?.(false);
       this.o.onError?.(err, "fetchSignatures");
       return { processed: 0 };
     }
@@ -70,22 +104,41 @@ export class LaunchpadIndexer {
 
     // Oldest-first, so the cursor only advances over fully applied history.
     const ordered = [...sigs].sort((a, b) => a.slot - b.slot);
+
+    // Fetch concurrently, then apply STRICTLY in order. The concurrency is an
+    // I/O detail; the ordering is a correctness property, so they are kept in
+    // separate steps rather than interleaved.
+    const fetched = await mapWithConcurrency(
+      ordered,
+      this.o.fetchConcurrency ?? 8,
+      async (ref): Promise<{ ref: SignatureRef; tx?: FetchedTransaction | null; err?: unknown }> => {
+        try {
+          const tx = await this.o.source.fetchTransaction(ref.signature);
+          this.o.onRpcCall?.(true);
+          return { ref, tx };
+        } catch (err) {
+          this.o.onRpcCall?.(false);
+          return { ref, err };
+        }
+      },
+    );
+
     let processed = 0;
     let newest: SignatureRef | null = null;
-    for (const ref of ordered) {
-      let tx: FetchedTransaction | null;
-      try {
-        tx = await this.o.source.fetchTransaction(ref.signature);
-      } catch (err) {
-        this.o.onError?.(err, `fetchTransaction ${ref.signature}`);
-        // Stop advancing past a gap we couldn't read; next tick retries it.
+    for (const r of fetched) {
+      if (r.err !== undefined) {
+        this.o.onError?.(r.err, `fetchTransaction ${r.ref.signature}`);
+        // Stop at the gap. Anything already fetched beyond it is DISCARDED
+        // rather than applied, because applying it would fold events in out
+        // of order and move the cursor over history we never read. The next
+        // tick refetches from here.
         break;
       }
-      if (tx) {
-        this.applyTransaction(tx);
+      if (r.tx) {
+        this.applyTransaction(r.tx);
         processed += 1;
       }
-      newest = ref;
+      newest = r.ref;
     }
     if (newest) this.o.store.setCursor({ lastSignature: newest.signature, lastSlot: newest.slot });
     return { processed };

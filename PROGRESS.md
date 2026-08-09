@@ -546,3 +546,35 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       reconciliation read runs regardless so a silently dead socket cannot
       freeze the screen. An RPC that refuses the subscription degrades to
       polling and says "delayed". Suites: 82 app unit (13 files), 34 e2e.
+- [x] **Everything devnet can finish, finished (D-057, 2026-08-09).**
+      `PLAN-DEVNET-FINISH.md` scoped the subset of LAUNCH.md that needs no
+      mainnet SOL and no operator decision, and it is done:
+      - **GATE L5 closed live.** `devnet-guarded-run.ts --fast` runs the
+        production ceremony against a short-window governance and drives it to
+        `Completed`: finalize, an execution the hold-up REFUSES, then a real
+        execution checked against the DAO treasury's lamports. Shared
+        `scripts/lib/gov-advance.ts` so the fast run and the 3-day production
+        proposal cannot exercise different code.
+      - **L-30 dynamic priority fee** (was BLOCKING): per-written-account
+        sampling, p75, floor + ceiling + cache, retry escalation on new
+        attempts only, shown in the UI, constant fallback. Found in passing
+        that the proxy allowlist omitted `getRecentPrioritizationFees`, which
+        would have silently disabled the whole thing behind the API.
+      - **L-60 metrics / L-63 caps** (was BLOCKING): `/metrics` with indexer
+        lag in slots (absent, never a false zero), SSE clients, event and RPC
+        rates, keeper balance; per-client SSE cap beside the global one.
+      - **L-42/L-43**: `read-path.ts` — the indexer serves what it can, the
+        chain is a fallback, and the fallback is visible.
+      - **L-31/L-32**: one commit per frame (keyed, so it is bounded in a
+        hidden tab), reconnect with backoff + full jitter, and resync on every
+        connect rather than a replay window that can still have gaps.
+      - **L-91 / L-26 / L-13 / L-33 / L-36**: concurrent indexer fetch with
+        ordering preserved, `--cluster` on the audit with the mainnet
+        expectations INVERTED (LP non-zero, fee record present), an in-product
+        statement of what a user is trusting, hidden-tab scan suppression, and
+        board skeletons.
+      Not devnet-closable, and stated as such: L-01..L-07 (operator
+      decisions), L-10..L-12 (mainnet keys), L-20..L-25 (mainnet SOL),
+      L-40/L-41/L-46 (provisioning), **L-50..L-52 GATE L4** (the locker does
+      not exist on devnet), L-61 (alerts need a destination), L-92
+      (threshold-gated).

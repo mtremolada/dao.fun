@@ -30,11 +30,9 @@ import {
   type CurveState,
 } from "@daofun/sdk/curve-math";
 import { sendTransaction, type SendRpc, type SendState, type SigningWallet } from "./tx-sender";
-import { ConstantFeeEstimator } from "./fees";
+import { feeEstimatorFor } from "./fees";
 import { chainId, cluster, isDevnet, launchpadProgramId } from "./cluster";
 import type { CoinView } from "./launchpad-api";
-
-const feeEstimator = new ConstantFeeEstimator();
 
 /** Reconstruct a curve state from a board/coin view for quoting. */
 export function coinState(coin: CoinView): CurveState {
@@ -69,6 +67,12 @@ export interface ActionCtx {
   connection: Connection;
   wallet: SigningWallet;
   onState?: (s: SendState) => void;
+  /**
+   * Retry counter for THIS logical trade — escalates the priority fee on a
+   * re-attempt after an expiry. A retry at the price that already lost the
+   * auction loses it again.
+   */
+  feeAttempt?: number;
 }
 
 export function quoteBuy(coin: CoinView, solBudget: bigint): { tokensOut: bigint; cost: bigint } {
@@ -256,7 +260,8 @@ function sendCommon(ctx: ActionCtx) {
     // web3's richer overload types to the pipeline's minimal surface.
     connection: ctx.connection as unknown as SendRpc,
     chainId: chainId(),
-    feeEstimator,
+    feeEstimator: feeEstimatorFor(ctx.connection),
+    feeAttempt: ctx.feeAttempt ?? 0,
     explainError: explainLaunchpadError,
     preferWalletBroadcast: !isDevnet(),
     onState: ctx.onState,

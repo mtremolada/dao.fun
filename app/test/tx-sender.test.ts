@@ -161,4 +161,69 @@ describe("sendTransaction", () => {
     });
     expect(r).toMatchObject({ phase: "failed", reason: "wrong-cluster" });
   });
+
+  it("prices against the accounts the transaction WRITES, plus the fee payer", async () => {
+    // Congestion is per-account. Pricing against the whole chain, or against
+    // read-only accounts, is pricing a different auction than the one this
+    // transaction is entered in.
+    const seen: { writableAccounts?: { toBase58(): string }[]; attempt?: number }[] = [];
+    const dest = Keypair.generate().publicKey;
+    await sendTransaction({
+      ...base,
+      instructions: [
+        SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: dest, lamports: 1 }),
+      ],
+      feeEstimator: {
+        async priorityFeeMicroLamports(ctx) {
+          seen.push(ctx ?? {});
+          return 12_345;
+        },
+      },
+      wallet: signOnlyWallet(["solana:devnet"]),
+      connection: rpc(),
+    });
+    const written = (seen[0]!.writableAccounts ?? []).map((k) => k.toBase58());
+    expect(written).toContain(payer.publicKey.toBase58());
+    expect(written).toContain(dest.toBase58());
+    // The fee payer appears once, not twice, even though it is also a
+    // writable key on the instruction — the sampled set is a SET.
+    expect(written.filter((k) => k === payer.publicKey.toBase58())).toHaveLength(1);
+    // SystemProgram itself is read-only here and must not be sampled.
+    expect(written).not.toContain(SystemProgram.programId.toBase58());
+  });
+
+  it("passes the retry attempt through, so a re-send can outbid its own loss", async () => {
+    const seen: number[] = [];
+    await sendTransaction({
+      ...base,
+      feeAttempt: 2,
+      feeEstimator: {
+        async priorityFeeMicroLamports(ctx) {
+          seen.push(ctx?.attempt ?? -1);
+          return 10_000;
+        },
+      },
+      wallet: signOnlyWallet(["solana:devnet"]),
+      connection: rpc(),
+    });
+    expect(seen).toEqual([2]);
+  });
+
+  it("reports what it is bidding, in lamports, so the UI can say it out loud", async () => {
+    const states: { phase: string; priorityFee?: { lamports: number; microLamports: number } }[] = [];
+    await sendTransaction({
+      ...base,
+      feeEstimator: { async priorityFeeMicroLamports() { return 50_000; } },
+      wallet: signOnlyWallet(["solana:devnet"]),
+      connection: rpc(),
+      onState: (s) => states.push(s),
+    });
+    const signing = states.find((s) => s.phase === "signing");
+    // unitsConsumed 20,000 * 1.1 = 22,000 CU at 50,000 µlamports/CU = 1,100 lamports.
+    expect(signing?.priorityFee).toEqual({
+      microLamports: 50_000,
+      computeUnits: 22_000,
+      lamports: 1_100,
+    });
+  });
 });
