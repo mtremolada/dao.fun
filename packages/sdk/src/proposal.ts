@@ -24,6 +24,11 @@ import {
   withInsertTransaction,
   withSignOffProposal,
 } from "@solana/spl-governance";
+import {
+  buildCreateGatedProposalIx,
+  buildInsertGatedTransactionIx,
+  buildSignOffGatedProposalIx,
+} from "./gate";
 import { SPL_GOVERNANCE_PROGRAM_ID } from "./constants";
 import { computeInstructionSetHash } from "./artifact-hash";
 import { unwrap, wrap, wrapBuffered, type WrapContext } from "./execution-adapter";
@@ -175,5 +180,95 @@ export async function buildProposeIxs(
     wrapped,
     buffered,
     groups: { create, inserts, signOff },
+  };
+}
+
+/**
+ * The guarded-realm variant of `buildProposeIxs`.
+ *
+ * On a guarded realm the fork's `min_community_weight_to_create_proposal =
+ * u64::MAX` sentinel refuses EVERY direct proposal, whale or not (D-042), so
+ * a caller that reaches for `buildProposeIxs` there does not get a weaker
+ * proposal — it gets a rejected transaction. Creation runs through the gate
+ * program instead, which validates the instruction set against the whitelist
+ * before authoring with its sole council token.
+ *
+ * Everything else is deliberately identical to the direct path: the same
+ * Squads wrapping, the same buffered-chain switch for account-heavy sets,
+ * and the same INV-9 hash computed over what `unwrap` recovers rather than
+ * the raw input. Voting is untouched — the electorate is still the community
+ * mint. Only who may AUTHOR changes.
+ */
+export async function buildGuardedProposeIxs(
+  p: ProposeParams & {
+    /** The realm's community mint — the electorate, unchanged. */
+    communityMint: PublicKey;
+    /** The gate's sole council token; supply 1, held by the gate PDA. */
+    councilMint: PublicKey;
+    /** Ephemeral key seeding the proposal PDA. */
+    proposalSeed: PublicKey;
+    gateProgramId?: PublicKey;
+  },
+): Promise<ProposeResult> {
+  const directIxs = p.directIxs ?? [];
+  if (p.innerIxs.length === 0 && directIxs.length === 0) {
+    throw new Error("buildGuardedProposeIxs: inner instruction set is empty");
+  }
+
+  let chain: TransactionInstruction[] = [];
+  let buffered = false;
+  if (p.innerIxs.length > 0) {
+    const plain = wrap(p.innerIxs, p.wrapCtx);
+    buffered = plain[0]!.data.length > PLAIN_CREATE_DATA_BUDGET;
+    chain = buffered ? wrapBuffered(p.innerIxs, p.wrapCtx).ixs : plain;
+  }
+  const wrapped = [...chain, ...directIxs];
+  const innerInstructionSetHash = computeInstructionSetHash([
+    ...(chain.length > 0 ? unwrap(chain, p.wrapCtx) : []),
+    ...directIxs,
+  ]);
+
+  const created = buildCreateGatedProposalIx({
+    proposer: p.payer,
+    realm: p.realm,
+    governance: p.governance,
+    communityMint: p.communityMint,
+    councilMint: p.councilMint,
+    name: p.name,
+    descriptionLink: innerInstructionSetHash, // D-017, same as the direct path
+    proposalSeed: p.proposalSeed,
+    ...(p.gateProgramId ? { programId: p.gateProgramId } : {}),
+  });
+
+  const inserts: TransactionInstruction[][] = wrapped.map((ix, i) => [
+    buildInsertGatedTransactionIx({
+      proposer: p.payer,
+      realm: p.realm,
+      governance: p.governance,
+      councilMint: p.councilMint,
+      proposal: created.proposal,
+      index: i,
+      holdUpSeconds: p.holdUpSeconds,
+      instructions: [ix],
+      ...(p.gateProgramId ? { programId: p.gateProgramId } : {}),
+    }).ix,
+  ]);
+
+  const signOff = [
+    buildSignOffGatedProposalIx({
+      realm: p.realm,
+      governance: p.governance,
+      proposal: created.proposal,
+      councilMint: p.councilMint,
+      ...(p.gateProgramId ? { programId: p.gateProgramId } : {}),
+    }),
+  ];
+
+  return {
+    proposal: created.proposal,
+    innerInstructionSetHash,
+    wrapped,
+    buffered,
+    groups: { create: [created.ix], inserts, signOff },
   };
 }

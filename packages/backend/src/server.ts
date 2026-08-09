@@ -22,11 +22,23 @@ import {
   configPda,
   decodeConfig,
   buildMigrateIx,
+  buildLockGraduatedLiquidityIx,
+  buildCollectGraduatedFeesIx,
+  graduatedFeesPda,
+  feeAuthorityPda,
+  poolStatePda,
+  raydiumCpmmAddresses,
   type Cluster,
 } from "@daofun/sdk";
 import { SqliteLaunchpadStore } from "./launchpad/store";
 import { LaunchpadIndexer } from "./launchpad/indexer";
 import { RpcTxSource } from "./launchpad/rpc-source";
+import { crankGraduatedFeesBatch } from "@daofun/keeper";
+import {
+  NATIVE_MINT,
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import { SseHub } from "./launchpad/sse";
 import { SelfHostUploader } from "./launchpad/metadata-uploader";
 import { createLaunchpadHandler, type LaunchpadHandlerDeps } from "./launchpad/handler";
@@ -66,12 +78,15 @@ async function main(): Promise<void> {
   // (set_graduation_config); the cluster default goes stale the moment it
   // does, which is how the first live devnet graduation failed.
   let ammConfig: PublicKey | null = null;
+  /** Zero on devnet: no locker there, so the post-graduation legs stay off. */
+  let lockProgram: PublicKey | null = null;
   try {
     const cfg = await connection.getAccountInfo(configPda(programId));
     if (cfg) {
       const decoded = decodeConfig(cfg.data);
       feeRecipient = decoded.feeRecipient;
       ammConfig = decoded.cpmmAmmConfig;
+      lockProgram = decoded.lockProgram;
     }
   } catch (e) {
     log.warn("could not read on-chain config; keeper migrate disabled until it appears", {
@@ -91,13 +106,19 @@ async function main(): Promise<void> {
   // packages/keeper/src/graduation.ts for a standalone keeper deployment).
   const keeperKp = process.env.KEEPER_KEYPAIR ? loadKeypair(process.env.KEEPER_KEYPAIR) : null;
 
-  async function sendAndConfirm(ix: TransactionInstruction, label: string): Promise<string> {
+  async function sendAndConfirm(
+    ixs: TransactionInstruction | TransactionInstruction[],
+    label: string,
+  ): Promise<string> {
     if (!keeperKp) throw new Error("no keeper keypair");
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
     const msg = new TransactionMessage({
       payerKey: keeperKp.publicKey,
       recentBlockhash: blockhash,
-      instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ix],
+      instructions: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ...(Array.isArray(ixs) ? ixs : [ixs]),
+      ],
     }).compileToV0Message();
     const tx = new VersionedTransaction(msg);
     tx.sign([keeperKp]);
@@ -136,6 +157,84 @@ async function main(): Promise<void> {
         });
       }
     }
+    await graduatedFeeTick();
+  }
+
+  /**
+   * The post-graduation legs. Both are permissionless, so they happen only
+   * if somebody bothers — the keeper is that somebody. On a cluster without
+   * Raydium's locker (devnet) every coin settles as `not-ready` and stays
+   * quiet, which is why only real errors are logged at warn.
+   */
+  async function graduatedFeeTick(): Promise<void> {
+    if (!keeperKp || !feeRecipient || !ammConfig) return;
+    if (!lockProgram || lockProgram.equals(PublicKey.default)) return;
+    const graduated = store
+      .listCoins({ filter: "graduated", limit: 200 })
+      .filter((c) => c.migrated === 1);
+    if (graduated.length === 0) return;
+
+    const isLocked = async (mint: PublicKey) =>
+      (await connection.getAccountInfo(graduatedFeesPda(mint, programId))) !== null;
+
+    await crankGraduatedFeesBatch(
+      graduated.map((c) => ({ mint: new PublicKey(c.mint), migrated: true, locked: false })),
+      {
+        refresh: async (mint: PublicKey) => ({ migrated: true, locked: await isLocked(mint) }),
+        buildLockIxs: (mint: PublicKey) => [
+          buildLockGraduatedLiquidityIx({
+            payer: keeperKp!.publicKey,
+            mint,
+            poolState: poolStatePda(mint, programId),
+            lockProgram: lockProgram!,
+            ray: raydiumCpmmAddresses(cluster),
+            programId,
+          }),
+        ],
+        buildCollectIxs: (mint: PublicKey) => {
+          const coin = graduated.find((c) => c.mint === mint.toBase58());
+          const creator = new PublicKey(coin!.creator);
+          const feeAuthority = feeAuthorityPda(mint, programId);
+          const ata = (m: PublicKey, o: PublicKey) =>
+            getAssociatedTokenAddressSync(m, o, true);
+          // The program requires these to exist; creating them idempotently
+          // in the same transaction keeps the crank a single signature.
+          return [
+            ...([
+              [mint, creator],
+              [NATIVE_MINT, creator],
+              [NATIVE_MINT, feeRecipient!],
+              [NATIVE_MINT, feeAuthority],
+            ] as const).map(([m, owner]) =>
+              createAssociatedTokenAccountIdempotentInstruction(
+                keeperKp!.publicKey,
+                ata(m, owner),
+                owner,
+                m,
+              ),
+            ),
+            buildCollectGraduatedFeesIx({
+              payer: keeperKp!.publicKey,
+              mint,
+              creator,
+              feeRecipient: feeRecipient!,
+              poolState: poolStatePda(mint, programId),
+              lockProgram: lockProgram!,
+              ray: raydiumCpmmAddresses(cluster),
+              programId,
+            }),
+          ];
+        },
+        sendAndConfirm: (ixs, label) => sendAndConfirm(ixs, label),
+        onResult: (mint, outcome) => {
+          if (outcome.status === "error") {
+            log.warn("graduated-fees", { mint: mint.toBase58(), ...outcome });
+          } else if (outcome.status !== "not-ready") {
+            log.info("graduated-fees", { mint: mint.toBase58(), ...outcome });
+          }
+        },
+      },
+    );
   }
 
   // Conditional spreads so an unset optional never becomes an explicit

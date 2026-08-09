@@ -354,3 +354,35 @@ security property unchanged. Re-proven against the mainnet binaries (11/11).
 
 Operator sign-off: **APPROVED** — Matt (operator), 2026-08-08, by the
 same blanket delegation as GATE 2 above.
+
+## GATE L3 — the fee model (protocol vault, graduated fees) — EVIDENCE COMPLETE, canary pending
+
+Scope: PLAN-FEE-MODEL.md — the coin's own protocol fees pay for its
+graduation, the LP is locked rather than burned where a locker exists, and
+the resulting stream splits 90/10 in the creator's favour after the
+graduation cost is repaid. D-049 (locker verification), D-050 (the model).
+
+**Layer 1 — bankrun against the REAL mainnet binaries.** All green.
+
+| Evidence | What it proves |
+|---|---|
+| `launchpad-lock-verify` (8) | Raydium's locker interface on the DEPLOYED binary: discriminators, seeds, both account orders, recipients UNCONSTRAINED, fee key is the SOLE collect authority, a PDA may both hold it and `invoke_signed` the collect, `fee_nft_mint` accepts a PDA, no unlock/withdraw/close entrypoint exists, 23,328,400 lamports + 166,769/103,408 CU |
+| `launchpad-graduated-lock` (5) | OUR program driving it end to end: burn branch when no locker is configured, lock refused while it is not, LP locked to a PDA-owned fee key paid by the coin's own vault (cranker out exactly 5,000 lamports), the coin side paid 100% to the creator, the SOL side repaying the graduation exactly and never over, then the 20/80 split to the lamport, and graduation into the fee tier the CONFIG names rather than the cluster default |
+| `launchpad-curve` (6) | The whole raise reaches the pool — the protocol vault covers the overhead |
+| `launchpad-build` (6) | Config stays 277 bytes with the new fields carved out of `reserved`, so already-deployed configs still deserialize; the tier can only ever be a Raydium-owned account |
+| `pump-migration-economics` (1) | The competitive baseline, measured rather than quoted |
+
+**Layer 2 — devnet, 2026-08-09.** Program upgraded, config pointed at the 1%
+tier. Coin `42io3su15PAvmmjsNqVbPMKcaeMzjCNDzF4nf1GNCDB6`, pool
+`ER5ujesyLafk21ZuQ425FtKN1sjJKkg2i9GVcLTYa2rd`. create → buy → sell →
+buy-out → migrate → collect_protocol_fee → collect_creator_fee, all on
+chain. The RAISE-FALLBACK path was exercised for real: the vault paid
+0.023987 and the raise covered 0.168169, summing to the 0.192156 overhead
+exactly. All 7 pre-upgrade curve accounts still decode.
+
+**Layer 3 — mainnet canary: NOT DONE, and it is the only thing that can
+prove the lock path live.** Raydium's locker is absent from devnet and
+hard-codes the mainnet CPMM id, so no amount of devnet work substitutes.
+Requires one real launch and real SOL — operator go/no-go.
+
+Sign-off: ______________________  date: __________

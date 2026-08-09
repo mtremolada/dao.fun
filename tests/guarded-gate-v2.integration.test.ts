@@ -91,6 +91,7 @@ import {
   PROGRAM_VERSION,
   SUPPLY,
   TEST_TIMEOUT,
+  VAULT_FUND,
   createDao,
   readGov,
   send,
@@ -98,6 +99,9 @@ import {
   startCtx,
   warpSeconds,
 } from "./helpers/bankrun-harness";
+import { buildGuardedProposeIxs } from "../packages/sdk/src/proposal";
+import { SQUADS_V4_PROGRAM_ID } from "../packages/sdk/src/constants";
+import * as multisig from "@sqds/multisig";
 
 const GATE_PROGRAM_ID = PROPOSAL_GATE_PROGRAM_ID;
 const U64_MAX = new BN("18446744073709551615");
@@ -569,6 +573,135 @@ describe("guarded CEREMONY — buildCreateDaoIxs('guarded') lands on real binari
       );
       await send(ctx2, finalize, []);
       expect((await readGov(ctx2, made.proposal, Proposal)).state).toBe(
+        ProposalState.Succeeded,
+      );
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "buildGuardedProposeIxs routes the PRODUCTION propose path through the gate",
+    async () => {
+      // buildProposeIxs is what every caller reaches for. On a guarded realm
+      // it does not produce a weaker proposal — it produces a REJECTED
+      // transaction, because the fork's u64::MAX sentinel refuses every
+      // direct author (D-042). This is the variant that works, and it has to
+      // keep the direct path's contract: same Squads wrapping, same INV-9
+      // hash as the proposal's descriptionLink.
+      const ctx3 = await startCtx([
+        { name: "proposal_gate", programId: GATE_PROGRAM_ID },
+      ]);
+      const dao = await createDao(ctx3, "guarded");
+      const proposer = Keypair.generate();
+      await send(
+        ctx3,
+        [
+          SystemProgram.transfer({
+            fromPubkey: ctx3.payer.publicKey,
+            toPubkey: proposer.publicKey,
+            lamports: 2_000_000_000,
+          }),
+        ],
+        [],
+      );
+
+      const msAccount = await ctx3.banksClient.getAccount(dao.multisigPda);
+      const [ms] = multisig.accounts.Multisig.fromAccountInfo({
+        executable: false,
+        owner: SQUADS_V4_PROGRAM_ID,
+        lamports: Number(msAccount!.lamports),
+        data: Buffer.from(msAccount!.data),
+      });
+      const recipient = Keypair.generate().publicKey;
+      const inner = [
+        SystemProgram.transfer({
+          fromPubkey: dao.vaultPda,
+          toPubkey: recipient,
+          lamports: VAULT_FUND,
+        }),
+      ];
+
+      const made = await buildGuardedProposeIxs({
+        realm: dao.realm,
+        governance: dao.governance,
+        governingTokenMint: dao.mint,
+        tokenOwnerRecord: dao.voterTor,
+        governanceAuthority: proposer.publicKey,
+        payer: proposer.publicKey,
+        proposalIndex: 0,
+        name: "guarded sweep via the production path",
+        innerIxs: inner,
+        wrapCtx: {
+          multisigPda: dao.multisigPda,
+          vaultIndex: 0,
+          transactionIndex: BigInt(ms.transactionIndex.toString()) + 1n,
+          member: dao.nativeTreasury,
+        },
+        holdUpSeconds: dao.params.holdUpSeconds,
+        communityMint: dao.mint,
+        councilMint: dao.councilMint!,
+        proposalSeed: Keypair.generate().publicKey,
+      });
+
+      await send(ctx3, [...made.groups.create], [proposer], proposer);
+      for (const group of made.groups.inserts) {
+        await send(ctx3, [...group], [proposer], proposer);
+      }
+      await send(ctx3, [...made.groups.signOff], [proposer], proposer);
+
+      // D-017 holds on the guarded path too: the descriptionLink IS the hash
+      // of what will actually execute.
+      const onChain = await readGov(ctx3, made.proposal, Proposal);
+      expect(onChain.descriptionLink).toBe(made.innerInstructionSetHash);
+      expect(onChain.state).toBe(ProposalState.Voting);
+
+      // The electorate is untouched: the COMMUNITY votes it through. But the
+      // proposal's OWNER is the gate's council record, not the voter's — the
+      // gate authored it. Callers that finalize or execute a guarded proposal
+      // must pass that record, or governance refuses with "Invalid Proposal
+      // Owner". Worth pinning: it is the one place the guarded path's
+      // account list genuinely differs from the direct one.
+      const gateOwnerRecord = tokenOwnerRecordPda(
+        dao.realm,
+        dao.councilMint!,
+        gateAuthorityPda(dao.realm),
+      );
+      const voteIxs: TransactionInstruction[] = [];
+      await withCastVote(
+        voteIxs,
+        SPL_GOVERNANCE_PROGRAM_ID,
+        PROGRAM_VERSION,
+        dao.realm,
+        dao.governance,
+        made.proposal,
+        gateOwnerRecord,
+        dao.voterTor,
+        dao.voter.publicKey,
+        dao.mint,
+        new Vote({
+          voteType: VoteKind.Approve,
+          approveChoices: [new VoteChoice({ rank: 0, weightPercentage: 100 })],
+          deny: undefined,
+          veto: undefined,
+        }),
+        ctx3.payer.publicKey,
+      );
+      await send(ctx3, voteIxs, [dao.voter]);
+
+      await warpSeconds(ctx3, BASE_VOTING_TIME_S + 10);
+      const finalIxs: TransactionInstruction[] = [];
+      await withFinalizeVote(
+        finalIxs,
+        SPL_GOVERNANCE_PROGRAM_ID,
+        PROGRAM_VERSION,
+        dao.realm,
+        dao.governance,
+        made.proposal,
+        gateOwnerRecord,
+        dao.mint,
+      );
+      await send(ctx3, finalIxs, []);
+      expect((await readGov(ctx3, made.proposal, Proposal)).state).toBe(
         ProposalState.Succeeded,
       );
     },

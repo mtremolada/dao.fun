@@ -5,10 +5,18 @@
  */
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey } from "@solana/web3.js";
 import {
+  NATIVE_MINT,
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import {
   buildBuyIx,
   buildCollectCreatorFeeIx,
   buildCreateCoinIx,
   buildMigrateIx,
+  buildCollectGraduatedFeesIx,
+  feeAuthorityPda,
+  raydiumCpmmAddresses,
   buildSellIx,
   decodeConfig,
   type DecodedConfig,
@@ -186,6 +194,54 @@ export async function graduate(coin: CoinView, ctx: ActionCtx): Promise<SendStat
         feeRecipient: cfg.feeRecipient,
         ammConfig: cfg.cpmmAmmConfig,
         cluster: cluster() === "mainnet" ? "mainnet" : "devnet",
+        programId: launchpadProgramId(),
+      }),
+    ],
+    ...sendCommon(ctx),
+  });
+}
+
+/**
+ * Sweeps a graduated pool's trading fees. Permissionless — the program fixes
+ * every destination, so this button is safe to show to anyone, not just the
+ * creator. The ATA creations are idempotent and ride in the same
+ * transaction because the program requires those accounts to exist.
+ */
+export async function collectGraduatedFees(
+  coin: CoinView,
+  ctx: ActionCtx,
+): Promise<SendState> {
+  const cfg = await getConfig(ctx.connection);
+  const mint = new PublicKey(coin.mint);
+  const creator = new PublicKey(coin.creator);
+  const feeAuthority = feeAuthorityPda(mint, launchpadProgramId());
+  const payer = new PublicKey(ctx.wallet.address);
+  const ata = (m: PublicKey, owner: PublicKey) =>
+    getAssociatedTokenAddressSync(m, owner, true);
+  return sendTransaction({
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+      ...([
+        [mint, creator],
+        [NATIVE_MINT, creator],
+        [NATIVE_MINT, cfg.feeRecipient],
+        [NATIVE_MINT, feeAuthority],
+      ] as const).map(([m, owner]) =>
+        createAssociatedTokenAccountIdempotentInstruction(
+          payer,
+          ata(m, owner),
+          owner,
+          m,
+        ),
+      ),
+      buildCollectGraduatedFeesIx({
+        payer,
+        mint,
+        creator,
+        feeRecipient: cfg.feeRecipient,
+        poolState: new PublicKey(coin.poolState!),
+        lockProgram: cfg.lockProgram,
+        ray: raydiumCpmmAddresses(cluster() === "mainnet" ? "mainnet" : "devnet"),
         programId: launchpadProgramId(),
       }),
     ],

@@ -129,6 +129,33 @@ not already do — and both are hash-pinned and hold-up-gated.
   after the window and returns the remainder to the vault's WSOL ATA
   (proven on the real binary; books close exactly).
 
+## 4b. Guarded mode — attacks on the front door (D-042/D-043)
+
+Guarded realms move proposal AUTHORSHIP behind the gate program while
+leaving voting untouched. That closes the sections above's open-realm
+authorship paths and opens a smaller, sharper set of its own.
+
+| # | Attack | Outcome |
+|---|---|---|
+| 4b.1 | **Author directly, bypassing the gate.** Buy supply, or borrow it, and call `create_proposal` on the realm. | **Refused for everyone.** `min_community_weight_to_create_proposal = u64::MAX` is an EXPLICIT disabled sentinel on this fork, not a large threshold — a full-supply whale AND their delegate are both rejected ("Voter weight threshold disabled", 0x25d). Proven on the deployed binary, `guarded-gate-spike` + `guarded-gate-v2`. |
+| 4b.2 | **Smuggle an off-menu instruction through the gate.** Propose a whitelisted outer program wrapping a call to something else. | **Refused.** The gate parses the real `ProposalTransactionV2`, unwraps the Squads message, and whitelists OUTER AND INNER program ids (D-030). Asserted by an off-menu insert being rejected mid-chain. |
+| 4b.3 | **Author with a zero-weight council record.** | **Refused** — the fork gates on WEIGHT, not identity, so an empty record cannot author either. |
+| 4b.4 | **Steal the gate's authorship.** The gate's sole council token (supply 1, mint authority null) is the only thing that can author. | Held by a PDA's token-owner record, deposited by the program itself via CPI. No key exists that can move it. |
+| 4b.5 | **Widen the whitelist by proposal.** Pass a proposal that adds programs to the menu. | Structurally one-way: INV-11 is a RATCHET — the gate accepts narrowing, never widening. |
+| 4b.6 | **Grief by proposal spam.** Anyone may author through the gate; each proposal costs a deposit. | Accepted. The deposit is the rate limit, and the alternative (permissioned authorship) is the thing guarded mode exists to avoid. Voters ignore junk; nothing executes without a passing vote. |
+
+**Residual, stated plainly.** The gate program's upgrade authority is a
+capture path: an upgraded gate could widen its own whitelist or author
+anything. This is the same class of risk as the launchpad's own upgrade
+authority and is NOT mitigated by anything above — it is retired by revoking
+the authority (or moving it to governance) before mainnet, and until that
+happens "guarded" means "guarded by a program someone can still change".
+
+One operational note that is not an attack but bites callers: a gate-created
+proposal is OWNED by the gate's council token-owner record, not the
+proposer's. Finalize and execute must pass that record or governance refuses
+with "Invalid Proposal Owner" — pinned in `guarded-gate-v2`.
+
 ## 5. Inherited / platform risks (residual, accepted with eyes open)
 
 1. **Sovereign hold-up 0 is out-of-warranty by design** (spec 12.2): the

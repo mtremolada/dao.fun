@@ -35,7 +35,14 @@ import { computePosition, topTraders } from "../lib/position";
 import { formatTokenAmount, parseTokenAmount } from "../lib/amount";
 import { useWallet } from "./wallet-provider";
 import { getConnection } from "../lib/solana";
-import { buy, quoteBuy, quoteSell, sell } from "../lib/coin-actions";
+import { fetchGraduatedFees, type GraduatedFees } from "../lib/graduated";
+import {
+  buy,
+  collectGraduatedFees,
+  quoteBuy,
+  quoteSell,
+  sell,
+} from "../lib/coin-actions";
 import type { SendState } from "../lib/tx-sender";
 import { explorerAddress, explorerTx, ENABLE_DEVNET_HINTS } from "../lib/cluster";
 import { truncateAddress } from "../lib/wallet-registry";
@@ -521,7 +528,11 @@ function InfoPanel({ coin }: { coin: CoinView }) {
       </div>
       <div className="kv-row">
         <dt>Graduation</dt>
-        <dd>{coin.migrated ? "Graduated — LP burned" : "Migrates to Raydium at completion; LP burned"}</dd>
+        <dd>
+          {coin.migrated
+            ? "Graduated — liquidity permanent"
+            : "Migrates to Raydium at completion; liquidity made permanent"}
+        </dd>
       </div>
       {coin.uri && (
         <div className="kv-row">
@@ -661,7 +672,7 @@ export function CoinScreen() {
           <div className="badges">
             <span className="badge" data-state="verified">mint revoked</span>
             <span className="badge" data-state="verified">freeze: none</span>
-            {coin.migrated && <span className="badge" data-state="verified">LP burned</span>}
+            {coin.migrated && <LiquidityBadge mint={coin.mint} />}
           </div>
           <div className="progress big" aria-label="graduation progress">
             <span style={{ width: `${Math.min(100, pct)}%` }} />
@@ -675,6 +686,7 @@ export function CoinScreen() {
           </p>
         </div>
 
+        <GraduatedFeesCard coin={coin} />
         <StatsStrip coin={coin} candles={candles} ammSpot={ammSpot} />
         <ChartCard candles={candles} />
         <ActivityTabs coin={coin} trades={trades} myAddress={account?.address ?? null} />
@@ -698,6 +710,134 @@ export function CoinScreen() {
           />
         )}
       </aside>
+    </div>
+  );
+}
+
+/**
+ * Which branch a graduated coin took, stated honestly.
+ *
+ * Both branches make liquidity permanent; only one keeps earning. Saying
+ * "LP burned" on a locked coin (or the reverse) would misdescribe the thing
+ * a creator most wants to know, so this reads the chain rather than guessing
+ * from the cluster.
+ */
+function LiquidityBadge({ mint }: { mint: string }) {
+  const [locked, setLocked] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetchGraduatedFees(getConnection(), mint)
+      .then((g) => live && setLocked(g !== null))
+      .catch(() => live && setLocked(null));
+    return () => {
+      live = false;
+    };
+  }, [mint]);
+  if (locked === null) return null;
+  return (
+    <span className="badge" data-state="verified" data-testid="liquidity-badge">
+      {locked ? "LP locked — earning" : "LP burned"}
+    </span>
+  );
+}
+
+/**
+ * The post-graduation fee stream. Only rendered on the lock branch, because
+ * on the burn branch there is nothing to show and an empty card implying
+ * otherwise would be worse than no card.
+ *
+ * Note the framing of the recovery bar: dao.fun fronts the graduation out of
+ * the coin's own protocol fees and the SOL side repays that first, so until
+ * it is clear the creator really does receive only the coin side. Calling
+ * that "fees earned" would be a lie, so it is labelled as what it is.
+ */
+function GraduatedFeesCard({ coin }: { coin: CoinView }) {
+  const { wallet, account, getSigner, openModal } = useWallet();
+  const [fees, setFees] = useState<GraduatedFees | null>(null);
+  const [state, setState] = useState<SendState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!coin.migrated) return;
+    let live = true;
+    fetchGraduatedFees(getConnection(), coin.mint)
+      .then((g) => live && setFees(g))
+      .catch(() => live && setFees(null));
+    return () => {
+      live = false;
+    };
+  }, [coin.migrated, coin.mint, tick]);
+
+  if (!coin.migrated || !fees) return null;
+
+  async function collect() {
+    if (!wallet || !account) return openModal();
+    const signer = getSigner();
+    if (!signer) {
+      setState({ phase: "failed", reason: "rpc-error", message: "This wallet cannot sign transactions." });
+      return;
+    }
+    setBusy(true);
+    setState(null);
+    try {
+      const st = await collectGraduatedFees(coin, {
+        connection: getConnection(),
+        wallet: signer,
+        onState: setState,
+      });
+      if (st.phase === "confirmed") setTick((t) => t + 1);
+    } catch (e) {
+      setState({ phase: "failed", reason: "rpc-error", message: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const repaid = fees.outstanding === 0n;
+  return (
+    <div className="card" data-testid="graduated-fees">
+      <h2>Trading fees</h2>
+      <p className="muted small">
+        The pool&apos;s liquidity is locked forever, and its trading fees keep
+        paying this coin&apos;s creator. Anyone can collect — the destination
+        is fixed on chain.
+      </p>
+      {!repaid && (
+        <>
+          <div className="progress" aria-label="graduation cost repaid">
+            <span style={{ width: `${Math.round(fees.recoveredRatio * 100)}%` }} />
+          </div>
+          <p className="muted small" data-testid="recovery-note">
+            Repaying the graduation dao.fun paid for:{" "}
+            {(Number(fees.recoveredLamports) / 1e9).toFixed(4)} of{" "}
+            {(Number(fees.costLamports) / 1e9).toFixed(4)} SOL. Until it clears,
+            the SOL side covers that — the token side goes to the creator either way.
+          </p>
+        </>
+      )}
+      {repaid && (
+        <p className="muted small" data-testid="recovery-note">
+          Graduation repaid in full. Fees now split 80/20 in the creator&apos;s favour.
+        </p>
+      )}
+      <button
+        className="button"
+        disabled={busy}
+        onClick={() => void collect()}
+        data-testid="collect-graduated"
+      >
+        {busy ? "Working…" : "Collect fees"}
+      </button>
+      {state && (
+        <p className="status" data-phase={state.phase === "confirmed" ? "done" : state.phase === "failed" ? "error" : state.phase}>
+          {state.phase === "confirmed"
+            ? "✅ Collected"
+            : state.phase === "failed"
+              ? `❌ ${state.message ?? state.reason}`
+              : `⏳ ${state.phase}…`}
+        </p>
+      )}
     </div>
   );
 }
