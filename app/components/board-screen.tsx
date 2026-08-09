@@ -16,7 +16,11 @@ import {
   subscribeLaunchpad,
   type CoinView,
 } from "../lib/launchpad-api";
-import { fetchCoinFromChain, loadLocalCoins } from "../lib/chain-coin";
+import {
+  fetchAllCoinsFromChain,
+  fetchCoinFromChain,
+  loadLocalCoins,
+} from "../lib/chain-coin";
 import { getConnection } from "../lib/solana";
 import { truncateAddress } from "../lib/wallet-registry";
 
@@ -64,16 +68,31 @@ export function BoardScreen() {
       ]);
       return { new: fresh, graduating: nearly, graduated: done };
     }
-    // No indexer: the coins this browser launched or visited, read from
-    // chain and bucketed with the same rule the indexer applies.
+    // No indexer: read EVERY coin from the program itself, then bucket it
+    // with the same rule the indexer applies. Discovery cannot come from
+    // localStorage — that showed each visitor only their own history and hid
+    // every coin created elsewhere.
     const connection = getConnection();
-    const found = (
+    const found = await fetchAllCoinsFromChain(connection);
+
+    // localStorage is a hint, not the source: a coin created seconds ago may
+    // not be in the scan's snapshot yet, and the launcher should still see it.
+    const seen = new Set(found.map((c) => c.mint));
+    const extra = (
       await Promise.all(
-        loadLocalCoins().map((m) => fetchCoinFromChain(connection, m).catch(() => null)),
+        loadLocalCoins()
+          .filter((m) => !seen.has(m))
+          .map((m) => fetchCoinFromChain(connection, m).catch(() => null)),
       )
     ).filter((c): c is CoinView => c !== null);
+
     const out = emptyBuckets();
-    for (const coin of found) out[boardBucket(coin)].push(coin);
+    for (const coin of [...found, ...extra]) out[boardBucket(coin)].push(coin);
+    // Busiest first within each column, so an empty new coin never sits above
+    // one that is actually trading.
+    for (const key of Object.keys(out) as BoardBucket[]) {
+      out[key].sort((a, b) => Number(BigInt(b.realSol) - BigInt(a.realSol)));
+    }
     return out;
   }, []);
 

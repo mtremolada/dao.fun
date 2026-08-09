@@ -510,3 +510,14 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       refused with "Voter weight threshold disabled", anyone authors through
       the gate, community votes. Suites: 66 integration, 199 sdk + 78 backend
       + 67 app + 35 keeper unit, 33 e2e.
+- [x] **The board actually shows the launchpad (D-054, 2026-08-09).**
+      Operator reported the new devnet coins were not on the front end. The
+      serverless board discovered coins from `localStorage` — "mints this
+      browser has visited" — so it was full on the developer's machine and
+      EMPTY for every real visitor, and no coin created elsewhere could ever
+      appear. Discovery now reads the program: one getProgramAccounts for the
+      curves (dataSize filter, which keeps the Config account from decoding as
+      a coin) plus one batched getMultipleAccounts for metadata, two calls
+      total; localStorage is demoted to a hint for a coin created seconds ago.
+      Verified against live devnet — 11 of 11 coins found with names — and
+      pinned by an e2e with an empty localStorage that fails on the old code.

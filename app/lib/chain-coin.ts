@@ -14,6 +14,13 @@ import { launchpadProgramId } from "./cluster";
 
 const LOCAL_KEY = "daofun:local-coins";
 
+/**
+ * BondingCurve account length. The Config account is owned by the same program
+ * and would otherwise decode as a coin, so filtering on size is what keeps the
+ * scan honest (profile.ts carries the same constant and the same reason).
+ */
+export const CURVE_ACCOUNT_LEN = 8 + 32 + 32 + 8 * 4 + 2 + 2 + 1 + 1 + 32 + 1;
+
 /** Mints this browser has launched or visited, so the board isn't empty. */
 export function rememberCoin(mint: string): void {
   try {
@@ -123,6 +130,57 @@ export async function fetchCoinFromChain(
     (): CoinMetadata => ({ name: "", symbol: "", uri: "" }),
   );
   return coinViewFromCurve(mint, c, meta);
+}
+
+/**
+ * EVERY coin on this deployment, straight from chain.
+ *
+ * The board used to render only `loadLocalCoins()` — mints this browser had
+ * launched or visited. That makes an empty board for every visitor who is not
+ * the launcher, and it silently hides coins created anywhere else (a script,
+ * another device, another person). A launchpad whose front page shows your own
+ * browsing history is not a launchpad, so discovery now comes from the program
+ * itself and localStorage is demoted to a hint.
+ *
+ * Two RPC calls regardless of how many coins exist: one `getProgramAccounts`
+ * for the curves, one batched `getMultipleAccounts` for their metadata. The
+ * `dataSize` filter is CORRECTNESS, not an optimization — the Config account
+ * is owned by the same program, and without the size filter it would decode
+ * as a coin (the same trap `profile.ts` documents).
+ */
+export async function fetchAllCoinsFromChain(
+  connection: Connection,
+): Promise<CoinView[]> {
+  const programId = launchpadProgramId();
+  const accounts = await connection.getProgramAccounts(programId, {
+    filters: [{ dataSize: CURVE_ACCOUNT_LEN }],
+  });
+  const curves = accounts.map(({ account }) => decodeCurve(account.data));
+  if (curves.length === 0) return [];
+
+  // Metadata in batches of 100 — the getMultipleAccounts ceiling. A missing
+  // or unparseable metadata account is not a reason to drop the coin: the
+  // curve is the source of truth and a nameless coin still trades.
+  const metas: CoinMetadata[] = [];
+  for (let i = 0; i < curves.length; i += 100) {
+    const slice = curves.slice(i, i + 100);
+    const infos = await connection.getMultipleAccountsInfo(
+      slice.map((c) => metadataPdaFor(c.mint)),
+    );
+    for (const info of infos) {
+      let meta: CoinMetadata = { name: "", symbol: "", uri: "" };
+      try {
+        if (info) meta = parseMetadata(info.data);
+      } catch {
+        /* keep the coin, lose the name */
+      }
+      metas.push(meta);
+    }
+  }
+
+  return curves.map((c, i) =>
+    coinViewFromCurve(c.mint.toBase58(), c, metas[i]!),
+  );
 }
 
 /**

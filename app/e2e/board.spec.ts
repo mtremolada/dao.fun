@@ -74,3 +74,47 @@ test("/board still resolves to the same board (old links keep working)", async (
   await page.goto("/board");
   await expect(page.getByTestId("column-new")).toBeVisible();
 });
+
+/**
+ * Discovery must come from the PROGRAM, not from this browser's history.
+ *
+ * The board used to render only `loadLocalCoins()`, so a visitor who had not
+ * personally launched or visited a coin saw an empty front page, and coins
+ * created anywhere else — a script, another device, another person — never
+ * appeared at all. That is what this pins: a browser with NOTHING in
+ * localStorage still sees every coin the program holds, bucketed correctly.
+ */
+test("the board shows coins from the PROGRAM, with nothing in localStorage", async ({
+  page,
+}) => {
+  const live = new PublicKey("8PnhcD5R8inK9YbcS2GYTg63n6LD3FY3xxD47RaB1s5K");
+  const done = new PublicKey("7Xi9ijr7mZS6YL1fmwfscSuEQyQ9kZD9W3PzbNob9Bof");
+
+  const accounts = coinAccounts(live, midCurve(live), {
+    name: "Stranger Coin",
+    symbol: "STRNG",
+  });
+  for (const [k, v] of coinAccounts(
+    done,
+    { ...midCurve(done), complete: true, migrated: true, poolState: live },
+    { name: "Done Coin", symbol: "DONE" },
+  )) {
+    accounts.set(k, v);
+  }
+
+  // No `coins:` — localStorage is deliberately empty.
+  await seedBrowser(page);
+  await installRpcStub(page, accounts);
+  await page.goto("/");
+
+  await expect(
+    page.getByTestId("column-new").getByTestId("coin-STRNG"),
+  ).toContainText("Stranger Coin");
+  await expect(
+    page.getByTestId("column-graduated").getByTestId("coin-DONE"),
+  ).toBeVisible();
+  // ...and the empty-state CTA is gone, because the board is not empty.
+  await expect(
+    page.getByRole("link", { name: /be the first to launch/i }),
+  ).toHaveCount(0);
+});

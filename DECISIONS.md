@@ -1833,3 +1833,45 @@ disappears, per-test times dropped roughly fourfold (2–3s to ~0.7s), the whole
 suite got FASTER despite the up-front build, and it now exercises the artifact
 that actually ships rather than a dev bundle. Three consecutive full runs:
 33/33, 33/33, 33/33.
+
+## D-054 — The board showed you your own browsing history, not the launchpad (2026-08-09)
+
+**Symptom, reported by the operator:** the coins I had just created on devnet
+did not appear on the front end.
+
+**Cause.** Without an indexer the board's discovery was
+`loadLocalCoins()` — a localStorage list of "mints this browser has launched
+or visited". Every coin then rendered correctly from chain, which is why this
+never looked broken to whoever built it: on the developer's own machine the
+board is full. For everyone else it is EMPTY, and no coin created anywhere
+else — a script, another device, another person — can ever appear. A
+launchpad whose front page shows your own history is not a launchpad.
+
+**Fix.** Discovery now comes from the program: one `getProgramAccounts` for
+the curves (with the `dataSize` filter, which is CORRECTNESS rather than an
+optimization — the Config account is owned by the same program and would
+otherwise decode as a coin, the trap `profile.ts` already documents), then one
+batched `getMultipleAccounts` for the metadata. Two RPC calls regardless of
+how many coins exist. localStorage is demoted to a hint: it still fills in a
+coin created seconds ago that the scan's snapshot may not carry yet, which is
+the one thing it was genuinely good for. Columns sort by raise, so a coin with
+real volume never sits under an empty one.
+
+Metadata failures no longer drop a coin. The curve is the source of truth and
+a nameless coin still trades; losing the whole listing because a Metaplex
+account was unparseable is the worse outcome.
+
+Verified against live devnet before trusting it: 11 of 11 coins discovered
+with names, including every coin the scripts created. The e2e that pins it
+seeds two coins and an EMPTY localStorage; it fails on the old code (the board
+falls back to the "be the first to launch" empty state) and passes on the new.
+
+**Worth noting for the indexer path.** `apiConfigured()` still short-circuits
+to the backend's own bucketing, which does scan. This bug only ever affected
+the serverless deploy — which is the deploy that is live.
+
+**And the honest limit.** A full scan returns every curve, 143 bytes each, so
+the payload grows with the launchpad: fine at 11 coins, ~1.4 MB at ten
+thousand. The backend indexer is the answer at that scale and already exists;
+this is the correct behaviour for a serverless deploy, not a permanent
+substitute for indexing.
