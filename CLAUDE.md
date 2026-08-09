@@ -7,37 +7,29 @@ everything in **DECISIONS.md** (D-001..D-049 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
-## ⛔ BLOCKED + LIVE SITE DEGRADED — read this first
+## ✅ DEVNET LIVE (2026-08-09) — fee model deployed and walked end to end
 
-**The devnet program upgrade is blocked on SOL and the live devnet site is
-broken until it lands.** `deploy-pages.yml` deploys on push to
-`claude/solana-launchpad-bonding-curve-lqx3dd`, so the Pages site was
-rebuilt with an SDK whose `buy`/`sell`/`create_coin` account lists now
-include the per-mint `["protocol-vault", mint]` PDA — which the DEPLOYED
-devnet program (still the pre-F1a build) does not expect. Trading on
-mtremolada.github.io/dao.fun will fail until the program is upgraded. No
-funds are at risk; devnet only.
+Program upgraded on devnet (sig 3BACkmffgQid…), config pointed at the **1%
+tier** (`EsTevfacYXpuho5VBuzBjDZi8dtWidGnXoSYAr8krTvz` — devnet index 3;
+mainnet's 1% is index 1, which is why tiers are stored as ADDRESSES).
+`lockProgram` stays `PublicKey.default` on devnet: Raydium's locker is not
+deployed there, so migrate burns.
 
-**Unblock:** fund `5xqnc7on54YYTiNKDbC5vb123q3JDuLSGF8HdQSd1f2G` on DEVNET
-with ~3.5 SOL (upgrade needs a 3.049 SOL buffer, refunded, plus ~0.09 SOL
-to extend programdata from 419,912 to 432,168 bytes). The datacenter IP is
-rate-limited on every public devnet faucet; faucet.solana.com works from a
-browser. Then:
+Proof coin: `42io3su15PAvmmjsNqVbPMKcaeMzjCNDzF4nf1GNCDB6`, pool
+`ER5ujesyLafk21ZuQ425FtKN1sjJKkg2i9GVcLTYa2rd`. create → buy → sell →
+buy-out → migrate → collect_protocol_fee → collect_creator_fee, all on
+chain. The RAISE-FALLBACK path was exercised for real: devnet's 2.83 SOL
+raise earns only 0.0198 SOL of protocol fee against 0.1922 of overhead, so
+the vault paid 0.023987 and the raise covered 0.168169 — summing to the
+overhead exactly. On mainnet the vault covers it 2.76×.
 
-```
-solana program extend DaV3ystSgyM9ALDCbtv9AzyfEtAuPe9x8jVacYDdSU7V 20000 \
-  --url https://api.devnet.solana.com
-solana program deploy --program-id .wallets/launchpad-program.json \
-  --upgrade-authority .wallets/deployer.json \
-  --url https://api.devnet.solana.com \
-  programs/target/deploy/launchpad_curve.so
-```
-
-then set the devnet fee tier to the 1% config (devnet index 3 =
-`EsTevfacYXpuho5VBuzBjDZi8dtWidGnXoSYAr8krTvz` — INDICES DIFFER FROM
-MAINNET, where 1% is index 1) via `buildSetGraduationConfigIx`, leaving
-`lockProgram = PublicKey.default` because Raydium's locker does not exist
-on devnet.
+**Deploy gotchas (runbook):** `solana program deploy` needs `--use-rpc` from
+this container — the CLI's TPU/pubsub path fails TLS through the agent proxy
+with `InvalidCertificate(UnknownIssuer)`. Failed attempts orphan buffers
+holding ~3.6 SOL each; `solana program show --buffers --buffer-authority
+<deployer>` then `solana program close <buffer>` recovers them. Public devnet
+faucets rate-limit this datacenter IP entirely — funding must come from a
+browser faucet or the operator.
 
 ## ▶ IN FLIGHT: perpetual post-graduation fees — PLAN-GRADUATED-FEES.md
 
