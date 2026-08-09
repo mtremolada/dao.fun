@@ -46,7 +46,7 @@ import {
 import type { ProgramTestContext } from "solana-bankrun";
 
 const GATE_PROGRAM_ID = new PublicKey(
-  "3QgQJ4EufHygGPMSBg4tD1Jzi1tEfyrFH4yXH3w8pBvg",
+  "4UioBmH3WkwYbLN6tumLGrUpXGMwFwcaxt1jbUcZE7Cy",
 );
 
 function disc(name: string): Buffer {

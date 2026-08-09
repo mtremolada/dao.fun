@@ -21,9 +21,20 @@ export const SQUADS_V4_PROGRAM_ID = new PublicKey(
   "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
 );
 
-/** proposal-gate (ours) — Stage 3 guarded front door (gate v2, D-042). */
+/**
+ * proposal-gate (ours) — Stage 3 guarded front door (gate v2, D-042).
+ *
+ * Deployed on devnet 2026-08-09. The previous value was a placeholder from a
+ * build-time keypair that `programs/target/` (gitignored) dropped and a later
+ * rebuild replaced, so nobody held the key and the gate could never have been
+ * deployed to it — an Anchor program refuses every instruction when its
+ * address differs from `declare_id!`. The key for THIS id is kept in
+ * `.wallets/proposal-gate-program.json`, beside the launchpad's, which is the
+ * habit that was missing. (Only the initial deploy needs it; upgrades are
+ * authorised by the deployer wallet.)
+ */
 export const PROPOSAL_GATE_PROGRAM_ID = new PublicKey(
-  "3QgQJ4EufHygGPMSBg4tD1Jzi1tEfyrFH4yXH3w8pBvg",
+  "4UioBmH3WkwYbLN6tumLGrUpXGMwFwcaxt1jbUcZE7Cy",
 );
 // Jito merkle distributor (JTO airdrop deployment, Dec 2023). Resolved and
 // verified on mainnet (D-024): executable, upgrade authority REMOVED

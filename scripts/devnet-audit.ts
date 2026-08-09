@@ -26,6 +26,7 @@ import {
   protocolVaultPda,
 } from "../packages/sdk/src/launchpad";
 import {
+  PROPOSAL_GATE_PROGRAM_ID,
   RAYDIUM_CPMM_AMM_CONFIG_1PCT_DEVNET,
   RAYDIUM_CPMM_PROGRAM_ID_DEVNET,
 } from "../packages/sdk/src/constants";
@@ -84,6 +85,35 @@ async function main(): Promise<void> {
     "everything past the ELF is zero padding",
     `${padding.length} bytes`,
   );
+
+  // The gate is a second deployment of ours and deserves the same treatment:
+  // an Anchor program whose address differs from its `declare_id!` refuses
+  // every instruction, so "deployed" and "deployed at the RIGHT address" are
+  // different claims (D-053).
+  const gateInfo = await connection.getAccountInfo(PROPOSAL_GATE_PROGRAM_ID);
+  if (!gateInfo) {
+    console.log(`\nproposal-gate ${PROPOSAL_GATE_PROGRAM_ID.toBase58()} — NOT DEPLOYED here`);
+  } else {
+    const gateFixture = gunzipSync(
+      readFileSync(resolve(__dirname, "../tests/fixtures/proposal_gate.so.gz")),
+    );
+    const gatePd = new PublicKey(gateInfo.data.subarray(4, 36));
+    const gatePdInfo = await connection.getAccountInfo(gatePd);
+    const gateDeployed = gatePdInfo!.data.subarray(45);
+    console.log(`\nproposal-gate ${PROPOSAL_GATE_PROGRAM_ID.toBase58()}`);
+    check(gateInfo.executable, "  gate is executable");
+    check(
+      Buffer.from(gateDeployed.subarray(0, gateFixture.length)).equals(
+        Buffer.from(gateFixture),
+      ),
+      "  deployed gate == tests/fixtures/proposal_gate.so.gz",
+      `${gateFixture.length} bytes`,
+    );
+    check(
+      gateDeployed.subarray(gateFixture.length).every((b) => b === 0),
+      "  everything past the gate ELF is zero padding",
+    );
+  }
 
   // ---- config ----
   const cfgPda = configPda(PROGRAM_ID);

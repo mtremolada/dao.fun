@@ -403,3 +403,45 @@ hard-codes the mainnet CPMM id, so no amount of devnet work substitutes.
 Requires one real launch and real SOL — operator go/no-go.
 
 Sign-off: ______________________  date: __________
+
+## GATE L5 — the guarded front door, LIVE on devnet (2026-08-09) — PASSED
+
+Scope: the proposal-gate deployed to a real cluster and driven by the
+PRODUCTION ceremony, not a simulator. D-042 (the design), D-053 (this run).
+
+**Program.** `4UioBmH3WkwYbLN6tumLGrUpXGMwFwcaxt1jbUcZE7Cy`, deployed
+2026-08-09 (`3RXXk38DTPzD…`), upgrade authority the deployer. The deployed
+bytes are byte-identical to `tests/fixtures/proposal_gate.so.gz` — the exact
+binary the gate suites load — with no padding at all (298,040 bytes both).
+
+**First, the thing that would have invalidated the run.** Devnet's
+`GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw` is **spl-governance 3.1.2**
+(1,195,568 bytes); mainnet's is the **3.1.4** fork (1,319,856). Same address,
+different program — the D-031/D-032 trap wearing a different hat. Squads
+differs too, binary AND on-chain ProgramConfig (a different treasury, which
+`multisig_create_v2` validates). `tests/devnet-governance-parity` pins all of
+this and re-runs the load-bearing assertions against the DEVNET binaries in
+bankrun BEFORE any SOL was spent: the u64::MAX sentinel disables authorship on
+3.1.2 exactly as on 3.1.4, and the full guarded ceremony lands. Only then was
+the live run worth doing.
+
+**The live run** (`scripts/devnet-guarded-run.ts`, all checks passed):
+
+| Evidence | Signature / value |
+|---|---|
+| realm derived in advance matches what the ceremony built | `xds5UFYGFK6SoeBdKgjaWtYdfDwpFmawXaKu1YA3pxL` |
+| ceremony in 3 txs: council mint → realm → governance | `2doiVtz7…`, `5iDhgxcu…`, `hNtNx38T…` |
+| gate account: bound to the realm, names the community mint, GUARDED mode, full 8-program menu | — |
+| the gate's council record holds **exactly one** council token | weight `1` |
+| **a holder of the ENTIRE community supply is REFUSED** | `GOVERNANCE-ERROR: Voter weight threshold disabled` |
+| anyone may author THROUGH the gate: propose → insert → sign off | `mvz4NZxp…`, `zRVuZv3v…`, `5uGuvDhq…` |
+| the community votes on it — the electorate is the COMMUNITY mint | `2czakuAA…`, proposal `vfwHWftREkcTUGiqRdaMhCVEFB1tU6LpJvKHg4F6Wy3` |
+
+**What this does NOT prove, stated plainly.** It is 3.1.2, not the 3.1.4 fork
+production uses — the parity suite is what carries that across, and bankrun
+against the mainnet binary remains the primary evidence. Finalize and execute
+were not attempted: production params are a 3-day voting window and a 72-hour
+hold-up, and a live cluster's clock cannot be warped. The proposal above is
+left in `Voting` and can be finalized after the window elapses.
+
+Sign-off: ______________________  date: __________

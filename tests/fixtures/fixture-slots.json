@@ -10,5 +10,23 @@
   "raydium_lock": {
     "programId": "LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE",
     "deploySlot": 362025476
+  },
+  "spl_governance_devnet": {
+    "programId": "GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw",
+    "cluster": "devnet",
+    "deploySlot": 399231146,
+    "note": "spl-governance 3.1.2 \u2014 NOT the 3.1.4 fork mainnet runs (D-053)"
+  },
+  "squads_v4_devnet": {
+    "programId": "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
+    "cluster": "devnet",
+    "deploySlot": 446638068,
+    "note": "different build AND ProgramConfig treasury from mainnet (D-053)"
+  },
+  "proposal_gate_devnet": {
+    "programId": "4UioBmH3WkwYbLN6tumLGrUpXGMwFwcaxt1jbUcZE7Cy",
+    "cluster": "devnet",
+    "deploySlot": 482414022,
+    "note": "ours; upgrade authority is the deployer (GATE L5)"
   }
 }

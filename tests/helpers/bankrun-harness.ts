@@ -244,33 +244,77 @@ export function startGuarded(
   );
 }
 
+/**
+ * Which cluster's governance stack to stand up.
+ *
+ * They are NOT the same program. Devnet runs spl-governance **3.1.2** and a
+ * different Squads build; mainnet runs the **3.1.4** fork everything in this
+ * repo was verified against. Anything claiming a devnet run proves mainnet
+ * behaviour has to earn it — see tests/devnet-governance-parity.
+ */
+export type GovStack = "mainnet" | "devnet";
+
+const DEVNET_SQUADS_CONFIG = JSON.parse(
+  readFileSync(resolve(__dirname, "../fixtures/squads-program-config-devnet.json"), "utf8"),
+) as typeof squadsConfig;
+
+/**
+ * Which Squads ProgramConfig a given context was built with.
+ *
+ * Squads validates the `treasury` account passed to `multisig_create_v2`
+ * against the one in its on-chain ProgramConfig, and the two clusters name
+ * DIFFERENT treasuries. Pinning the mainnet address here — which the harness
+ * used to do unconditionally — meant every DAO test would pass on mainnet
+ * binaries and fail on devnet's, so no test could ever have caught a
+ * cluster-config mismatch. Production was always correct: both the app and
+ * the backend read it from chain with `fetchProgramConfigTreasury`. This map
+ * gives the harness the same cluster-awareness without touching call sites.
+ */
+const CTX_TREASURY = new WeakMap<ProgramTestContext, PublicKey>();
+
+export function programConfigTreasuryFor(ctx: ProgramTestContext): PublicKey {
+  return CTX_TREASURY.get(ctx) ?? new PublicKey(squadsConfig.treasury);
+}
+
 export function startCtx(
   extraPrograms: AddedProgram[] = [],
   extraAccounts: AddedAccount[] = [],
+  stack: GovStack = "mainnet",
 ): Promise<ProgramTestContext> {
-  const label = `start(governance+squads${extraPrograms
+  const devnet = stack === "devnet";
+  const cfg = devnet ? DEVNET_SQUADS_CONFIG : squadsConfig;
+  const label = `start(${stack} governance+squads${extraPrograms
     .map((p) => `+${p.name}`)
     .join("")})`;
   return startResilient(label, () =>
     start(
       [
-        { name: "spl_governance", programId: SPL_GOVERNANCE_PROGRAM_ID },
-        { name: "squads_v4", programId: SQUADS_V4_PROGRAM_ID },
+        {
+          name: devnet ? "spl_governance_devnet" : "spl_governance",
+          programId: SPL_GOVERNANCE_PROGRAM_ID,
+        },
+        {
+          name: devnet ? "squads_v4_devnet" : "squads_v4",
+          programId: SQUADS_V4_PROGRAM_ID,
+        },
         ...extraPrograms,
       ],
       [
         ...extraAccounts,
         {
-          address: new PublicKey(squadsConfig.address),
+          address: new PublicKey(cfg.address),
           info: {
-            lamports: squadsConfig.lamports,
-            data: Buffer.from(squadsConfig.dataBase64, "base64"),
-            owner: new PublicKey(squadsConfig.owner),
+            lamports: cfg.lamports,
+            data: Buffer.from(cfg.dataBase64, "base64"),
+            owner: new PublicKey(cfg.owner),
             executable: false,
           },
         },
       ],
-    ),
+    ).then((ctx) => {
+      CTX_TREASURY.set(ctx, new PublicKey(cfg.treasury));
+      return ctx;
+    }),
   );
 }
 
@@ -579,7 +623,9 @@ export async function createDao(
     payer: payer.publicKey,
     predictedNativeTreasury: chain.nativeTreasury,
     createKey: createKey.publicKey,
-    programConfigTreasury: new PublicKey(squadsConfig.treasury),
+    // Whichever cluster's ProgramConfig this context was built with — Squads
+    // checks it, and the two clusters differ.
+    programConfigTreasury: programConfigTreasuryFor(ctx),
   });
   await send(ctx, [treasury.ix], [createKey]);
 

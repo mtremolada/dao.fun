@@ -493,3 +493,20 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       sell → collect_creator_fee → collect_protocol_fee against the live
       binary, lamports checked against the SDK's quote math. Suites: 63
       integration, 199 sdk + 78 backend + 67 app + 35 keeper unit, 33 e2e.
+- [x] **GATE L5 — the guarded front door LIVE on devnet (D-053,
+      2026-08-09).** Before spending anything, checked whether devnet is even
+      the program we designed against: it is NOT. Same address, but
+      spl-governance **3.1.2** vs mainnet's **3.1.4** fork, and Squads differs
+      in both binary and ProgramConfig. Dumped both as fixtures, pinned the
+      difference, and re-ran the D-042 load-bearing assertions against the
+      DEVNET binaries in bankrun — they hold, which is what makes the live run
+      meaningful. That parity work also caught a harness bug no test could
+      have: the mainnet Squads treasury was pinned for every context, so any
+      devnet DAO test would have failed on a config mismatch production never
+      had. Then found the gate's `declare_id!` was undeployable (its keypair
+      was lost with a `target/` rebuild), adopted the key we hold, saved it to
+      `.wallets/`, rebuilt, re-ran the gate suites, and deployed
+      (`3RXXk38DTPzD…`). The live run drives the production ceremony: whale
+      refused with "Voter weight threshold disabled", anyone authors through
+      the gate, community votes. Suites: 66 integration, 199 sdk + 78 backend
+      + 67 app + 35 keeper unit, 33 e2e.

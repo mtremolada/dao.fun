@@ -1742,3 +1742,94 @@ against the SDK's own quote math rather than checking for the absence of an
 error. All green on the newly deployed binary, including the negative one —
 a pre-graduation protocol sweep is REFUSED, because that money is earmarked
 for the coin's own graduation.
+
+## D-053 — The gate is live on devnet, and devnet is NOT the fork we designed against (2026-08-09)
+
+Operator approved spending devnet SOL for live guarded evidence. Two things
+had to be settled before spending any, and both turned out to matter.
+
+### 1. Devnet runs spl-governance 3.1.2, not the 3.1.4 fork
+
+Same address (`GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw`), different
+program: 1,195,568 bytes on devnet against 1,319,856 on mainnet, version
+strings `3.1.2` vs `3.1.4`, and mainnet carries Token-2022 deposit validation
+whose strings devnet's build does not contain at all. Squads v4 differs too —
+binary AND its on-chain ProgramConfig, which names a different treasury.
+
+This is the D-031/D-032 trap in a new costume. Our entire guarded design rests
+on ONE property of the fork (D-042): `min_community_weight_to_create_proposal
+= u64::MAX` is an EXPLICIT "disabled" sentinel, not a large threshold. If
+3.1.2 treated it as a number, a devnet whale could author and a "successful"
+live run would be evidence about a program nobody uses in production.
+
+So `tests/devnet-governance-parity.integration.test.ts` dumps both devnet
+binaries as fixtures, pins the difference so a future drift fails loudly, and
+re-runs the load-bearing assertions against the DEVNET binaries in bankrun.
+**They hold on 3.1.2**: the whale is refused with the same sentinel error, and
+the full production guarded ceremony lands. Only then was the live run worth
+paying for. Green here is what makes GATE L5 meaningful; red would have saved
+2 SOL and a false conclusion.
+
+**It also caught a harness bug no existing test could have.** Squads validates
+the `treasury` account against its ProgramConfig, and the harness pinned the
+MAINNET treasury for every context — so every DAO test would pass on mainnet
+binaries and fail on devnet's (`0x177e`, left `5DH2e3cJ…` right `HM5y4mz3…`).
+Production was always correct: the app and the backend both read it from chain
+via `fetchProgramConfigTreasury`. The harness now tracks the treasury per
+context, so a cluster mismatch is a test failure rather than a blind spot.
+
+### 2. The gate's declared program id was undeployable
+
+`declare_id!` named `3QgQJ4Eu…`, from a build-time keypair that
+`programs/target/` (gitignored) once dropped and a later rebuild replaced.
+Nobody held that key, the address had never been deployed, and an Anchor
+program refuses every instruction whose address differs from its
+`declare_id!` — so the gate could never have been deployed to it. The
+launchpad's program key had been saved to `.wallets/`; the gate's had not.
+
+**And this was live-breaking, not just theoretical.** `/launch` DEFAULTS to
+guarded mode (`create-screen.tsx`), and the guarded ceremony CPIs into the
+gate. With no gate deployed at any address, every guarded DAO launch from the
+public devnet site failed. The default path was broken and nothing tested it,
+because bankrun loads the gate binary by name at whatever id we ask for — a
+simulator will happily run a program the cluster does not have.
+
+Adopted the key we do hold, `4UioBmH3WkwYbLN6tumLGrUpXGMwFwcaxt1jbUcZE7Cy`,
+saved it to `.wallets/proposal-gate-program.json` beside the launchpad's,
+updated `declare_id!` + `PROPOSAL_GATE_PROGRAM_ID`, rebuilt, re-ran the gate
+suites green, and deployed (`3RXXk38DTPzD…`). Only the initial deploy needs
+that key — upgrades are authorised by the deployer wallet — but losing it
+before the first deploy is exactly what happened, so it now lives somewhere
+durable. Cost 2.075 SOL of rent; no orphaned buffers.
+
+### 3. The live run
+
+`scripts/devnet-guarded-run.ts` drives the production
+`buildCreateDaoIxs("guarded")` against real accounts: realm derived in advance
+matches, ceremony lands in three transactions, the gate is bound to the realm
+in guarded mode with the full 8-program menu, and its council record holds
+exactly one token. Then the two properties guarded mode exists for, on a real
+cluster: a holder of the **entire** community supply is refused with
+`GOVERNANCE-ERROR: Voter weight threshold disabled`, and an unrelated wallet
+authors through the gate — propose, insert, sign off — with the COMMUNITY as
+the electorate, which then votes. Evidence in GATES.md GATE L5.
+
+Finalize and execute were not attempted and the run says so rather than
+quietly stopping: production params are a 3-day voting window and a 72-hour
+hold-up, and a live cluster's clock cannot be warped. The proposal is left in
+`Voting`.
+
+### 4. And the e2e suite had the same disease as the bankrun one
+
+Two full e2e runs failed on two DIFFERENT specs, each passing alone — the
+"re-run and it's fine" pattern D-051 exists to stamp out. Cause: the suite
+served the app with `next dev`, which compiles each route on its FIRST
+request, so with four browser workers racing on a 4-core box whichever spec
+touched a cold route first could blow its timeout.
+
+Playwright now serves a production build (`next build && next start`;
+`E2E_DEV=1` restores the dev server for writing specs). On-demand compilation
+disappears, per-test times dropped roughly fourfold (2–3s to ~0.7s), the whole
+suite got FASTER despite the up-front build, and it now exercises the artifact
+that actually ships rather than a dev bundle. Three consecutive full runs:
+33/33, 33/33, 33/33.

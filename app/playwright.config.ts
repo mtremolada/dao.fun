@@ -19,9 +19,19 @@ export default defineConfig({
       : {}),
   },
   webServer: {
-    command: "npx next dev -p 3210",
+    // A PRODUCTION build, not `next dev`. The dev server compiles each route
+    // on its first request, so with four browser workers racing on a 4-core
+    // box the first test to touch a cold route could blow its timeout — a
+    // different spec each run, green on re-run, which is exactly the kind of
+    // flake that teaches you to stop reading failures. Building once up front
+    // removes on-demand compilation entirely, and has the side benefit of
+    // exercising the artifact that actually ships rather than a dev bundle.
+    // Set E2E_DEV=1 for the fast-feedback dev server while writing specs.
+    command: process.env.E2E_DEV
+      ? "npx next dev -p 3210"
+      : "npx next build && npx next start -p 3210",
     url: "http://127.0.0.1:3210",
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    timeout: 300_000,
   },
 });

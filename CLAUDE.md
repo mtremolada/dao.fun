@@ -98,6 +98,33 @@ so the lock path can NEVER run on devnet: bankrun-with-mainnet-binaries is
 the primary proof, devnet covers the burn branch and everything around it,
 mainnet canary (GATE L4) is the only live run.
 
+## ⚠️ DEVNET IS NOT THE FORK WE DESIGNED AGAINST (D-053)
+
+Same address, different program: devnet's `GovER5…` is **spl-governance
+3.1.2** (1,195,568 B); mainnet's is the **3.1.4** fork (1,319,856 B). Squads
+differs too — binary AND its on-chain ProgramConfig, which names a different
+treasury that `multisig_create_v2` validates (hardcoding mainnet's fails with
+`0x177e`). Read it from chain with `fetchProgramConfigTreasury`, always.
+
+`tests/devnet-governance-parity` pins the difference and re-runs the D-042
+load-bearing assertions against the DEVNET binaries (fixtures
+`spl_governance_devnet.so.gz`, `squads_v4_devnet.so.gz`). They hold on 3.1.2 —
+which is what makes GATE L5 mean anything. Run it before believing any devnet
+governance result. `startCtx(programs, accounts, "devnet")` selects the stack.
+
+## ✅ GATE L5 PASSED — the gate is LIVE on devnet (D-053)
+
+proposal-gate `4UioBmH3WkwYbLN6tumLGrUpXGMwFwcaxt1jbUcZE7Cy` (deploy
+`3RXXk38DTPzD…`), byte-identical to the tested fixture. `pnpm tsx
+scripts/devnet-guarded-run.ts` runs the PRODUCTION ceremony live: a holder of
+the entire supply is refused ("Voter weight threshold disabled") and anyone
+authors through the gate. Finalize/execute need the 3-day window, so the run
+stops at a cast vote and says so.
+
+**The gate's program key is `.wallets/proposal-gate-program.json`** — the old
+`declare_id!` (`3QgQJ4Eu…`) came from a keypair `programs/target/` dropped and
+a rebuild replaced, so it was undeployable. Save program keys to `.wallets/`.
+
 ## ✅ Guarded SHIPPED (2026-08-09, D-043) — unified launch page live
 
 Gate v2 (four PDA-signed CPIs, client-parity, proven on the deployed

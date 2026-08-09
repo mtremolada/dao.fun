@@ -28,7 +28,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 
-declare_id!("3QgQJ4EufHygGPMSBg4tD1Jzi1tEfyrFH4yXH3w8pBvg");
+declare_id!("4UioBmH3WkwYbLN6tumLGrUpXGMwFwcaxt1jbUcZE7Cy");
 
 /// Deployed program ids the gate trusts structurally (pinned, VERSIONS.md;
 /// byte arrays because anchor 0.30 does not re-export the pubkey! macro).
