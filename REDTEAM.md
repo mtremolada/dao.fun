@@ -247,15 +247,53 @@ restated here.
   guidance. Residual: the user must set their wallet to devnet; the UI tells
   them how per wallet.
 - **6.6 CORS / SSE exhaustion.** Exact-origin CORS (no credentials); `/meta/*`
-  is deliberately `*` and read-only. SSE has a per-IP connection cap + heartbeat
-  GC.
+  is deliberately `*` and read-only. SSE has a per-client connection cap +
+  heartbeat GC.
+  **Correction (D-057, 2026-08-09): this line claimed a per-IP cap that did not
+  exist.** The only cap was `maxClients`, which is GLOBAL — so one client
+  opening 1,000 connections reached it alone and every other viewer was
+  refused. A denial of service needing no exploit, just a loop, sitting behind
+  a mitigation this document said was already in place. The per-client cap is
+  now real (`SseHub.maxPerClient`, default 12), keyed on the leftmost
+  `x-forwarded-for` entry because the socket address behind a proxy is the
+  PROXY's and would have lumped every visitor into one bucket. That key is
+  client-supplied and therefore spoofable: treat it as a fairness cap, not a
+  security boundary. The global cap remains the backstop that holds regardless,
+  which is why both exist.
+- **6.9 The metrics endpoint.** `GET /metrics` is unauthenticated and exposes
+  indexer lag, connection counts, RPC rates and the keeper's balance. Nothing
+  there is secret — the keeper's balance is a public account, and the rest is
+  operational telemetry about a public service — but it does hand an attacker a
+  free feedback channel: whether their load is landing, and whether the keeper
+  is running low. Disposition: accepted for devnet; before mainnet, put it
+  behind the same origin restriction as the rest of the API or a shared secret,
+  and remember that turning it OFF is worse than exposing it, because then
+  nobody sees the incident either.
+- **6.10 Priority-fee estimation as a spend path.** The client now derives its
+  fee from chain data (`getRecentPrioritizationFees`), so a party able to
+  influence that sample — by spamming high-fee transactions against a coin's
+  accounts — can raise what every other trader on that coin pays. The ceiling
+  is the control: the fee is clamped regardless of what the samples say, and
+  the clamp is asserted in `app/test/fees.test.ts` against a spike. Residual:
+  within the floor-to-ceiling band the fee is genuinely market-driven, which is
+  the point of it.
 - **6.7 Spam coin creation.** On-chain and permissionless by design — accepted;
   board ranking / "new" decay is the mitigation surface, not a gate.
 - **6.8 Closed-source CPMM / lock-program upgrade risk.** Raydium's CPMM is
   upgradeable (~quarterly). Residual: monitored via the deploy-slot watch in
   RUNBOOK; migration reads `create_pool_fee` live, and the graduation suite is
-  re-run against a fresh dump on any slot change. We do NOT depend on the
-  closed-source LP-lock program (LP is burned, not locked — operator decision).
+  re-run against a fresh dump on any slot change.
+  **Updated (D-057): the second sentence here was stale and materially so.** It
+  said we do not depend on the LP-lock program because LP is burned — true when
+  written, and false since the fee model shipped (D-049/D-050). On MAINNET the
+  LP is locked with Raydium's `LockrWmn…`, and the perpetual creator/DAO fee
+  stream depends on that closed-source program continuing to honour the fee-key
+  NFT as its sole collect authority. Devnet still burns, because the locker is
+  not deployed there — which is exactly why this dependency has never run live
+  and why GATE L4 (LAUNCH.md L-50) exists. What bounds the risk: the lock is
+  irreversible with no unlock/withdraw/close entrypoint (verified on the
+  deployed binary, D-049), so the failure mode of a locker upgrade is
+  "fees stop being collectable", not "the liquidity leaves".
 
 ## Verdict
 
