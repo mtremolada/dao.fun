@@ -2152,3 +2152,44 @@ enforces, what people hold (upgrade authority, config authority, this website,
 your RPC), and what is not guaranteed at all — each with the command to verify
 it. A user who learns about these later, rather than here, is right to feel
 misled.
+
+## D-058 — Recovering stranded devnet SOL, and the leak that caused most of it (2026-08-09)
+
+Operator: *"recover as much sol as you can from tokens etc."* Devnet SOL is
+faucet-limited and this datacenter IP is blocked from the public faucets
+entirely (D-052), so stranded lamports here are genuinely scarce.
+
+`scripts/devnet-recover.ts` surveys read-only and acts under `--apply`.
+Recovered **0.026466 SOL**: ten token accounts (three empty, seven holding
+worthless test tokens, burned under the separate `--burn` flag) at 2,039,280
+lamports of rent each, plus a migrated coin's protocol-fee vault. The audit
+was re-run afterwards and still passes — burning the deployer's own token
+balances touches no curve, pool or LP invariant.
+
+**Burning is behind its own flag on purpose.** On devnet those tokens are
+worthless, but "worthless" is a judgement about this cluster, not a property
+of the instruction; the same script pointed at mainnet would destroy real
+balances. Cheap flags are how that stays a decision rather than an accident.
+
+**What the script refuses to do.** Closing the two deployed programs would
+return **5.78 SOL** — twenty times everything else combined — and it is not
+offered as a flag, because it deletes the deployment that GATE L2, L3 and L5
+are all evidence about. It is also barely a recovery: redeploying costs the
+same SOL back, so the number is only real if devnet is being abandoned. DAO
+treasuries are likewise left alone: governance-owned by construction, so the
+only way out is a proposal through the gate — an hour of voting plus a hold-up
+to recover a fraction of a SOL.
+
+**The actual leak, now fixed.** `devnet-guarded-run.ts` funds a throwaway
+`voter` and `proposer` with 0.06 SOL each from `Keypair.generate()`, and those
+keys never leave the process. Every run therefore stranded 0.12 SOL
+PERMANENTLY, and across three runs (including one that aborted on the
+`baseVotingTime` floor) about **0.30 SOL was funded into wallets nobody can
+ever sign for again**. The run now sweeps them back before exiting, with the
+deployer paying the fee so each wallet can return its ENTIRE balance rather
+than holding some back for its own fee.
+
+I could not measure exactly what remains in those wallets: finding them needs
+`getTokenLargestAccounts`, which the public devnet RPC rate-limits from this IP
+(the D-026 constraint again). The funded figure is exact; the residue is not,
+and it is unrecoverable either way.

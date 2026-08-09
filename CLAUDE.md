@@ -73,6 +73,13 @@ L-92 (threshold-gated).
 - `pnpm tsx scripts/devnet-legacy-vault-fix.ts [--apply]` — one-off for coins
   created before the fee model: no protocol vault means every buy under
   ~0.127 SOL fails on rent. Anyone can fund the PDA; no authority needed.
+- `pnpm tsx scripts/devnet-recover.ts [--apply] [--burn]` — sweeps stranded
+  devnet SOL: empty token-account rent, creator/protocol fee vaults, and (with
+  `--burn`) the rent under leftover test tokens. Read-only without `--apply`.
+  It REFUSES to close the deployed programs and says so: that is 5.78 SOL of
+  rent, and reclaiming it means deleting the deployment every gate is evidence
+  about — and redeploying costs the same SOL back, so it is only a real
+  recovery if devnet is being abandoned.
 - `pnpm tsx scripts/devnet-guarded-run.ts --fast` — ~70 min (the governance
   builder enforces a 1-hour minimum voting window), ~0.165 SOL. Drives the
   guarded lifecycle to `Completed` including the hold-up refusal. `--cluster`

@@ -161,6 +161,45 @@ async function sendExpectFail(
 }
 
 /**
+ * Return whatever is left in the run's throwaway wallets.
+ *
+ * The deployer pays the fee so each wallet can send its ENTIRE balance rather
+ * than having to keep a fee back — the leftovers are unreachable the moment
+ * this process exits, so leaving any behind is leaving it on the floor.
+ * Best-effort: a failed sweep is worth a warning, never a failed run.
+ */
+async function sweepBack(
+  connection: Connection,
+  signer: Keypair,
+  wallets: { name: string; key: Keypair }[],
+): Promise<void> {
+  let total = 0;
+  for (const w of wallets) {
+    const lamports = await connection.getBalance(w.key.publicKey);
+    if (lamports === 0) continue;
+    try {
+      await send(
+        connection,
+        signer,
+        [
+          cu(),
+          SystemProgram.transfer({
+            fromPubkey: w.key.publicKey,
+            toPubkey: signer.publicKey,
+            lamports,
+          }),
+        ],
+        [w.key],
+      );
+      total += lamports;
+    } catch (e) {
+      console.log(`  sweep ${w.name} failed (${(e as Error).message.split("\n")[0]})`);
+    }
+  }
+  if (total > 0) console.log(`\nswept back ${total / 1e9} SOL from throwaway wallets`);
+}
+
+/**
  * `--fast` only: the two legs a production-params run cannot reach.
  *
  * Finalize is what converts a cast vote into a Succeeded proposal, and execute
@@ -538,6 +577,16 @@ async function main(): Promise<void> {
   } else {
     await driveToCompletion(connection, signer, made.proposal, dao.nativeTreasury);
   }
+
+  // ---- give the throwaway wallets' SOL back ----
+  // `voter` and `proposer` are generated per run and their keys never leave
+  // this process, so anything left in them at exit is stranded FOREVER. At
+  // 0.06 SOL each that is 0.12 SOL burned per run, which on a faucet-limited
+  // cluster is the difference between being able to run this again and not.
+  await sweepBack(connection, signer, [
+    { name: "voter", key: voter },
+    { name: "proposer", key: proposer },
+  ]);
 
   console.log(
     `\nend ${(await connection.getBalance(signer.publicKey)) / 1e9} SOL — ` +
