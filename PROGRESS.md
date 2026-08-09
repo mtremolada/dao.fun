@@ -417,3 +417,11 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       indexer "graduating" filter (was a synonym for "new"). `/launch` and
       `/board` kept as redirect/alias. Suites: 199 sdk + 78 backend + 25
       keeper + 45 app unit, 47 integration, 26 e2e; eslint + tsc clean.
+- [x] **Your Profile (D-045, 2026-08-09).** /profile: wallet summary,
+      claimable creator fees (one vault across all launches, rent floor
+      excluded) with Claim, and Your Launches with terminal links + a
+      permissionless "Graduate now" crank for finished curves. Discovery is
+      getProgramAccounts(dataSize 143 + creator memcmp) — the size filter
+      keeps the 277-byte Config (fee recipient at the same offset) from
+      being decoded as a coin. Nav: Board | Create | Profile. 50 app unit +
+      28 e2e.

@@ -1286,3 +1286,33 @@ column for column.
 
 **Nav** is Board | Create. The mode-comparison page is gone; each
 protection level carries its own detail inline on the create page.
+
+## D-045 — Your Profile: launcher control room, read from chain (2026-08-09)
+
+A launcher had no way to see their own coins or collect what they had
+earned. `/profile` adds it, chain-only (no indexer): wallet summary,
+claimable creator fees with a Claim button, and every launch with a link
+to its terminal plus a "Graduate now" crank when the curve is complete
+but not yet migrated.
+
+**One fee figure, not per coin.** `collect_creator_fee` drains the vault
+at seeds ["creator-vault", creator] — ONE vault serving ALL of that
+wallet's coins — down to the rent floor, with the destination fixed to
+the curve's recorded creator. So the UI shows a single claimable total
+(balance MINUS the rent floor the program retains, `claimableFromVault`)
+and any of the wallet's mints authorizes the drain. Showing a per-coin
+claim would have been fiction. Both this and `graduate` are
+permissionless on chain, so the buttons are safe for any visitor.
+
+**FINDING — the size filter is correctness, not optimization.** Launches
+are discovered with getProgramAccounts + a memcmp on the curve's
+`creator` at offset 40. Measured against devnet, the deployed
+BondingCurve is **143** bytes (the trailing `bump` — my first constant
+said 142 and matched nothing), and a 277-byte **Config** account ALSO
+matches that memcmp because its fee recipient sits at the same offset.
+Without `dataSize: 143` a creator who is also the fee recipient — the
+platform operator, exactly the person most likely to open this page —
+would see their Config decoded as a phantom coin. The e2e stub now
+applies dataSize + memcmp the way a validator does and seeds the Config
+decoy, so the FILTERS are what the spec proves; the harness's fabricated
+curve grew its bump byte to match the deployed size.

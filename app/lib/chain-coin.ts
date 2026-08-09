@@ -8,7 +8,7 @@
  * the money path.
  */
 import { Connection, PublicKey } from "@solana/web3.js";
-import { curvePda, decodeCurve } from "@daofun/sdk/launchpad";
+import { curvePda, decodeCurve, type DecodedCurve } from "@daofun/sdk/launchpad";
 import type { CoinView } from "./launchpad-api";
 import { launchpadProgramId } from "./cluster";
 
@@ -35,20 +35,25 @@ export function loadLocalCoins(): string[] {
   }
 }
 
-/** Metaplex metadata PDA → { name, symbol, uri }, parsed from the raw account. */
-async function readMetadata(
-  connection: Connection,
-  mint: PublicKey,
-): Promise<{ name: string; symbol: string; uri: string }> {
-  const METAPLEX = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
-  const [pda] = PublicKey.findProgramAddressSync(
+export interface CoinMetadata {
+  name: string;
+  symbol: string;
+  uri: string;
+}
+
+const METAPLEX = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+
+export function metadataPdaFor(mint: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
     [Buffer.from("metadata"), METAPLEX.toBuffer(), mint.toBuffer()],
     METAPLEX,
-  );
-  const info = await connection.getAccountInfo(pda);
-  if (!info) return { name: "", symbol: "", uri: "" };
-  // key(1) + updateAuthority(32) + mint(32), then borsh strings.
-  const d = Buffer.from(info.data);
+  )[0];
+}
+
+/** Parse a Metaplex metadata account: key(1) + updateAuthority(32) + mint(32), then borsh strings. */
+export function parseMetadata(data: Buffer | Uint8Array | null | undefined): CoinMetadata {
+  if (!data) return { name: "", symbol: "", uri: "" };
+  const d = Buffer.from(data);
   let o = 1 + 32 + 32;
   const str = () => {
     const len = d.readUInt32LE(o);
@@ -57,7 +62,43 @@ async function readMetadata(
     o += len;
     return s;
   };
-  return { name: str(), symbol: str(), uri: str() };
+  try {
+    return { name: str(), symbol: str(), uri: str() };
+  } catch {
+    return { name: "", symbol: "", uri: "" };
+  }
+}
+
+/** Shape a decoded curve + metadata into the view the whole app renders. */
+export function coinViewFromCurve(
+  mint: string,
+  c: DecodedCurve,
+  meta: CoinMetadata,
+): CoinView {
+  return {
+    mint,
+    name: meta.name || "Unknown coin",
+    symbol: meta.symbol || "???",
+    uri: meta.uri,
+    creator: c.creator.toBase58(),
+    virtualSol: c.virtualSol.toString(),
+    virtualToken: c.virtualToken.toString(),
+    realSol: c.realSol.toString(),
+    realToken: c.realToken.toString(),
+    complete: c.complete,
+    migrated: c.migrated,
+    poolState: c.migrated ? c.poolState.toBase58() : null,
+    createdBlockTime: null,
+    progressBps: progressFromCurve(c.realToken, c.complete || c.migrated),
+  };
+}
+
+async function readMetadata(
+  connection: Connection,
+  mint: PublicKey,
+): Promise<CoinMetadata> {
+  const info = await connection.getAccountInfo(metadataPdaFor(mint));
+  return parseMetadata(info?.data);
 }
 
 /**
@@ -78,28 +119,10 @@ export async function fetchCoinFromChain(
   const info = await connection.getAccountInfo(curvePda(mintKey, programId));
   if (!info) return null;
   const c = decodeCurve(info.data);
-  const meta = await readMetadata(connection, mintKey).catch(() => ({
-    name: "",
-    symbol: "",
-    uri: "",
-  }));
-
-  return {
-    mint,
-    name: meta.name || "Unknown coin",
-    symbol: meta.symbol || "???",
-    uri: meta.uri,
-    creator: c.creator.toBase58(),
-    virtualSol: c.virtualSol.toString(),
-    virtualToken: c.virtualToken.toString(),
-    realSol: c.realSol.toString(),
-    realToken: c.realToken.toString(),
-    complete: c.complete,
-    migrated: c.migrated,
-    poolState: c.migrated ? c.poolState.toBase58() : null,
-    createdBlockTime: null,
-    progressBps: progressFromCurve(c.realToken, c.complete || c.migrated),
-  };
+  const meta = await readMetadata(connection, mintKey).catch(
+    (): CoinMetadata => ({ name: "", symbol: "", uri: "" }),
+  );
+  return coinViewFromCurve(mint, c, meta);
 }
 
 /**

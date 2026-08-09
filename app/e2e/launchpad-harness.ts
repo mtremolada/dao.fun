@@ -65,7 +65,11 @@ export interface CurveFields {
   poolState?: PublicKey;
 }
 
-/** BondingCurve account bytes, matching `decodeCurve`'s offsets. */
+/**
+ * BondingCurve account bytes, matching `decodeCurve`'s offsets AND the
+ * deployed account's SIZE — the trailing bump byte makes it 143, which the
+ * profile's getProgramAccounts dataSize filter depends on.
+ */
 export function curveAccountData(c: CurveFields): Buffer {
   return Buffer.concat([
     Buffer.alloc(8), // discriminator — the decoder skips it
@@ -79,6 +83,7 @@ export function curveAccountData(c: CurveFields): Buffer {
     u16(30),
     Buffer.from([c.complete ? 1 : 0, c.migrated ? 1 : 0]),
     (c.poolState ?? PublicKey.default).toBuffer(),
+    Buffer.from([255]), // bump
   ]);
 }
 
@@ -292,6 +297,8 @@ export interface RpcStubOptions {
   onSendTransaction?: (tx: Transaction, register: (address: string, acc: StubAccount) => void) => void;
   /** Trade history served for getSignaturesForAddress/getTransaction, newest first. */
   trades?: { mint: PublicKey; list: StubTrade[] };
+  /** Lamport balances by address; anything unlisted falls back to 5 SOL. */
+  balances?: Map<string, number>;
 }
 
 /**
@@ -329,8 +336,52 @@ export async function installRpcStub(
           value: keys.map((k) => accountJson(accounts.get(k)).value),
         };
       }
-      case "getBalance":
-        return { context: { slot: 1 }, value: 5_000_000_000 };
+      case "getBalance": {
+        const addr = req.params?.[0] as string;
+        return {
+          context: { slot: 1 },
+          value: opts.balances?.get(addr) ?? 5_000_000_000,
+        };
+      }
+      case "getMinimumBalanceForRentExemption":
+        return 890_880;
+      case "getProgramAccounts": {
+        // Answer from the same fabricated account map, applying the caller's
+        // dataSize + memcmp filters exactly as a validator would — so a spec
+        // proves the FILTERS, not just the happy path.
+        // web3 sends [programId, { commitment, encoding, filters, ... }] —
+        // the filters live INSIDE the config object, not as params[1].
+        const cfg = req.params?.[1] as
+          | { filters?: { dataSize?: number; memcmp?: { offset: number; bytes: string } }[] }
+          | undefined;
+        const filters = cfg?.filters ?? [];
+        const owner = req.params?.[0] as string;
+        const out: unknown[] = [];
+        for (const [address, acc] of accounts) {
+          if (acc.owner.toBase58() !== owner) continue;
+          const ok = filters.every((f) => {
+            if (f.dataSize !== undefined) return acc.data.length === f.dataSize;
+            if (f.memcmp) {
+              const want = new PublicKey(f.memcmp.bytes).toBuffer();
+              return acc.data.subarray(f.memcmp.offset, f.memcmp.offset + want.length).equals(want);
+            }
+            return true;
+          });
+          if (!ok) continue;
+          out.push({
+            pubkey: address,
+            account: {
+              data: [acc.data.toString("base64"), "base64"],
+              executable: false,
+              lamports: 2_039_280,
+              owner: acc.owner.toBase58(),
+              rentEpoch: 0,
+              space: acc.data.length,
+            },
+          });
+        }
+        return out;
+      }
       case "getSignaturesForAddress": {
         const address = req.params?.[0] as string;
         const t = opts.trades;

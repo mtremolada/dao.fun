@@ -3,10 +3,12 @@
  * prices with, build the instruction with the SDK, and drive it through the
  * send pipeline. Kept out of the React components so it is plain and testable.
  */
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey } from "@solana/web3.js";
 import {
   buildBuyIx,
+  buildCollectCreatorFeeIx,
   buildCreateCoinIx,
+  buildMigrateIx,
   buildSellIx,
   decodeConfig,
   configPda,
@@ -139,6 +141,51 @@ export async function createCoin(
     extraSigners: [mint],
   });
   return { state, mint: mint.publicKey };
+}
+
+/**
+ * Claim the creator fees. Permissionless by design — the program fixes the
+ * destination to the curve's recorded creator — so the connected wallet only
+ * pays the fee; it does not need to BE the creator. One vault serves all of
+ * a creator's coins, so any of their mints drains the whole balance.
+ */
+export async function claimCreatorFees(
+  coin: CoinView,
+  ctx: ActionCtx,
+): Promise<SendState> {
+  return sendTransaction({
+    instructions: [
+      buildCollectCreatorFeeIx({
+        payer: new PublicKey(ctx.wallet.address),
+        creator: new PublicKey(coin.creator),
+        mint: new PublicKey(coin.mint),
+        programId: launchpadProgramId(),
+      }),
+    ],
+    ...sendCommon(ctx),
+  });
+}
+
+/**
+ * Crank a completed curve into its Raydium pool. Also permissionless: the
+ * destination accounts are all derived, so anyone can pay to graduate a coin
+ * that has finished its raise.
+ */
+export async function graduate(coin: CoinView, ctx: ActionCtx): Promise<SendState> {
+  const feeRecipient = await getFeeRecipient(ctx.connection);
+  return sendTransaction({
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      buildMigrateIx({
+        payer: new PublicKey(ctx.wallet.address),
+        mint: new PublicKey(coin.mint),
+        feeRecipient,
+        cluster: cluster() === "mainnet" ? "mainnet" : "devnet",
+        programId: launchpadProgramId(),
+      }),
+    ],
+    ...sendCommon(ctx),
+  });
 }
 
 function sendCommon(ctx: ActionCtx) {
