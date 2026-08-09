@@ -33,6 +33,11 @@ import {
   cpmmPoolAccounts,
   creatorVaultPda,
   protocolVaultPda,
+  feeAuthorityPda,
+  feeNftMintPda,
+  graduatedFeesPda,
+  lockCpAuthorityPda,
+  lockedLiquidityPda,
   curvePda,
   metadataPda,
   migrationAuthorityPda,
@@ -317,6 +322,59 @@ export function buildMigrateIx(args: {
  * curve has migrated the program keeps the graduation overhead back, so a
  * pre-graduation sweep never pushes that cost onto the raise.
  */
+/**
+ * Hands a graduated coin's LP to Raydium's locker (mainnet only — the
+ * locker is not deployed on devnet). Permissionless: every destination is
+ * derived on chain, and the coin's own protocol vault pays the rent, so the
+ * caller spends nothing but a signature.
+ */
+export function buildLockGraduatedLiquidityIx(args: {
+  payer: PublicKey;
+  mint: PublicKey;
+  poolState: PublicKey;
+  lockProgram: PublicKey;
+  ray: RaydiumCpmmAddresses;
+  programId?: PublicKey;
+}): TransactionInstruction {
+  const programId = args.programId ?? LAUNCHPAD_PROGRAM_ID;
+  const p = cpmmPoolAccounts(args.mint, args.ray, programId);
+  const feeAuthority = feeAuthorityPda(args.mint, programId);
+  const feeNftMint = feeNftMintPda(args.mint, programId);
+  const lockAuthority = lockCpAuthorityPda(args.lockProgram);
+  const migration = migrationAuthorityPda(args.mint, programId);
+  return new TransactionInstruction({
+    programId,
+    data: ixDiscriminator("lock_graduated_liquidity"),
+    keys: [
+      AM(args.payer, true, true),
+      AM(configPda(programId), false, false),
+      AM(args.mint, false, false),
+      AM(curvePda(args.mint, programId), false, false),
+      AM(graduatedFeesPda(args.mint, programId), false, true),
+      AM(protocolVaultPda(args.mint, programId), false, true),
+      AM(migration, false, true),
+      AM(feeAuthority, false, false),
+      AM(feeNftMint, false, true),
+      AM(getAssociatedTokenAddressSync(feeNftMint, feeAuthority, true), false, true),
+      AM(p.migrationLp, false, true),
+      AM(args.lockProgram, false, false),
+      AM(lockAuthority, false, false),
+      AM(lockedLiquidityPda(feeNftMint, args.lockProgram), false, true),
+      AM(getAssociatedTokenAddressSync(p.lpMint, lockAuthority, true), false, true),
+      AM(p.lpMint, false, true),
+      AM(args.poolState, false, false),
+      AM(p.vault0, false, true),
+      AM(p.vault1, false, true),
+      AM(metadataPda(feeNftMint, MPL_TOKEN_METADATA_PROGRAM_ID), false, true),
+      AM(MPL_TOKEN_METADATA_PROGRAM_ID, false, false),
+      AM(TOKEN_PROGRAM_ID, false, false),
+      AM(ASSOCIATED_TOKEN_PROGRAM_ID, false, false),
+      AM(SystemProgram.programId, false, false),
+      AM(SYSVAR_RENT_PUBKEY, false, false),
+    ],
+  });
+}
+
 export function buildCollectProtocolFeeIx(args: {
   payer: PublicKey;
   mint: PublicKey;

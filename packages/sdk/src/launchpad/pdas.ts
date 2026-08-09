@@ -8,6 +8,11 @@ import {
   CONFIG_SEED,
   CREATOR_VAULT_SEED,
   PROTOCOL_VAULT_SEED,
+  FEE_AUTHORITY_SEED,
+  FEE_NFT_SEED,
+  GRADUATED_SEED,
+  LOCK_CP_AUTHORITY_SEED,
+  LOCKED_LIQUIDITY_SEED,
   CURVE_SEED,
   LAUNCHPAD_PROGRAM_ID,
   MIGRATION_AUTHORITY_SEED,
@@ -35,6 +40,27 @@ export const protocolVaultPda = (
   mint: PublicKey,
   programId = LAUNCHPAD_PROGRAM_ID,
 ) => derive([PROTOCOL_VAULT_SEED, mint.toBuffer()], programId);
+
+export const feeAuthorityPda = (
+  mint: PublicKey,
+  programId = LAUNCHPAD_PROGRAM_ID,
+) => derive([FEE_AUTHORITY_SEED, mint.toBuffer()], programId);
+
+export const feeNftMintPda = (mint: PublicKey, programId = LAUNCHPAD_PROGRAM_ID) =>
+  derive([FEE_NFT_SEED, mint.toBuffer()], programId);
+
+export const graduatedFeesPda = (
+  mint: PublicKey,
+  programId = LAUNCHPAD_PROGRAM_ID,
+) => derive([GRADUATED_SEED, mint.toBuffer()], programId);
+
+/** Raydium locker's CPMM-side authority, derived from the locker id. */
+export const lockCpAuthorityPda = (lockProgram: PublicKey) =>
+  derive([LOCK_CP_AUTHORITY_SEED], lockProgram);
+
+/** The locker's per-position record, keyed by the fee-key mint. */
+export const lockedLiquidityPda = (feeNftMint: PublicKey, lockProgram: PublicKey) =>
+  derive([LOCKED_LIQUIDITY_SEED, feeNftMint.toBuffer()], lockProgram);
 
 export const creatorVaultPda = (
   creator: PublicKey,

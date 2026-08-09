@@ -36,6 +36,15 @@ export const SOL_VAULT_SEED = Buffer.from("sol-vault");
 export const CREATOR_VAULT_SEED = Buffer.from("creator-vault");
 /** Per-mint protocol-fee accrual — funds the coin's own graduation. */
 export const PROTOCOL_VAULT_SEED = Buffer.from("protocol-vault");
+/** Holds the Burn & Earn fee key; can only ever pay the coin's creator. */
+export const FEE_AUTHORITY_SEED = Buffer.from("fee-authority");
+/** The fee key's mint — a PDA, so migrate needs no throwaway co-signer. */
+export const FEE_NFT_SEED = Buffer.from("fee-nft");
+/** Post-graduation fee bookkeeping; exists only on the lock branch. */
+export const GRADUATED_SEED = Buffer.from("graduated");
+/** Raydium locker seeds (pinned against the deployed binary, D-049). */
+export const LOCK_CP_AUTHORITY_SEED = Buffer.from("lock_cp_authority_seed");
+export const LOCKED_LIQUIDITY_SEED = Buffer.from("locked_liquidity");
 export const MIGRATION_AUTHORITY_SEED = Buffer.from("migration-authority");
 export const POOL_SEED = Buffer.from("cpmm-pool");
 

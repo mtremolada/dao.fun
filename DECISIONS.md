@@ -1502,3 +1502,75 @@ exact mistake D-031/D-032 exist to prevent. Bankrun against the real binary
 is the primary proof; devnet keeps the burn branch (config-gated on the
 lock program address) and proves everything around the feature; a mainnet
 canary is the only true end-to-end and becomes GATE L4.
+
+## D-050 — The fee model: the coin pays for its own graduation, and keeps earning after it (2026-08-09)
+
+**Directive.** *"what would be a good model for the protocol to earn both
+before and after graduating, we want to be reasonable and competitive"*,
+after the sharper framing that **we do not own the DEX we migrate into**, so
+pump-on-Raydium — not pump-today — is our analogue.
+
+**Model** (PLAN-FEE-MODEL.md; evidence in
+research/launchpad/graduation-economics.md):
+
+- **Curve: unchanged 1.00%**, 0.70 protocol / 0.30 creator.
+- **Graduation: no fee.** The full 85.005359 SOL raise becomes liquidity.
+  The 0.215485 SOL cost is paid from the coin's OWN accrued protocol fees
+  (0.595038 SOL by completion — 2.76× cover, by arithmetic).
+- **After graduation:** graduate into Raydium's **1% tier**, not the 0.25%
+  one. The locked position earns 0.840% of volume. The coin side goes 100%
+  to the creator/DAO; the SOL side repays the graduation, then splits
+  20/80 — **90/10 by value in steady state**.
+
+**What the competition actually does** (measured, not quoted):
+
+| | curve | graduation | after |
+|---|---|---|---|
+| pump, Raydium era | 1.00% | **6 SOL from the raise** vs ~0.4 SOL cost | nothing (LP burned) |
+| pump today | **1.25%** (0.95/0.30) | 0.015 SOL | creator 0.95% decaying to 0.05% |
+| letsbonk | **1.50%** | Raydium's wallet pays 0.2135 SOL | **nothing** (`creator_scale = 0`) |
+| Moonit | — | — | 80/20 creator/platform |
+| ours | **1.00%** | **nothing** | DAO 0.756%, us 0.084% |
+
+**Corrections this forced.** I had asserted pump's curve pays creators 0.05%
+from reading `Global` alone; the newer `pump_fees` `FeeConfig` supersedes it
+at 95/30, so pump's curve is 1.25% and its creator share is 0.30% — the same
+as ours. And my stonkfun description was wrong twice over (no curve, xStock
+quote not USDC, `goonuddt…` is an unrelated program); their liquidity IS
+locked, but their fee keys are custodial, which is the gap our design closes.
+
+**Three levers found by measuring rather than assuming:**
+
+1. **Raydium has eight fee tiers and all cost the same 0.15 SOL to create a
+   pool in.** Tier choice multiplies the DAO's perpetual income 4× at zero
+   marginal cost. Indices DIFFER BY CLUSTER (1% is index 1 on mainnet, index
+   3 on devnet), so the tier is stored as an ADDRESS.
+2. **Our `pool_state` is our own PDA**, so changing tier moves no derived
+   address anywhere — it is a pure config value.
+3. **A per-mint protocol vault turns "the protocol subsidises graduation"
+   into "the coin pays for itself."** Not a subsidy; earmarking. Per-mint
+   rather than global on purpose: a shared vault would make the
+   permissionless `migrate` crank depend on somebody topping it up, and a
+   drained vault would strand holders' SOL in a completed curve.
+
+**Implementation notes worth keeping.**
+
+- `Config`'s new `lock_program` and `graduated_fee_protocol_bps` are carved
+  BYTE FOR BYTE out of the old `reserved: [u64; 8]`, so the size stays 277
+  and the already-deployed devnet config still deserializes — as burn +
+  zero share, exactly what it meant. Pinned in the build suite.
+- The lock is a **separate instruction**, not part of `migrate`: migrate
+  already carries ~28 accounts and the locker needs 19 more, which does not
+  fit a legacy transaction. The LP is safe in between — its ATA's authority
+  is the migration PDA and nothing else moves it.
+- `lock_graduated_liquidity` is paid by the coin's protocol vault, including
+  reimbursing the cranker for the record's rent. Anchor's `init` bills the
+  caller, which would have made "permissionless" mean "whoever will donate
+  0.0015 SOL". The test asserts the cranker is out exactly 5,000 lamports.
+- `GraduatedFees` is a NEW PDA rather than fields on `BondingCurve`, so no
+  existing curve account changes size and devnet coins keep working.
+
+**Deferred:** `collect_graduated_fees` (the split itself). The lock path
+cannot run on devnet at all — Raydium's locker is not deployed there and
+hard-codes the mainnet CPMM id — so bankrun against the real binaries is its
+only proof until a mainnet canary (GATE L4).

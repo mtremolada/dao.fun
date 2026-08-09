@@ -21,6 +21,8 @@
 //! withdraw path being misused, not a math error, and the fix is that the
 //! path does not exist to misuse.
 
+pub mod lock;
+
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
@@ -71,6 +73,11 @@ pub const CPMM_RENT_LAMPORTS: u64 = 42_156_720;
 /// the deployed account). Read by hand rather than through the CPI crate's
 /// struct, whose layout predates the creator-fee upgrade (D-035).
 const AMM_CONFIG_CREATE_POOL_FEE_OFFSET: usize = 36;
+/// Raydium locker seeds and discriminators, pinned against the DEPLOYED
+/// binary by tests/launchpad-lock-verify.integration.test.ts (D-049).
+pub const LOCK_CP_AUTHORITY_SEED: &[u8] = b"lock_cp_authority_seed";
+pub const LOCKED_LIQUIDITY_SEED: &[u8] = b"locked_liquidity";
+const LOCK_CP_LIQUIDITY_DISC: [u8; 8] = [216, 157, 29, 78, 38, 51, 31, 26];
 /// Coins are classic SPL, 6 decimals — the convention every terminal,
 /// indexer and wallet on Solana already renders correctly.
 pub const COIN_DECIMALS: u8 = 6;
@@ -94,6 +101,18 @@ pub const CREATOR_VAULT_SEED: &[u8] = b"creator-vault";
 /// in a completed curve.
 pub const PROTOCOL_VAULT_SEED: &[u8] = b"protocol-vault";
 pub const MIGRATION_AUTHORITY_SEED: &[u8] = b"migration-authority";
+/// Holds the Burn & Earn fee key. A PDA, so the key can never be moved,
+/// sold, or redirected — the only thing it can do is pay the coin's
+/// creator, which is what makes our post-graduation stream an on-chain
+/// right rather than a platform promise (unlike every competitor measured
+/// in research/launchpad/graduation-economics.md §7).
+pub const FEE_AUTHORITY_SEED: &[u8] = b"fee-authority";
+/// The fee key's mint. G0 proved the locker accepts a PDA in this slot, so
+/// `lock_graduated_liquidity` needs no throwaway keypair co-signer and the
+/// key's address is derivable from the coin mint.
+pub const FEE_NFT_SEED: &[u8] = b"fee-nft";
+/// Post-graduation fee bookkeeping, created only on the lock branch.
+pub const GRADUATED_SEED: &[u8] = b"graduated";
 pub const POOL_SEED: &[u8] = b"cpmm-pool";
 
 #[program]
@@ -635,26 +654,46 @@ pub mod launchpad_curve {
             token::spl_token::state::Account::unpack(&data)?.amount
         };
         require!(lp_amount > 0, LaunchpadError::GraduationUnderfunded);
-        burn(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Burn {
-                    mint: ctx.accounts.cpmm_lp_mint.to_account_info(),
-                    from: ctx.accounts.migration_lp.to_account_info(),
-                    authority: migration_info.clone(),
-                },
-                &[migration_seeds],
-            ),
-            lp_amount,
-        )?;
+
+        // Two ways to make liquidity unwithdrawable, and the config picks.
+        //
+        // BURN (lock_program unset) is the original behaviour and the only
+        // one possible on devnet, where Raydium's locker is not deployed and
+        // hard-codes the mainnet CPMM id anyway.
+        //
+        // LOCK (lock_program set) leaves the LP here for
+        // `lock_graduated_liquidity` to hand to Raydium's locker, which
+        // makes it equally unwithdrawable AND mints a fee key that pays the
+        // coin's creator forever (PLAN-FEE-MODEL.md §2). The LP is safe in
+        // the interval: this ATA's authority is the migration PDA, and no
+        // instruction in this program moves it anywhere else.
+        let locking = ctx.accounts.config.lock_program != Pubkey::default();
+        if !locking {
+            burn(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Burn {
+                        mint: ctx.accounts.cpmm_lp_mint.to_account_info(),
+                        from: ctx.accounts.migration_lp.to_account_info(),
+                        authority: migration_info.clone(),
+                    },
+                    &[migration_seeds],
+                ),
+                lp_amount,
+            )?;
+        }
 
         // Reclaim what the temporary accounts are holding; the graduation
-        // fee and leftover rent are the protocol's, not the pool's.
-        for account in [
+        // fee and leftover rent are the protocol's, not the pool's. The LP
+        // account survives when locking — it still holds the LP.
+        let mut temporaries = vec![
             ctx.accounts.migration_wsol.to_account_info(),
             ctx.accounts.migration_token.to_account_info(),
-            ctx.accounts.migration_lp.to_account_info(),
-        ] {
+        ];
+        if !locking {
+            temporaries.push(ctx.accounts.migration_lp.to_account_info());
+        }
+        for account in temporaries {
             close_account(CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 CloseAccount {
@@ -701,6 +740,121 @@ pub mod launchpad_curve {
             create_pool_fee,
             graduation_fee,
         });
+        Ok(())
+    }
+
+    /// Hands a graduated coin's LP to Raydium's locker. Permissionless: the
+    /// destination of everything is fixed by derivation, so a crank can only
+    /// make the lock happen, never redirect it.
+    ///
+    /// Paid for by the coin's own protocol vault, not the caller — otherwise
+    /// "permissionless" would mean "whoever cranks donates 0.023 SOL", and
+    /// in practice nobody but us would ever call it.
+    pub fn lock_graduated_liquidity(ctx: Context<LockGraduatedLiquidity>) -> Result<()> {
+        let config = &ctx.accounts.config;
+        require!(
+            config.lock_program != Pubkey::default(),
+            LaunchpadError::LockingDisabled
+        );
+        require!(
+            ctx.accounts.lock_program.key() == config.lock_program,
+            LaunchpadError::InvalidCpmmAccount
+        );
+        require!(
+            ctx.accounts.bonding_curve.migrated,
+            LaunchpadError::CurveNotComplete
+        );
+
+        let lp_amount = {
+            let data = ctx.accounts.migration_lp.try_borrow_data()?;
+            token::spl_token::state::Account::unpack(&data)?.amount
+        };
+        require!(lp_amount > 0, LaunchpadError::NothingToCollect);
+
+        // Every locker-side address is DERIVED and checked here rather than
+        // trusted from the caller. A wrong one would otherwise let a crank
+        // point the lock at accounts of its choosing.
+        let mint_key = ctx.accounts.mint.key();
+        let lock_program_key = config.lock_program;
+        let (lock_authority, _) =
+            Pubkey::find_program_address(&[LOCK_CP_AUTHORITY_SEED], &lock_program_key);
+        require!(
+            ctx.accounts.lock_authority.key() == lock_authority,
+            LaunchpadError::InvalidCpmmAccount
+        );
+        let (locked_liquidity, _) = Pubkey::find_program_address(
+            &[LOCKED_LIQUIDITY_SEED, ctx.accounts.fee_nft_mint.key().as_ref()],
+            &lock_program_key,
+        );
+        require!(
+            ctx.accounts.locked_liquidity.key() == locked_liquidity,
+            LaunchpadError::InvalidCpmmAccount
+        );
+
+        let before = ctx.accounts.protocol_vault.lamports();
+        lock::lock_cp_liquidity(
+            &ctx.accounts.lock_program.to_account_info(),
+            &ctx.accounts.lock_authority.to_account_info(),
+            &ctx.accounts.protocol_vault.to_account_info(),
+            &ctx.accounts.migration_authority.to_account_info(),
+            &ctx.accounts.fee_authority.to_account_info(),
+            &ctx.accounts.fee_nft_mint.to_account_info(),
+            &ctx.accounts.fee_nft_account.to_account_info(),
+            &ctx.accounts.pool_state.to_account_info(),
+            &ctx.accounts.locked_liquidity.to_account_info(),
+            &ctx.accounts.cpmm_lp_mint.to_account_info(),
+            &ctx.accounts.migration_lp.to_account_info(),
+            &ctx.accounts.locked_lp_vault.to_account_info(),
+            &ctx.accounts.cpmm_token_0_vault.to_account_info(),
+            &ctx.accounts.cpmm_token_1_vault.to_account_info(),
+            &ctx.accounts.metadata.to_account_info(),
+            &ctx.accounts.rent.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.associated_token_program.to_account_info(),
+            &ctx.accounts.token_metadata_program.to_account_info(),
+            lp_amount,
+            true, // a fee key wallets can name is worth 0.015 SOL once
+            &[
+                &[
+                    PROTOCOL_VAULT_SEED,
+                    mint_key.as_ref(),
+                    &[ctx.bumps.protocol_vault],
+                ],
+                &[
+                    MIGRATION_AUTHORITY_SEED,
+                    mint_key.as_ref(),
+                    &[ctx.bumps.migration_authority],
+                ],
+                &[FEE_NFT_SEED, mint_key.as_ref(), &[ctx.bumps.fee_nft_mint]],
+            ],
+        )?;
+
+        // Anchor's `init` makes the CRANKER pay the record's rent, which
+        // would quietly turn "anyone may crank this" into "anyone may donate
+        // 0.0015 SOL". Give it back out of the coin's own vault, so the
+        // caller is out nothing but the signature and the whole graduation
+        // stays funded by the coin.
+        let record_rent = ctx.accounts.graduated_fees.to_account_info().lamports();
+        transfer_signed(
+            &ctx.accounts.system_program,
+            &ctx.accounts.protocol_vault.to_account_info(),
+            &ctx.accounts.payer.to_account_info(),
+            record_rent,
+            &[
+                PROTOCOL_VAULT_SEED,
+                mint_key.as_ref(),
+                &[ctx.bumps.protocol_vault],
+            ],
+        )?;
+
+        let spent = before.saturating_sub(ctx.accounts.protocol_vault.lamports());
+        let record = &mut ctx.accounts.graduated_fees;
+        record.mint = mint_key;
+        record.fee_nft_mint = ctx.accounts.fee_nft_mint.key();
+        record.cost_lamports = spent;
+        record.recovered_lamports = 0;
+        record.bump = ctx.bumps.graduated_fees;
         Ok(())
     }
 
@@ -1179,6 +1333,24 @@ pub struct Config {
     pub reserved: [u8; 30],
 }
 
+/// Post-graduation fee bookkeeping. Exists only for coins that took the
+/// LOCK branch, so devnet (burn-only) never creates one and no existing
+/// curve account has to change size for this feature.
+#[account]
+#[derive(InitSpace)]
+pub struct GraduatedFees {
+    pub mint: Pubkey,
+    /// The Burn & Earn fee key. Derivable, but recorded so a client can
+    /// confirm the lock happened without re-deriving and guessing.
+    pub fee_nft_mint: Pubkey,
+    /// What the protocol fronted for this graduation, in lamports. The SOL
+    /// side of collected fees repays this before any split begins.
+    pub cost_lamports: u64,
+    /// Repaid so far.
+    pub recovered_lamports: u64,
+    pub bump: u8,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct BondingCurve {
@@ -1502,6 +1674,78 @@ pub struct Migrate<'info> {
 }
 
 #[derive(Accounts)]
+pub struct LockGraduatedLiquidity<'info> {
+    /// Anyone. Pays the transaction and nothing else.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    pub mint: Box<Account<'info, Mint>>,
+    #[account(
+        seeds = [CURVE_SEED, mint.key().as_ref()],
+        bump = bonding_curve.bump,
+        has_one = mint @ LaunchpadError::MintMismatch,
+    )]
+    pub bonding_curve: Box<Account<'info, BondingCurve>>,
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + GraduatedFees::INIT_SPACE,
+        seeds = [GRADUATED_SEED, mint.key().as_ref()],
+        bump
+    )]
+    pub graduated_fees: Box<Account<'info, GraduatedFees>>,
+    /// CHECK: system-owned PDA; pays the locker's rent so the crank is free.
+    #[account(mut, seeds = [PROTOCOL_VAULT_SEED, mint.key().as_ref()], bump)]
+    pub protocol_vault: UncheckedAccount<'info>,
+    /// CHECK: system-owned PDA that owns the LP; signs the lock.
+    #[account(mut, seeds = [MIGRATION_AUTHORITY_SEED, mint.key().as_ref()], bump)]
+    pub migration_authority: UncheckedAccount<'info>,
+    /// CHECK: holds the fee key forever. Never signs here.
+    #[account(seeds = [FEE_AUTHORITY_SEED, mint.key().as_ref()], bump)]
+    pub fee_authority: UncheckedAccount<'info>,
+    /// CHECK: created by the locker; a PDA so no keypair has to co-sign.
+    #[account(mut, seeds = [FEE_NFT_SEED, mint.key().as_ref()], bump)]
+    pub fee_nft_mint: UncheckedAccount<'info>,
+    /// CHECK: the fee key's ATA, created by the locker.
+    #[account(mut)]
+    pub fee_nft_account: UncheckedAccount<'info>,
+    /// CHECK: the LP the migration authority still holds.
+    #[account(mut)]
+    pub migration_lp: UncheckedAccount<'info>,
+    /// CHECK: address checked in the handler against config.lock_program.
+    pub lock_program: UncheckedAccount<'info>,
+    /// CHECK: derived and checked in the handler.
+    pub lock_authority: UncheckedAccount<'info>,
+    /// CHECK: derived and checked in the handler.
+    #[account(mut)]
+    pub locked_liquidity: UncheckedAccount<'info>,
+    /// CHECK: ATA(lock_authority, lp_mint); the locker re-derives it.
+    #[account(mut)]
+    pub locked_lp_vault: UncheckedAccount<'info>,
+    /// CHECK: re-derived by the locker from pool_state.
+    #[account(mut)]
+    pub cpmm_lp_mint: UncheckedAccount<'info>,
+    /// CHECK: our pool, recorded on the curve at migration.
+    #[account(address = bonding_curve.pool_state @ LaunchpadError::InvalidCpmmAccount)]
+    pub pool_state: UncheckedAccount<'info>,
+    /// CHECK: re-derived by the locker.
+    #[account(mut)]
+    pub cpmm_token_0_vault: UncheckedAccount<'info>,
+    /// CHECK: re-derived by the locker.
+    #[account(mut)]
+    pub cpmm_token_1_vault: UncheckedAccount<'info>,
+    /// CHECK: Metaplex metadata for the fee key.
+    #[account(mut)]
+    pub metadata: UncheckedAccount<'info>,
+    pub token_metadata_program: Program<'info, Metadata>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
 pub struct CollectProtocolFee<'info> {
     /// Anyone may crank this; the destination is fixed below.
     #[account(mut)]
@@ -1642,4 +1886,6 @@ pub enum LaunchpadError {
     Unauthorized,
     #[msg("metadata field length out of bounds")]
     MetadataTooLong,
+    #[msg("liquidity locking is not configured on this cluster")]
+    LockingDisabled,
 }

@@ -17,5 +17,16 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     testTimeout: 30_000,
+    // Each file here stands up a whole Solana runtime and loads several
+    // 400 KB+ mainnet binaries into it. Running one per core is already
+    // heavy; letting vitest fan out further made `beforeAll` occasionally
+    // blow its hook timeout under CPU contention — a flake that looks like
+    // a real failure and trains you to re-run instead of read. Cap the pool
+    // at half the cores so a green run means green.
+    hookTimeout: 120_000,
+    pool: "forks",
+    poolOptions: {
+      forks: { maxForks: Math.max(2, Math.floor((globalThis.process?.availableParallelism?.() ?? 4) / 2)) },
+    },
   },
 });
