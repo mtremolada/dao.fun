@@ -18,6 +18,8 @@ const PROTECTIONS: {
   badge?: string;
   danger?: boolean;
   copy: string;
+  /** The structural facts — this is the whole comparison, on this page. */
+  points: string[];
 }[] = [
   {
     id: "guarded",
@@ -25,16 +27,32 @@ const PROTECTIONS: {
     badge: "recommended",
     copy:
       "Proposals can only come from the safety menu — the treasury cannot be drained even by a winning vote. Nothing to configure.",
+    points: [
+      "An on-chain gate authors every proposal; anything off-menu cannot be created at all",
+      "Anyone can propose from the menu, and your token holders vote as normal",
+      "The menu covers grants, buybacks, liquidity, distributions and parameter changes",
+      "Strongest protection, and the only level with nothing to fill in",
+    ],
   },
   {
     id: "council",
     name: "Council",
     copy: "People you name can veto a bad proposal before it executes.",
+    points: [
+      "The veto set is fixed at launch — the council mint's authority is burned",
+      "The council can only veto; it can never pass a proposal of its own",
+      "Tier floors apply to quorum, hold-up and lockup",
+    ],
   },
   {
     id: "cypherpunk",
     name: "Cypherpunk",
     copy: "Pure token voting. No veto, no council — irreversible.",
+    points: [
+      "No council mint exists, so there is structurally no veto",
+      "The hold-up window is the only exit route once a vote passes",
+      "One explicit confirmation required",
+    ],
   },
   {
     id: "sovereign",
@@ -42,6 +60,11 @@ const PROTECTIONS: {
     danger: true,
     copy:
       "No guardrails at all. The DAO can drain itself the moment a vote passes.",
+    points: [
+      "The hold-up can be ZERO — funds move the instant a vote passes",
+      "No veto, no menu, no floor: nothing stands between a vote and the treasury",
+      "Two explicit confirmations required",
+    ],
   },
 ];
 
@@ -49,6 +72,7 @@ export function LaunchScreen() {
   const q = useSearchParams();
   const initial = PROTECTIONS.find((p) => p.id === q.get("mode"))?.id ?? "guarded";
   const [mode, setMode] = useState<GovernanceMode>(initial);
+  const selected = PROTECTIONS.find((p) => p.id === mode)!;
   return (
     <>
       <h1>Launch</h1>
@@ -75,6 +99,11 @@ export function LaunchScreen() {
           </button>
         ))}
       </div>
+      <ul className="protection-detail" data-testid="protection-detail">
+        {selected.points.map((point) => (
+          <li key={point}>{point}</li>
+        ))}
+      </ul>
       <LaunchForm mode={mode} />
     </>
   );

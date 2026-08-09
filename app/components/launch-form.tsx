@@ -24,7 +24,7 @@ const FEE_TREASURY = process.env.NEXT_PUBLIC_PROTOCOL_TREASURY || "";
 const FEE_LAMPORTS = BigInt(process.env.NEXT_PUBLIC_LAUNCH_FEE_LAMPORTS || "0");
 
 export function LaunchForm({ mode }: { mode: GovernanceMode }) {
-  const { sender, openModal } = useWallet();
+  const { account, sender, openModal } = useWallet();
 
   const [tier, setTier] = useState<MarketCapTier>("micro");
   const [councilMembers, setCouncilMembers] = useState("");
@@ -185,6 +185,18 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
           {JSON.stringify(result, null, 2)}
         </pre>
         <p>
+          {/* The dashboard is params-driven (the Squads vault is not
+              derivable from the realm), so hand it the addresses here —
+              this is the only place they are all known at once. */}
+          <a
+            className="button primary"
+            href={`/dao?realm=${result.realm}&vault=${result.vault}${
+              account ? `&wallet=${account.address}` : ""
+            }`}
+            data-testid="open-dao-dashboard"
+          >
+            Open your DAO dashboard
+          </a>{" "}
           <a
             className="button"
             href={`https://pump.fun/coin/${result.mint}`}

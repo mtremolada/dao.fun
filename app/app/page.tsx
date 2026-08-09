@@ -1,76 +1,74 @@
 import Link from "next/link";
 
 /**
- * Mode selection — spec 6.7: side-by-side comparison; copy per spec 12.2.
- * Guarded is structurally unselectable until Stage 3 (no launch link).
+ * Landing. The governance-mode comparison that used to live here is GONE:
+ * every protection level now carries its own detail on /launch, so this
+ * page is a signpost rather than a step in the launch funnel.
  */
-const MODES = [
+const DESTINATIONS = [
   {
-    id: "council",
-    name: "Council",
-    tagline: "Community votes, a fixed council can veto during the hold-up.",
+    href: "/board",
+    name: "Board",
+    tagline: "Every coin on the curve, live.",
     points: [
-      "Veto set is fixed at launch (council mint, no mint authority)",
-      "Council cannot pass proposals — veto power only",
-      "Tier floors on quorum, hold-up, lockup",
+      "New / graduating / graduated, updating as trades land",
+      "Each coin opens a full trading terminal — chart, trades, position",
     ],
+    cta: "Explore the board",
   },
   {
-    id: "cypherpunk",
-    name: "Cypherpunk",
-    tagline: "Code is law. No veto, irreversible.",
+    href: "/create",
+    name: "Create a coin",
+    tagline: "Fair bonding curve that graduates to Raydium.",
     points: [
-      "No council mint exists — structurally no veto",
-      "Tier floors still apply (hold-up is the exit window)",
-      "One explicit confirmation required",
+      "No presale, no team allocation — the curve is the only seller",
+      "At completion, liquidity migrates and the LP is burned",
     ],
+    cta: "Create a coin",
   },
   {
-    id: "sovereign",
-    name: "Sovereign",
-    tagline: "No veto, no timelock floor. The DAO is fully self-governing.",
+    href: "/launch",
+    name: "Launch a DAO",
+    tagline: "A treasury that protects itself, with no platform keys.",
     points: [
-      "Hold-up can be ZERO — funds can move the moment a vote passes",
-      "Two explicit confirmations required",
-      "Used by the mainnet GATE 1 evidence run",
+      "Four protection levels, all on one page — Guarded is the default",
+      "Protection is structural: what a level forbids cannot exist on-chain",
     ],
-  },
-  {
-    id: "guarded",
-    name: "Guarded",
-    tagline: "Proposals restricted to a fixed safe action menu. Recommended.",
-    points: [
-      "The on-chain gate authors every proposal — off-menu never exists",
-      "Community voting untouched; nothing to configure",
-      "Strongest protection, simplest setup",
-    ],
+    cta: "Launch a DAO",
   },
 ] as const;
 
 export default function HomePage() {
   return (
     <>
-      <h1>Launch a token with a treasury that protects itself</h1>
+      <h1>Launch a coin whose treasury protects itself</h1>
       <p className="muted">
-        One launch page, four protection levels — all on it. Protection is
+        Coins launch on a fair curve and graduate to Raydium with the LP
+        burned. Governance is optional — and when you want it, protection is
         structural, not a setting: what a level forbids does not exist
-        on-chain. Floors only ratchet stricter after launch.
+        on-chain, and it only ratchets stricter after launch.
       </p>
       <p>
         <Link className="button primary" href="/launch" data-testid="cta-launch">
-          Launch — all options on one page
+          Launch a DAO
+        </Link>{" "}
+        <Link className="button" href="/board" data-testid="cta-board">
+          Explore the board
         </Link>
       </p>
       <div className="mode-grid">
-        {MODES.map((mode) => (
-          <div key={mode.id} className="card" data-testid={`mode-card-${mode.id}`}>
-            <h3>{mode.name}</h3>
-            <p>{mode.tagline}</p>
+        {DESTINATIONS.map((d) => (
+          <div key={d.href} className="card" data-testid={`home-card-${d.name.split(" ")[0]!.toLowerCase()}`}>
+            <h3>{d.name}</h3>
+            <p>{d.tagline}</p>
             <ul>
-              {mode.points.map((point) => (
+              {d.points.map((point) => (
                 <li key={point}>{point}</li>
               ))}
             </ul>
+            <Link className="button" href={d.href}>
+              {d.cta}
+            </Link>
           </div>
         ))}
       </div>

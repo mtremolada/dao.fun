@@ -11,8 +11,10 @@ test("one launch page: all four protections selectable, guarded is the default",
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByTestId("cta-launch")).toBeVisible();
-  await page.getByTestId("cta-launch").click();
+  // The DAO-mode tab is gone; Launch is reachable directly from the nav.
+  const nav = page.locator(".site-nav");
+  await expect(nav.getByRole("link", { name: "DAOs" })).toHaveCount(0);
+  await nav.getByRole("link", { name: "Launch" }).click();
   await expect(page).toHaveURL(/\/launch/, { timeout: 30_000 });
 
   // Guarded selected by default, zero-config, with the menu explained.
@@ -27,6 +29,15 @@ test("one launch page: all four protections selectable, guarded is the default",
   await expect(page.getByTestId("sovereign-holdup")).toBeVisible();
   await page.getByTestId("protection-cypherpunk").click();
   await expect(page.getByTestId("confirm-noVetoIrreversible")).toBeVisible();
+
+  // The comparison the removed DAOs page carried now lives HERE, per level.
+  await expect(page.getByTestId("protection-detail")).toContainText(
+    /structurally no veto/i,
+  );
+  await page.getByTestId("protection-guarded").click();
+  await expect(page.getByTestId("protection-detail")).toContainText(
+    /cannot be created at all/i,
+  );
 });
 
 test("sovereign requires BOTH confirmations before launch enables", async ({

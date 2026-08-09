@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <nav className="site-nav">
               <Link href="/board">Board</Link>
               <Link href="/create">Create</Link>
-              <Link href="/">DAOs</Link>
+              <Link href="/launch">Launch</Link>
             </nav>
             <WalletButton />
           </header>

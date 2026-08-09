@@ -429,3 +429,4 @@ tr.sell td:first-child { color: var(--red); }
 .protection-card.active { border-color: var(--green); box-shadow: 0 0 0 1px var(--green); }
 .protection-card.danger.active { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
 .protection-card .protection-name { font-weight: 600; }
+.protection-detail { margin: 0 0 1.5rem; padding-left: 1.1rem; color: var(--muted); font-size: 0.9rem; display: flex; flex-direction: column; gap: 0.3rem; }
