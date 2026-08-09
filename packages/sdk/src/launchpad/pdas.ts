@@ -16,6 +16,8 @@ import {
   CURVE_SEED,
   LAUNCHPAD_PROGRAM_ID,
   MIGRATION_AUTHORITY_SEED,
+  MIGRATION_WSOL_SEED,
+  MIGRATION_TOKEN_SEED,
   POOL_SEED,
   RAYDIUM_LP_MINT_SEED,
   RAYDIUM_OBSERVATION_SEED,
@@ -66,6 +68,16 @@ export const creatorVaultPda = (
   creator: PublicKey,
   programId = LAUNCHPAD_PROGRAM_ID,
 ) => derive([CREATOR_VAULT_SEED, creator.toBuffer()], programId);
+
+export const migrationWsolPda = (
+  mint: PublicKey,
+  programId: PublicKey = LAUNCHPAD_PROGRAM_ID,
+) => derive([MIGRATION_WSOL_SEED, mint.toBuffer()], programId);
+
+export const migrationTokenPda = (
+  mint: PublicKey,
+  programId: PublicKey = LAUNCHPAD_PROGRAM_ID,
+) => derive([MIGRATION_TOKEN_SEED, mint.toBuffer()], programId);
 
 export const migrationAuthorityPda = (
   mint: PublicKey,

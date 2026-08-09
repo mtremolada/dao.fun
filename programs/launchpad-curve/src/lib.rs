@@ -69,6 +69,17 @@ pub const MAX_GRADUATED_FEE_PROTOCOL_BPS: u16 = 5_000;
 /// lamport. The pool-creation FEE is read from AmmConfig at runtime because
 /// Raydium's admin can change it; these rent sizes are fixed by layout.
 pub const CPMM_RENT_LAMPORTS: u64 = 42_156_720;
+/// What `lock_graduated_liquidity` spends out of the protocol vault to hand
+/// the LP to Raydium's locker: the `locked_liquidity` account (23,328,400) plus
+/// the fee-NFT mint, its metadata, and the bookkeeping record's rent
+/// (1,510,320), measured against the DEPLOYED locker by
+/// tests/launchpad-graduated-lock (`spentByVault`). `collect_protocol_fee`
+/// holds this back while a lock is still pending, so the permissionless sweep
+/// can never strand a graduated coin unlockable (B2, D-060). A small cushion
+/// over the measured figure absorbs any rent drift; the excess is swept once
+/// the lock is done. If the locker's cost ever rises past this, the
+/// graduated-lock test's exact-`spentByVault` assertion fails first.
+pub const LOCK_RESERVE_LAMPORTS: u64 = 25_500_000;
 /// Byte offset of `create_pool_fee` in Raydium's AmmConfig (verified against
 /// the deployed account). Read by hand rather than through the CPI crate's
 /// struct, whose layout predates the creator-fee upgrade (D-035).
@@ -106,6 +117,17 @@ pub const CREATOR_VAULT_SEED: &[u8] = b"creator-vault";
 /// in a completed curve.
 pub const PROTOCOL_VAULT_SEED: &[u8] = b"protocol-vault";
 pub const MIGRATION_AUTHORITY_SEED: &[u8] = b"migration-authority";
+/// The temporary token accounts `migrate` stages liquidity through, seeded as
+/// PROGRAM PDAs rather than associated token accounts (B1, D-060). An ATA
+/// address is deterministic and anyone may create it, so an attacker could
+/// pre-create the migration authority's ATA and Anchor's non-idempotent `init`
+/// would then fail on every `migrate` — permanently stranding the raise of a
+/// completed curve for the cost of one ATA. A PDA address can only be brought
+/// into existence by THIS program's `invoke_signed`, so the front-run is
+/// impossible by construction. Raydium takes these as plain (non-ATA) token
+/// accounts, so nothing downstream cares that they are no longer ATAs.
+pub const MIGRATION_WSOL_SEED: &[u8] = b"migration-wsol";
+pub const MIGRATION_TOKEN_SEED: &[u8] = b"migration-token";
 /// Holds the Burn & Earn fee key. A PDA, so the key can never be moved,
 /// sold, or redirected — the only thing it can do is pay the coin's
 /// creator, which is what makes our post-graduation stream an on-chain
@@ -147,6 +169,20 @@ pub mod launchpad_curve {
     /// There is deliberately no path here to any Raydium address.
     pub fn update_config(ctx: Context<UpdateConfig>, params: ConfigParams) -> Result<()> {
         params.validate()?;
+        // graduation_fee_lamports is the one config value that is NOT
+        // snapshotted onto each BondingCurve (the account has no room to grow
+        // without breaking already-deployed curves), so `migrate` reads it
+        // live. Letting it change would therefore retax coins that already
+        // completed — raise it above what a completed curve can spare and that
+        // coin can never migrate, stranding its holders' SOL. That is exactly
+        // the INV-FEE-SNAPSHOT violation this instruction's own comment
+        // promises cannot happen, so the fee is fixed at initialization: the
+        // live value stays equal to every coin's creation-time value (B3,
+        // D-060).
+        require!(
+            params.graduation_fee_lamports == ctx.accounts.config.graduation_fee_lamports,
+            LaunchpadError::GraduationFeeImmutable
+        );
         ctx.accounts.config.apply(params);
         Ok(())
     }
@@ -1015,6 +1051,17 @@ pub mod launchpad_curve {
                 .checked_add(CPMM_RENT_LAMPORTS)
                 .ok_or(LaunchpadError::MathOverflow)?;
             available = available.saturating_sub(reserve);
+        } else if ctx.accounts.config.lock_program != Pubkey::default()
+            && ctx.accounts.graduated_fees.data_is_empty()
+        {
+            // Migrated, on the lock branch, and the lock has NOT run yet (no
+            // graduated-fee record). `lock_graduated_liquidity` pays the
+            // locker out of THIS vault, so sweeping it dry here would leave the
+            // LP migrated-but-unlockable forever — the coin's whole perpetual
+            // fee stream dead by default (B2). Hold the lock cost back until
+            // the record exists; afterwards there is nothing left to reserve
+            // and the cushion is swept like everything else.
+            available = available.saturating_sub(LOCK_RESERVE_LAMPORTS);
         }
         require!(available > 0, LaunchpadError::NothingToCollect);
 
@@ -1409,8 +1456,11 @@ impl ConfigParams {
 
         // A curve that could complete without being able to afford its own
         // graduation would strand its holders' SOL (INV-GRAD-COVERS-COST).
-        // The fee floor is not known here, so the check uses the observed
-        // 0.15 SOL plus rent; migration re-checks against the live value.
+        // The pool fee floor is not known here, so the check uses the observed
+        // 0.15 SOL plus rent; migration re-checks against the live value. The
+        // graduation fee IS known and must be added, or a config with a raise
+        // at the floor and a large graduation fee would validate yet strand
+        // every coin it launches at migrate (B3, D-060).
         let raise = ceil_div(
             (self.initial_real_token as u128)
                 .checked_mul(self.initial_virtual_sol as u128)
@@ -1419,6 +1469,8 @@ impl ConfigParams {
         )?;
         let floor = (150_000_000u128 + CPMM_RENT_LAMPORTS as u128)
             .checked_mul(2)
+            .ok_or(LaunchpadError::MathOverflow)?
+            .checked_add(self.graduation_fee_lamports as u128)
             .ok_or(LaunchpadError::MathOverflow)?;
         require!(raise >= floor, LaunchpadError::GraduationUnderfunded);
         Ok(())
@@ -1745,18 +1797,25 @@ pub struct Migrate<'info> {
         bump
     )]
     pub migration_authority: UncheckedAccount<'info>,
+    // PROGRAM PDAs, not ATAs (B1). The address is derived from this program,
+    // so no one but this program can create an account there — the front-run
+    // that would brick `migrate` on an ATA is structurally impossible here.
     #[account(
         init,
         payer = payer,
-        associated_token::mint = wsol_mint,
-        associated_token::authority = migration_authority,
+        seeds = [MIGRATION_WSOL_SEED, mint.key().as_ref()],
+        bump,
+        token::mint = wsol_mint,
+        token::authority = migration_authority,
     )]
     pub migration_wsol: Box<Account<'info, TokenAccount>>,
     #[account(
         init,
         payer = payer,
-        associated_token::mint = mint,
-        associated_token::authority = migration_authority,
+        seeds = [MIGRATION_TOKEN_SEED, mint.key().as_ref()],
+        bump,
+        token::mint = mint,
+        token::authority = migration_authority,
     )]
     pub migration_token: Box<Account<'info, TokenAccount>>,
     /// CHECK: created by Raydium during the CPI, then burned and closed.
@@ -2014,6 +2073,16 @@ pub struct CollectProtocolFee<'info> {
     /// CHECK: Raydium's fee tier, read to size the graduation reserve.
     #[account(address = config.cpmm_amm_config @ LaunchpadError::InvalidCpmmAccount)]
     pub cpmm_amm_config: UncheckedAccount<'info>,
+    /// CHECK: the post-graduation fee record. Only its address is checked; the
+    /// account may not exist yet, and its EXISTENCE is exactly the signal that
+    /// the lock has run — while it is empty on a lock-branch coin, the sweep
+    /// holds the lock cost back (B2). Address-pinned so a caller cannot present
+    /// a foreign account to skip the reserve.
+    #[account(
+        seeds = [GRADUATED_SEED, bonding_curve.mint.as_ref()],
+        bump
+    )]
+    pub graduated_fees: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -2131,4 +2200,6 @@ pub enum LaunchpadError {
     MetadataTooLong,
     #[msg("liquidity locking is not configured on this cluster")]
     LockingDisabled,
+    #[msg("graduation fee cannot change after initialization")]
+    GraduationFeeImmutable,
 }

@@ -43,6 +43,8 @@ import {
   curvePda,
   metadataPda,
   migrationAuthorityPda,
+  migrationWsolPda,
+  migrationTokenPda,
   solVaultPda,
 } from "./pdas";
 
@@ -305,8 +307,9 @@ export function buildMigrateIx(args: {
       AM(solVaultPda(args.mint, programId), false, true),
       AM(protocolVaultPda(args.mint, programId), false, true),
       AM(migration, false, true),
-      AM(getAssociatedTokenAddressSync(NATIVE_MINT, migration, true), false, true),
-      AM(getAssociatedTokenAddressSync(args.mint, migration, true), false, true),
+      // Program PDAs, not ATAs (B1) — un-front-runnable staging accounts.
+      AM(migrationWsolPda(args.mint, programId), false, true),
+      AM(migrationTokenPda(args.mint, programId), false, true),
       AM(p.migrationLp, false, true),
       AM(NATIVE_MINT, false, false),
       AM(args.feeRecipient, false, true),
@@ -466,6 +469,10 @@ export function buildCollectProtocolFeeIx(args: {
       AM(curvePda(args.mint, programId), false, false),
       AM(protocolVaultPda(args.mint, programId), false, true),
       AM(args.ammConfig, false, false),
+      // The graduated-fee record (may not exist): its presence tells the
+      // program the lock has run, so the sweep can stop reserving the lock
+      // cost (B2). Address-pinned by the program.
+      AM(graduatedFeesPda(args.mint, programId), false, false),
       AM(SystemProgram.programId, false, false),
     ],
   });

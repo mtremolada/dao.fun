@@ -31,6 +31,31 @@ holding ~3.6 SOL each; `solana program show --buffers --buffer-authority
 faucets rate-limit this datacenter IP entirely — funding must come from a
 browser faucet or the operator.
 
+## ⚠️ THREE MIGRATION BUGS FOUND + FIXED (D-060, 2026-08-09) — read PLAN-POLISH.md
+
+A 15-agent adversarial audit found three real bugs, ALL in the migration path
+(the flow devnet can't exercise). All fixed, tests-first, proven in bankrun:
+
+- **B1 CRITICAL** (devnet too): migrate's `migration_wsol`/`migration_token`
+  were `init` ATAs of a PDA — anyone could pre-create the ATA for ~0.002 SOL
+  and brick `migrate` FOREVER, stranding the whole raise. Fixed by making them
+  program PDAs (`MIGRATION_WSOL_SEED`/`MIGRATION_TOKEN_SEED`), which no attacker
+  can create. `init_if_needed` was NOT enough (close needs zero balance).
+- **B2 HIGH** (mainnet-only): a permissionless `collect_protocol_fee` between
+  migrate and lock could drain the vault and strand the LP unlockable. Fixed by
+  reserving `LOCK_RESERVE_LAMPORTS` while the lock is pending (new `graduated_fees`
+  marker account on `CollectProtocolFee`).
+- **B3 MEDIUM**: `graduation_fee_lamports` read live, not snapshotted → raising
+  it stranded completed coins. Fixed: immutable after init + in the validate floor.
+
+**DEPLOY COUPLING (critical):** the SDK builders changed (migrate's 2 PDA
+addresses, collect_protocol_fee's extra account), so the new SDK is
+INCOMPATIBLE with the un-redeployed devnet binary. Program + frontend must
+deploy TOGETHER. Blocked on SOL: a redeploy buffer is ~3.7 SOL vs 2.22 held —
+browser-faucet `5xqnc7on…`. Until then the branch holds the fix and the live
+site runs the OLD frontend+OLD program (consistent). Rebuild byte-reproduces
+the committed fixture; 522 tests green.
+
 ## ✅ DEVNET IS FINISHED (D-057, 2026-08-09) — read PLAN-DEVNET-FINISH.md
 
 Everything in LAUNCH.md that needs no mainnet SOL and no operator decision is

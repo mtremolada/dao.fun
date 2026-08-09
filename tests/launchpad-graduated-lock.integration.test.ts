@@ -63,6 +63,7 @@ import {
   buyIx,
   cpmmFixtureAccounts,
   cpmmPoolAccounts,
+  collectProtocolFeeIx,
   createCoinIx,
   grindMint,
   initializeConfigIx,
@@ -437,6 +438,106 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
 
       const curve = await readCurve(ctx, mint.publicKey);
       expect(curve.migrated).toBe(true);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "a permissionless protocol-fee sweep between migrate and lock cannot strand the lock (B2)",
+    async () => {
+      // The bug: `collect_protocol_fee` stopped reserving anything once a coin
+      // was `migrated`, but on the lock branch the LP is locked by a SEPARATE
+      // later instruction that pays the locker out of THIS vault. Anyone could
+      // call the permissionless sweep in the gap and drain the vault, so the
+      // lock would then revert for lack of funds — forever, leaving the LP
+      // migrated-but-unlocked and the coin's fee stream dead by default. The
+      // fix reserves the lock cost while the lock is pending.
+      await enableLocking();
+      const { mint } = await graduate();
+      const derived = cpmmPoolAccounts(mint.publicKey);
+
+      // The griefer: sweep the protocol vault the instant migration finishes,
+      // before anyone cranks the lock.
+      const griefer = Keypair.generate();
+      await send(
+        ctx,
+        [
+          cu(),
+          SystemProgram.transfer({
+            fromPubkey: ctx.payer.publicKey,
+            toPubkey: griefer.publicKey,
+            lamports: 50_000_000,
+          }),
+        ],
+        [],
+      );
+      await send(
+        ctx,
+        [
+          cu(),
+          collectProtocolFeeIx({
+            payer: griefer.publicKey,
+            mint: mint.publicKey,
+            feeRecipient: feeRecipient.publicKey,
+          }),
+        ],
+        [griefer],
+      );
+
+      // The sweep left the lock reserve behind, so the lock still goes through.
+      const cranker = Keypair.generate();
+      await send(
+        ctx,
+        [
+          cu(),
+          SystemProgram.transfer({
+            fromPubkey: ctx.payer.publicKey,
+            toPubkey: cranker.publicKey,
+            lamports: 100_000_000,
+          }),
+        ],
+        [],
+      );
+      await send(
+        ctx,
+        [
+          cu(600_000),
+          buildLockGraduatedLiquidityIx({
+            payer: cranker.publicKey,
+            mint: mint.publicKey,
+            poolState: derived.poolState,
+            lockProgram: RAYDIUM_LOCK_PROGRAM_ID,
+            ray: RAY,
+          }),
+        ],
+        [cranker],
+        cranker,
+      );
+
+      // The LP is locked and the fee record exists — the stream is alive.
+      expect(await tokenBalance(ctx, derived.migrationLp)).toBe(0n);
+      expect(
+        await ctx.banksClient.getAccount(graduatedFeesPda(mint.publicKey)),
+      ).not.toBeNull();
+
+      // And now that the lock is done, a second sweep reclaims the cushion —
+      // the reserve is held only while the lock is pending, never forever.
+      const recipientBefore = await balance(ctx, feeRecipient.publicKey);
+      await send(
+        ctx,
+        [
+          cu(),
+          collectProtocolFeeIx({
+            payer: cranker.publicKey,
+            mint: mint.publicKey,
+            feeRecipient: feeRecipient.publicKey,
+          }),
+        ],
+        [cranker],
+      );
+      expect(await balance(ctx, feeRecipient.publicKey)).toBeGreaterThan(
+        recipientBefore,
+      );
     },
     TEST_TIMEOUT,
   );

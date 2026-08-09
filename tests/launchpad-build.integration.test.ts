@@ -284,4 +284,50 @@ describe("launchpad-curve — global config", () => {
     },
     TEST_TIMEOUT,
   );
+
+  it(
+    "refuses to change the graduation fee after initialization (B3, INV-FEE-SNAPSHOT)",
+    async () => {
+      // Unlike the bps fees, the graduation fee is NOT snapshotted onto each
+      // curve (the account cannot grow without breaking deployed coins), so
+      // migrate reads it live. Letting it change would retax coins that
+      // already completed — raise it above what a completed curve can spare
+      // and that coin can never migrate, stranding its holders. So it is fixed
+      // at init: the live value always equals every coin's creation value.
+      const params: CurveParams = {
+        ...PUMP_CLASSIC,
+        graduationFeeLamports: 1_000_000n, // was 0 at init
+      };
+      expect(
+        await sendExpectFail(
+          ctx,
+          [cu(), updateConfigIx({ authority: authority.publicKey, params })],
+          [authority],
+        ),
+      ).toMatch(/graduation fee cannot change|custom program error/i);
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
+    "counts the graduation fee in the affordability floor (B3)",
+    async () => {
+      // A raise of ~1.4 SOL clears the old floor (~0.384 SOL) but cannot also
+      // cover a 5 SOL graduation fee. The old floor ignored the fee and would
+      // have accepted this, then stranded every coin it launched at migrate.
+      const params: CurveParams = {
+        ...PUMP_CLASSIC,
+        initialVirtualSol: 500_000_000n, // raises ~1.4 SOL
+        graduationFeeLamports: 5_000_000_000n, // 5 SOL, the max
+      };
+      expect(
+        await sendExpectFail(
+          ctx,
+          [cu(), updateConfigIx({ authority: authority.publicKey, params })],
+          [authority],
+        ),
+      ).toMatch(/graduation|custom program error/i);
+    },
+    TEST_TIMEOUT,
+  );
 });

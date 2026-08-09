@@ -2241,3 +2241,76 @@ flag being easier to type than a valuation.
 
 Re-surveyed after the rebuild: zero token accounts remain, so there is nothing
 left to sell or to save. The guard exists for the next wallet, not this one.
+
+## D-060 — A fan-out audit found three migration bugs; all fixed, proven, awaiting redeploy (2026-08-09)
+
+Operator: *"do a huge audit... get this ready for live public use... everything
+perfect with no bugs."* A 15-agent adversarial audit (8 dimensions × a skeptic
+per finding × synthesis, workflow `wf_504eab0b`) swept the deployed programs
+and the SDK. It confirmed THREE bugs and refuted three others; every survivor
+was in the migration/graduation path — the one flow devnet cannot exercise,
+which is why the suite proves it only in bankrun. I re-verified all three
+against the source before trusting the agents, and reproduced the critical one
+as a failing test before fixing.
+
+**B1 (CRITICAL) — migration bricked forever by a 0.002-SOL front-run.**
+`migration_wsol`/`migration_token` were ATAs of the migration-authority PDA
+declared with `init`. An ATA address is deterministic and anyone can create it,
+so an attacker could pre-create it after a curve completed (trading now closed)
+and Anchor's non-idempotent `init` would fail `AccountAlreadyInitialized` on
+every `migrate` — permanently stranding the entire raise (~85 SOL on
+production params) and every holder's tokens. Affects devnet too. The audit's
+suggested `init_if_needed` was insufficient: `migrate` closes the token side
+with SPL `close_account`, which requires a zero balance, so a pre-FUNDED ATA
+still bricks. Fix: make both accounts PROGRAM PDAs (`seeds =
+[MIGRATION_WSOL_SEED / MIGRATION_TOKEN_SEED, mint]`) — an address only this
+program can bring into existence, so the whole front-run/pre-fund class is
+impossible by construction. Raydium takes `creator_token_*` as plain non-ATA
+metas, so nothing downstream cares; the two graduation tests (both wSOL sort
+orders) passing on the rebuilt binary is the proof it accepts them. A new
+regression pre-creates the old ATA and asserts `migrate` still succeeds — red
+on the old binary, green on the new.
+
+**B2 (HIGH, mainnet-only) — a permissionless sweep could kill the fee stream.**
+On the lock branch the LP is locked by a SEPARATE later instruction that pays
+the locker (24,838,720 lamports, measured) out of the protocol vault, but
+`collect_protocol_fee` stopped reserving anything once `migrated`. Anyone could
+sweep the vault in the gap, and the lock would then revert forever, leaving the
+LP migrated-but-unlocked and the coin's perpetual fee stream dead by default.
+Fix: `collect_protocol_fee` now holds back `LOCK_RESERVE_LAMPORTS` (25,500,000,
+a small cushion over the measured cost) while a lock is pending — detected via
+a new address-pinned `graduated_fees` account whose existence marks the lock as
+done; once locked, the cushion is swept like everything else. Regression: sweep
+between migrate and lock, assert the lock still succeeds and a later sweep
+reclaims the cushion.
+
+**B3 (MEDIUM) — the graduation fee was read live, not snapshotted.**
+`migrate` read `config.graduation_fee_lamports` live and `validate()` left it
+out of the affordability floor. So an authority raising it via `update_config`
+stranded already-completed coins (a real INV-FEE-SNAPSHOT violation the
+comment denied), and a config near the floor with a large fee stranded coins on
+completion. `BondingCurve` has no room to grow without breaking the 11 live
+devnet coins, so instead the fee is now IMMUTABLE after init (the live value
+always equals every coin's creation value) and `validate()` adds it to the
+floor. Regressions: `update_config` changing the fee is refused; a
+raise-clears-old-floor-but-not-new config is refused.
+
+**The deploy coupling, stated loudly.** These are program changes, and the SDK
+builders changed with them (migrate's two PDA addresses; collect_protocol_fee's
+extra account). The new SDK is therefore INCOMPATIBLE with the un-redeployed
+devnet binary — a coordinated upgrade. Every caller (keeper, backend, scripts,
+app) goes through the SDK builders by design, so they all move together; there
+is no per-caller edit and no drift. **The program and the frontend must be
+deployed as one step.** Until the deployer is topped up (a redeploy buffer is
+~3.7 SOL against 2.22 held; browser faucet to `5xqnc7on…`), the branch holds
+the proven fix and the live devnet site keeps running the OLD frontend against
+the OLD program — a consistent, working pair. Do NOT ship a half-state.
+
+Proof carried now, no SOL required: the toolchain reproduces the committed
+fixture byte-for-byte (so the fixture IS the reviewed source), 522 unit +
+integration tests green against the REAL mainnet binaries in bankrun including
+the three new regressions, eslint/tsc clean. The only step left is the live
+devnet redeploy, which is one command once funded.
+
+Not fixed here (out of scope / not devnet-closable): GATE L4 mainnet canary
+remains the only live proof of the lock path.

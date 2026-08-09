@@ -46,6 +46,7 @@ import {
   decodeCurve,
   metadataPda as sdkMetadataPda,
   migrationAuthorityPda,
+  migrationWsolPda,
   poolStatePda,
   solVaultPda,
   type ConfigParamsInput,
@@ -61,6 +62,7 @@ export {
   creatorVaultPda,
   protocolVaultPda,
   migrationAuthorityPda,
+  migrationWsolPda,
   poolStatePda,
 };
 export type { DecodedCurve };

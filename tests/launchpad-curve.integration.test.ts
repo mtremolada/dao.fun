@@ -22,7 +22,11 @@ import {
   PublicKey,
   SystemProgram,
 } from "@solana/web3.js";
-import { NATIVE_MINT, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  NATIVE_MINT,
+  createAssociatedTokenAccountInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import type { ProgramTestContext } from "solana-bankrun";
 import {
   PUMP_CLASSIC,
@@ -54,6 +58,7 @@ import {
   initializeConfigIx,
   migrateIx,
   migrationAuthorityPda,
+  migrationWsolPda,
   mintAuthorities,
   mintSupply,
   readCurve,
@@ -476,14 +481,16 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
         expect(await mintSupply(ctx, pool.lpMint)).toBe(0n);
         expect(await tokenBalance(ctx, pool.migrationLp)).toBe(0n);
 
-        // Nothing is left behind in the migration accounts.
+        // Nothing is left behind in the migration accounts. The wSOL staging
+        // account is now a program PDA (B1), not an ATA, and migrate closes
+        // it — so it reads as an emptied token account (zero lamports) or is
+        // gone entirely.
         const migration = migrationAuthorityPda(mint.publicKey);
         expect(await balance(ctx, migration)).toBe(0);
-        expect(
-          await ctx.banksClient.getAccount(
-            getAssociatedTokenAddressSync(NATIVE_MINT, migration, true),
-          ),
-        ).toBeNull();
+        const stagedWsol = await ctx.banksClient.getAccount(
+          migrationWsolPda(mint.publicKey),
+        );
+        expect(stagedWsol === null || stagedWsol.lamports === 0).toBe(true);
 
         const migrated = await readCurve(ctx, mint.publicKey);
         expect(migrated.migrated).toBe(true);
@@ -511,6 +518,84 @@ describe("launchpad-curve — lifecycle on real binaries", () => {
       TEST_TIMEOUT,
     );
   }
+
+  it(
+    "migrates even after an attacker front-runs the migration authority's token account (B1)",
+    async () => {
+      // The bug: `migration_wsol`/`migration_token` were ATAs of the
+      // ["migration-authority", mint] PDA declared with `init`. An ATA address
+      // is deterministic and anyone can create it, so an attacker could spend
+      // ~0.002 SOL to create it after a curve completed but before the crank,
+      // and `init`'s non-idempotent CPI would then fail AccountAlreadyInitialized
+      // on every `migrate` — permanently, because a complete curve cannot
+      // reopen and `migrate` is the only exit for the raise. The entire raise
+      // and every holder's tokens would be locked forever for a few
+      // thousandths of a SOL. The fix moves those accounts to program PDAs an
+      // attacker cannot create; this proves the exit survives the front-run.
+      const mint = grindMint(false);
+      const creator = Keypair.generate();
+      const whale = Keypair.generate();
+      await fund(whale.publicKey, 120_000_000_000);
+      await send(
+        ctx,
+        [cu(), createCoinIx({ payer: ctx.payer.publicKey, mint: mint.publicKey, creator: creator.publicKey })],
+        [mint],
+      );
+      await send(
+        ctx,
+        [
+          cu(),
+          buyIx({
+            user: whale.publicKey,
+            mint: mint.publicKey,
+            creator: creator.publicKey,
+            feeRecipient: feeRecipient.publicKey,
+            tokenAmount: PUMP_CLASSIC.initialRealToken,
+            maxSolCost: 120_000_000_000n,
+          }),
+        ],
+        [whale],
+      );
+      expect((await readCurve(ctx, mint.publicKey)).complete).toBe(true);
+
+      // The griefer: create the wSOL ATA of the migration authority, the exact
+      // account the old `init` would try to allocate. A few thousandths of a
+      // SOL, no relationship to the coin, permissionless.
+      const migration = migrationAuthorityPda(mint.publicKey);
+      const griefer = Keypair.generate();
+      await fund(griefer.publicKey, 1_000_000_000);
+      await send(
+        ctx,
+        [
+          cu(),
+          createAssociatedTokenAccountInstruction(
+            griefer.publicKey,
+            getAssociatedTokenAddressSync(NATIVE_MINT, migration, true),
+            migration,
+            NATIVE_MINT,
+          ),
+        ],
+        [griefer],
+      );
+
+      // Migration must still go through. On the buggy binary this reverts; on
+      // the fixed one the front-run account is simply irrelevant.
+      const stranger = Keypair.generate();
+      await fund(stranger.publicKey, 1_000_000_000);
+      await send(
+        ctx,
+        [
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 + cuNonce++ }),
+          migrateIx({ payer: stranger.publicKey, mint: mint.publicKey, feeRecipient: feeRecipient.publicKey }),
+        ],
+        [stranger],
+      );
+      const migrated = await readCurve(ctx, mint.publicKey);
+      expect(migrated.migrated).toBe(true);
+      expect(migrated.realSol).toBe(0n);
+    },
+    TEST_TIMEOUT,
+  );
 
   it(
     "pays creator fees to a PDA creator, swept by a stranger (the DAO path)",

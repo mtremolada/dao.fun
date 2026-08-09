@@ -36,6 +36,9 @@ export const SOL_VAULT_SEED = Buffer.from("sol-vault");
 export const CREATOR_VAULT_SEED = Buffer.from("creator-vault");
 /** Per-mint protocol-fee accrual — funds the coin's own graduation. */
 export const PROTOCOL_VAULT_SEED = Buffer.from("protocol-vault");
+/** Staging token accounts for migrate — PROGRAM PDAs, not ATAs (B1). */
+export const MIGRATION_WSOL_SEED = Buffer.from("migration-wsol");
+export const MIGRATION_TOKEN_SEED = Buffer.from("migration-token");
 /** Holds the Burn & Earn fee key; can only ever pay the coin's creator. */
 export const FEE_AUTHORITY_SEED = Buffer.from("fee-authority");
 /** The fee key's mint — a PDA, so migrate needs no throwaway co-signer. */
