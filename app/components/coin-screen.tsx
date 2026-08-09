@@ -361,7 +361,7 @@ function TradePanel({
           {quote && <p className="quote muted">You receive ≈ <strong>{quote.out}</strong></p>}
           <label className="field">
             <span>Slippage: {slippageBps / 100}%</span>
-            <input type="range" min={10} max={1000} step={10} value={slippageBps} onChange={(e) => setSlippage(Number(e.target.value))} />
+            <input type="range" min={0} max={10000} step={50} value={slippageBps} onChange={(e) => setSlippage(Number(e.target.value))} />
           </label>
           {!wallet ? (
             <p className="muted">Connect a wallet to trade.</p>

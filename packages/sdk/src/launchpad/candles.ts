@@ -5,8 +5,14 @@
  *
  * Price is the marginal curve price after each trade (virtualSol /
  * virtualToken), normalized to SOL per whole token: (lamports/1e9) /
- * (base/1e6) = vSol/vToken/1e3. Volume is summed SOL. Empty buckets are
- * omitted; the chart carries the close forward.
+ * (base/1e6) = vSol/vToken/1e3. Volume is summed SOL.
+ *
+ * Trade prices are POST-trade, so a bucket's own trades cannot show the move
+ * INTO the bucket — every bucket therefore OPENS at the previous bucket's
+ * close (high/low widened to include it). Without this, a one-trade bucket
+ * collapses into a bodiless doji and the chart reads as empty. Empty buckets
+ * are omitted; lightweight-charts plots by index, so the series stays
+ * visually continuous and the carried-forward open preserves the movement.
  */
 
 export interface TradePoint {
@@ -58,8 +64,17 @@ export function aggregateCandles(
       b.v += vol;
     }
   }
-  return [...buckets.entries()]
-    .sort((a, b) => a[0] - b[0])
+  const ordered = [...buckets.entries()].sort((a, b) => a[0] - b[0]);
+  let prevClose: number | null = null;
+  for (const [, b] of ordered) {
+    if (prevClose !== null) {
+      b.o = prevClose;
+      b.h = Math.max(b.h, prevClose);
+      b.l = Math.min(b.l, prevClose);
+    }
+    prevClose = b.c;
+  }
+  return ordered
     .slice(-limit)
     .map(([time, b]) => ({ time, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }));
 }

@@ -41,15 +41,37 @@ describe("aggregateCandles", () => {
     expect(a!.volume).toBeCloseTo(3.75, 9);
     expect(b!.time).toBe(120);
     expect(b!.volume).toBeCloseTo(0.1, 9);
+    // The second bucket OPENS at the first bucket's close — a single-trade
+    // bucket must show the move as a body, not collapse into a doji.
+    expect(b!.open).toBeCloseTo(a!.close, 15);
+    expect(b!.high).toBeCloseTo(spotPriceSol(36_000_000_000n, 1_000_000_000_000_000n), 15);
+    expect(b!.low).toBeCloseTo(a!.close, 15);
   });
 
-  it("omits empty buckets and keeps ascending time order", () => {
+  it("carries the open across omitted empty buckets", () => {
     const points = [
       pt(0, 1_000_000_000n, 1_000_000_000_000n, 1n),
       pt(600, 2_000_000_000n, 1_000_000_000_000n, 1n),
     ];
-    const times = aggregateCandles(points, 60).map((c) => c.time);
-    expect(times).toEqual([0, 600]);
+    const candles = aggregateCandles(points, 60);
+    expect(candles.map((c) => c.time)).toEqual([0, 600]);
+    // Ten minutes idle: the late bucket still opens at the prior close, so
+    // the chart (which plots by index) stays continuous.
+    expect(candles[1]!.open).toBeCloseTo(candles[0]!.close, 15);
+    expect(candles[1]!.low).toBeCloseTo(candles[0]!.close, 15);
+    expect(candles[1]!.close).toBeCloseTo(spotPriceSol(2_000_000_000n, 1_000_000_000_000n), 15);
+  });
+
+  it("a falling single-trade bucket gets a red body (open above close)", () => {
+    const points = [
+      pt(0, 2_000_000_000n, 1_000_000_000_000n, 1n),
+      pt(60, 1_000_000_000n, 1_000_000_000_000n, 1n),
+    ];
+    const [, down] = aggregateCandles(points, 60);
+    expect(down!.open).toBeCloseTo(spotPriceSol(2_000_000_000n, 1_000_000_000_000n), 15);
+    expect(down!.close).toBeCloseTo(spotPriceSol(1_000_000_000n, 1_000_000_000_000n), 15);
+    expect(down!.high).toBeCloseTo(down!.open, 15);
+    expect(down!.low).toBeCloseTo(down!.close, 15);
   });
 
   it("applies the limit to the NEWEST candles", () => {
