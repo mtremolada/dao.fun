@@ -7,6 +7,38 @@ everything in **DECISIONS.md** (D-001..D-049 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
+## ⛔ BLOCKED + LIVE SITE DEGRADED — read this first
+
+**The devnet program upgrade is blocked on SOL and the live devnet site is
+broken until it lands.** `deploy-pages.yml` deploys on push to
+`claude/solana-launchpad-bonding-curve-lqx3dd`, so the Pages site was
+rebuilt with an SDK whose `buy`/`sell`/`create_coin` account lists now
+include the per-mint `["protocol-vault", mint]` PDA — which the DEPLOYED
+devnet program (still the pre-F1a build) does not expect. Trading on
+mtremolada.github.io/dao.fun will fail until the program is upgraded. No
+funds are at risk; devnet only.
+
+**Unblock:** fund `5xqnc7on54YYTiNKDbC5vb123q3JDuLSGF8HdQSd1f2G` on DEVNET
+with ~3.5 SOL (upgrade needs a 3.049 SOL buffer, refunded, plus ~0.09 SOL
+to extend programdata from 419,912 to 432,168 bytes). The datacenter IP is
+rate-limited on every public devnet faucet; faucet.solana.com works from a
+browser. Then:
+
+```
+solana program extend DaV3ystSgyM9ALDCbtv9AzyfEtAuPe9x8jVacYDdSU7V 20000 \
+  --url https://api.devnet.solana.com
+solana program deploy --program-id .wallets/launchpad-program.json \
+  --upgrade-authority .wallets/deployer.json \
+  --url https://api.devnet.solana.com \
+  programs/target/deploy/launchpad_curve.so
+```
+
+then set the devnet fee tier to the 1% config (devnet index 3 =
+`EsTevfacYXpuho5VBuzBjDZi8dtWidGnXoSYAr8krTvz` — INDICES DIFFER FROM
+MAINNET, where 1% is index 1) via `buildSetGraduationConfigIx`, leaving
+`lockProgram = PublicKey.default` because Raydium's locker does not exist
+on devnet.
+
 ## ▶ IN FLIGHT: perpetual post-graduation fees — PLAN-GRADUATED-FEES.md
 
 **G0 DONE (D-049, 8/8 green:
