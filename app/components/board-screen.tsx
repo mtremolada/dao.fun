@@ -9,18 +9,14 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { boardBucket, type BoardBucket } from "@daofun/sdk/launchpad";
+import { type BoardBucket } from "@daofun/sdk/launchpad";
 import {
   apiConfigured,
   launchpadApi,
   subscribeLaunchpad,
   type CoinView,
 } from "../lib/launchpad-api";
-import {
-  fetchAllCoinsFromChain,
-  fetchCoinFromChain,
-  loadLocalCoins,
-} from "../lib/chain-coin";
+import { fetchBoardFromChain, loadLocalCoins } from "../lib/chain-coin";
 import { getConnection } from "../lib/solana";
 import { truncateAddress } from "../lib/wallet-registry";
 
@@ -68,31 +64,14 @@ export function BoardScreen() {
       ]);
       return { new: fresh, graduating: nearly, graduated: done };
     }
-    // No indexer: read EVERY coin from the program itself, then bucket it
-    // with the same rule the indexer applies. Discovery cannot come from
-    // localStorage — that showed each visitor only their own history and hid
-    // every coin created elsewhere.
+    // No indexer: read the board from the program itself — bucketed, ranked
+    // and capped before any metadata is fetched, so the cost does not grow
+    // with the launchpad. Discovery cannot come from localStorage; that showed
+    // each visitor only their own history and hid every coin created
+    // elsewhere. It stays only as a HINT, for a coin too new to be in the
+    // scan's snapshot.
     const connection = getConnection();
-    const found = await fetchAllCoinsFromChain(connection);
-
-    // localStorage is a hint, not the source: a coin created seconds ago may
-    // not be in the scan's snapshot yet, and the launcher should still see it.
-    const seen = new Set(found.map((c) => c.mint));
-    const extra = (
-      await Promise.all(
-        loadLocalCoins()
-          .filter((m) => !seen.has(m))
-          .map((m) => fetchCoinFromChain(connection, m).catch(() => null)),
-      )
-    ).filter((c): c is CoinView => c !== null);
-
-    const out = emptyBuckets();
-    for (const coin of [...found, ...extra]) out[boardBucket(coin)].push(coin);
-    // Busiest first within each column, so an empty new coin never sits above
-    // one that is actually trading.
-    for (const key of Object.keys(out) as BoardBucket[]) {
-      out[key].sort((a, b) => Number(BigInt(b.realSol) - BigInt(a.realSol)));
-    }
+    const out = await fetchBoardFromChain(connection, { hints: loadLocalCoins() });
     return out;
   }, []);
 

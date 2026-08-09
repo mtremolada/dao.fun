@@ -1875,3 +1875,42 @@ the payload grows with the launchpad: fine at 11 coins, ~1.4 MB at ten
 thousand. The backend indexer is the answer at that scale and already exists;
 this is the correct behaviour for a serverless deploy, not a permanent
 substitute for indexing.
+
+## D-055 — Making the board's cost independent of the launchpad's size (2026-08-09)
+
+Operator, on the board reading the chain directly: *"what about when people
+start using it I want it to scale"*. Measured rather than guessed, and the
+answer splits cleanly in two.
+
+**One real inefficiency, fixed.** D-054's board fetched metadata for EVERY
+coin and only then decided which few dozen to render. At ten thousand coins
+that is a hundred extra round trips and several megabytes to draw a hundred
+and fifty cards. The ordering is now: scan → bucket and rank on the curve
+data the scan already returned → cap each column at 50 → and only then read
+names, for what will actually be drawn. Measured against live devnet: **2 RPC
+calls**, and `app/test/board-scale.test.ts` asserts the same call count at 10
+coins and at 50,000. That property is invisible in the rendered output — the
+board looks identical either way — which is exactly why it needed a test that
+asserts COST rather than appearance.
+
+**One limit that cannot be fixed client-side, so it is documented instead.**
+The scan itself returns ~440 bytes per coin (measured): 4.8 KB today, 0.44 MB
+at a thousand coins, 4.4 MB at ten thousand. A client-side full scan is
+inherently linear. It is comfortable to roughly a thousand coins and a bad
+idea well before ten thousand — and public RPC providers commonly restrict
+`getProgramAccounts` on mainnet precisely because of this access pattern.
+
+**The scaling path needs no new architecture.** `packages/backend` is a
+working indexer + API + SSE with a `railway.toml`; the app already switches to
+it when `NEXT_PUBLIC_API_URL` is set, and the Pages workflow already forwards
+that variable. Turning it on is a repo-variable change, and the chain-direct
+path stays as the fallback — a resilience property worth keeping rather than
+deleting.
+
+Written up in **SCALING.md** with the measurements, the order things break in
+(RPC limits first, then indexer throughput, then SQLite, then the board's
+ranking semantics), and the cheapest fix at each step. The one finding worth
+flagging early: the indexer fetches transactions ONE AT A TIME inside its tick
+loop, which is fine at devnet volume and will fall behind a busy mainnet — the
+fix is concurrency within a batch, and the cursor semantics already tolerate
+it because it applies in slot order and advances only over what applied.

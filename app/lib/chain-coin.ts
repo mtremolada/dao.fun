@@ -8,7 +8,13 @@
  * the money path.
  */
 import { Connection, PublicKey } from "@solana/web3.js";
-import { curvePda, decodeCurve, type DecodedCurve } from "@daofun/sdk/launchpad";
+import {
+  boardBucket,
+  curvePda,
+  decodeCurve,
+  type BoardBucket,
+  type DecodedCurve,
+} from "@daofun/sdk/launchpad";
 import type { CoinView } from "./launchpad-api";
 import { launchpadProgramId } from "./cluster";
 
@@ -133,54 +139,148 @@ export async function fetchCoinFromChain(
 }
 
 /**
- * EVERY coin on this deployment, straight from chain.
+ * Every coin on this deployment, straight from chain — curves only.
  *
  * The board used to render only `loadLocalCoins()` — mints this browser had
  * launched or visited. That makes an empty board for every visitor who is not
  * the launcher, and it silently hides coins created anywhere else (a script,
  * another device, another person). A launchpad whose front page shows your own
- * browsing history is not a launchpad, so discovery now comes from the program
+ * browsing history is not a launchpad, so discovery comes from the program
  * itself and localStorage is demoted to a hint.
  *
- * Two RPC calls regardless of how many coins exist: one `getProgramAccounts`
- * for the curves, one batched `getMultipleAccounts` for their metadata. The
- * `dataSize` filter is CORRECTNESS, not an optimization — the Config account
- * is owned by the same program, and without the size filter it would decode
- * as a coin (the same trap `profile.ts` documents).
+ * The `dataSize` filter is CORRECTNESS, not an optimization — the Config
+ * account is owned by the same program, and without the size filter it would
+ * decode as a coin (the same trap `profile.ts` documents).
+ *
+ * SCALE, measured rather than assumed: the RPC returns ~440 bytes per coin, so
+ * this is 4 KB at ten coins, 0.4 MB at a thousand, and 4.4 MB at ten thousand.
+ * A client-side scan cannot be made sublinear — past roughly a thousand coins
+ * the answer is the backend indexer (`NEXT_PUBLIC_API_URL`), which serves a
+ * bounded, pre-bucketed page instead. This path stays as the no-backend
+ * fallback, so it must degrade gracefully rather than pretend.
  */
-export async function fetchAllCoinsFromChain(
+export async function fetchCurvesFromChain(
   connection: Connection,
-): Promise<CoinView[]> {
-  const programId = launchpadProgramId();
-  const accounts = await connection.getProgramAccounts(programId, {
+): Promise<DecodedCurve[]> {
+  const accounts = await connection.getProgramAccounts(launchpadProgramId(), {
     filters: [{ dataSize: CURVE_ACCOUNT_LEN }],
   });
-  const curves = accounts.map(({ account }) => decodeCurve(account.data));
-  if (curves.length === 0) return [];
+  return accounts.map(({ account }) => decodeCurve(account.data));
+}
 
-  // Metadata in batches of 100 — the getMultipleAccounts ceiling. A missing
-  // or unparseable metadata account is not a reason to drop the coin: the
-  // curve is the source of truth and a nameless coin still trades.
-  const metas: CoinMetadata[] = [];
-  for (let i = 0; i < curves.length; i += 100) {
-    const slice = curves.slice(i, i + 100);
+/**
+ * Metadata for a specific set of mints, batched at the 100-account
+ * `getMultipleAccounts` ceiling.
+ *
+ * A missing or unparseable metadata account is NOT a reason to drop the coin:
+ * the curve is the source of truth and a nameless coin still trades.
+ */
+export async function fetchMetadataFor(
+  connection: Connection,
+  mints: PublicKey[],
+): Promise<Map<string, CoinMetadata>> {
+  const out = new Map<string, CoinMetadata>();
+  for (let i = 0; i < mints.length; i += 100) {
+    const slice = mints.slice(i, i + 100);
     const infos = await connection.getMultipleAccountsInfo(
-      slice.map((c) => metadataPdaFor(c.mint)),
+      slice.map((m) => metadataPdaFor(m)),
     );
-    for (const info of infos) {
+    slice.forEach((mint, j) => {
       let meta: CoinMetadata = { name: "", symbol: "", uri: "" };
       try {
+        const info = infos[j];
         if (info) meta = parseMetadata(info.data);
       } catch {
         /* keep the coin, lose the name */
       }
-      metas.push(meta);
-    }
+      out.set(mint.toBase58(), meta);
+    });
+  }
+  return out;
+}
+
+/** How many coins each board column shows without an indexer. */
+export const BOARD_COLUMN_LIMIT = 50;
+/**
+ * How many remembered-but-unscanned mints are worth an individual read.
+ *
+ * Only coins genuinely ABSENT from the scan reach this — in practice a coin
+ * created seconds ago. Without a bound, a heavy user's 60 remembered mints
+ * would each cost a round trip, which is the unbounded cost this whole
+ * function exists to avoid, aimed squarely at the people who use the site most.
+ */
+const MAX_HINT_READS = 12;
+
+export type BoardBuckets = Record<BoardBucket, CoinView[]>;
+
+/**
+ * The whole board, from chain, in a bounded number of RPC calls.
+ *
+ * The ordering here is the point. Bucket and sort on the CURVE data — which
+ * the scan already returned — then cap each column, and only THEN read
+ * metadata, for the coins that will actually be rendered. Fetching names for
+ * every coin first is what turns a launchpad with ten thousand coins into a
+ * hundred extra round trips and several more megabytes for a page that shows
+ * a hundred and fifty cards.
+ *
+ * `hints` are this browser's remembered mints. They are NOT discovery — the
+ * scan is — but a coin created seconds ago may not be in the scan's snapshot
+ * yet and its launcher should still see it, so any hint the scan did not
+ * return is read individually (bounded) and pinned to the front of its column.
+ *
+ * Cost: 1 scan + at most `MAX_HINT_READS` single reads + 2 metadata batches,
+ * whatever the launchpad's size.
+ */
+export async function fetchBoardFromChain(
+  connection: Connection,
+  opts: { perColumn?: number; hints?: string[] } = {},
+): Promise<BoardBuckets> {
+  const perColumn = opts.perColumn ?? BOARD_COLUMN_LIMIT;
+  const curves = await fetchCurvesFromChain(connection);
+  const out = { new: [], graduating: [], graduated: [] } as BoardBuckets;
+
+  // Dedupe hints against EVERY scanned coin, not just the displayed ones —
+  // otherwise capping the columns turns remembered coins back into reads.
+  const scanned = new Set(curves.map((c) => c.mint.toBase58()));
+  const missing = (opts.hints ?? [])
+    .filter((m) => !scanned.has(m))
+    .slice(0, MAX_HINT_READS);
+
+  const blank: CoinMetadata = { name: "", symbol: "", uri: "" };
+  const views = curves.map((c) => coinViewFromCurve(c.mint.toBase58(), c, blank));
+  for (const view of views) out[boardBucket(view)].push(view);
+  // Busiest first, so an empty new coin never sits above one that is trading.
+  for (const key of Object.keys(out) as BoardBucket[]) {
+    out[key].sort((a, b) => Number(BigInt(b.realSol) - BigInt(a.realSol)));
+    out[key] = out[key].slice(0, perColumn);
   }
 
-  return curves.map((c, i) =>
-    coinViewFromCurve(c.mint.toBase58(), c, metas[i]!),
+  // Hints join AFTER the cap, at the front: a coin you just launched has no
+  // raise yet and would rank last, which is the one place ranking is wrong.
+  if (missing.length > 0) {
+    const extra = (
+      await Promise.all(
+        missing.map((m) => fetchCoinFromChain(connection, m).catch(() => null)),
+      )
+    ).filter((c): c is CoinView => c !== null);
+    for (const coin of extra) out[boardBucket(coin)].unshift(coin);
+  }
+
+  const shown = (Object.keys(out) as BoardBucket[]).flatMap((k) => out[k]);
+  if (shown.length === 0) return out;
+  const metas = await fetchMetadataFor(
+    connection,
+    shown.map((c) => new PublicKey(c.mint)),
   );
+  for (const view of shown) {
+    const meta = metas.get(view.mint);
+    if (meta && (meta.name || meta.symbol)) {
+      view.name = meta.name;
+      view.symbol = meta.symbol;
+      view.uri = meta.uri;
+    }
+  }
+  return out;
 }
 
 /**

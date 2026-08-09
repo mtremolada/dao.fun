@@ -521,3 +521,16 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       total; localStorage is demoted to a hint for a coin created seconds ago.
       Verified against live devnet — 11 of 11 coins found with names — and
       pinned by an e2e with an empty localStorage that fails on the old code.
+- [x] **The board's cost no longer grows with the launchpad (D-055,
+      2026-08-09).** Operator asked what happens when people start using it.
+      Measured: the scan returns ~440 bytes per coin (4.8 KB today, 4.4 MB at
+      ten thousand), and the first version fetched metadata for EVERY coin
+      before deciding which few dozen to draw. Reordered — scan, bucket and
+      rank on curve data, cap each column, then read names only for what will
+      be rendered — giving 2 RPC calls whatever the size, asserted at 10 coins
+      and at 50,000 in `app/test/board-scale`. The linear scan payload cannot
+      be fixed client-side and is documented instead: SCALING.md records the
+      measurements, the order things break in (RPC limits, then indexer
+      throughput, then SQLite, then ranking semantics), and the cheapest fix
+      at each step. The path itself needs no new architecture — the backend
+      indexer exists and the app switches to it on NEXT_PUBLIC_API_URL.
