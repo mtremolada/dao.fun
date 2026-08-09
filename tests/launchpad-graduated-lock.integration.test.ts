@@ -558,6 +558,69 @@ describe("graduated liquidity — our program drives Raydium's locker", () => {
       expect(await tokenBalance(ctx, holding)).toBe(0n);
       // Recovery does not restart once repaid.
       expect(await recovered()).toBe(cost);
+
+      // --- And the wSOL mint is PINNED.
+      //
+      // This account decides two things: which of the pool's two sides counts
+      // as "SOL" (a byte-order comparison against the coin mint) and which
+      // mint the three wSOL token accounts are bound to. Left free, a caller
+      // picks where the coin payout and the SOL payout each land.
+      //
+      // Substituting the mint ALONE proves nothing — the `associated_token::
+      // mint = wsol_mint` constraints on the three token accounts fail first
+      // (ConstraintAssociated), which is a check that already existed. The
+      // real adversary passes MATCHING token accounts for the substituted
+      // mint, and that is what this builds: the coin's own mint in the wSOL
+      // slot, with ATAs of the coin mint in all three wSOL slots. Every
+      // earlier constraint then passes and the address pin is the only thing
+      // standing between the caller and Raydium. Measured on the binary
+      // WITHOUT the pin, this exact call reached the locker and was refused
+      // there with 0x7de (its own ConstraintTokenMint) — so the gap was never
+      // exploitable, but the refusal came from Raydium rather than from us.
+      const fake = mint.publicKey;
+      const fakeHolding = ata(fake, feeAuthority);
+      const fakeProtocol = ata(fake, feeRecipient.publicKey);
+      await send(
+        ctx,
+        [
+          cu(),
+          ...[
+            [feeAuthority, fakeHolding],
+            [feeRecipient.publicKey, fakeProtocol],
+          ].map(([owner, addr]) =>
+            createAssociatedTokenAccountIdempotentInstruction(
+              ctx.payer.publicKey,
+              addr as PublicKey,
+              owner as PublicKey,
+              fake,
+            ),
+          ),
+        ],
+        [],
+      );
+
+      const substituted = buildCollectGraduatedFeesIx({
+        payer: ctx.payer.publicKey,
+        mint: mint.publicKey,
+        creator,
+        feeRecipient: feeRecipient.publicKey,
+        poolState: derived.poolState,
+        lockProgram: RAYDIUM_LOCK_PROGRAM_ID,
+        ray: RAY,
+      });
+      const swap = new Map<string, PublicKey>([
+        [holding.toBase58(), fakeHolding],
+        [creatorSol.toBase58(), creatorCoin], // ATA(coin, creator) already exists
+        [protocolSol.toBase58(), fakeProtocol],
+        [NATIVE_MINT.toBase58(), fake],
+      ]);
+      substituted.keys = substituted.keys.map((k) => {
+        const to = swap.get(k.pubkey.toBase58());
+        return to ? { ...k, pubkey: to } : k;
+      });
+      const refused = await sendExpectFail(ctx, [cu(600_000), substituted], []);
+      // 2012 = ConstraintAddress: OUR pin refused it, before any CPI.
+      expect(refused).toMatch(/2012|ConstraintAddress/);
     },
     TEST_TIMEOUT,
   );

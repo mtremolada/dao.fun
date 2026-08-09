@@ -1652,3 +1652,93 @@ observed happened while a SECOND full suite was running concurrently on this
 4-core box (an orphaned run from an earlier session, found only by reading
 `ps`) — after killing it, eight consecutive runs were clean. That is a
 correlation, not a proof, and it is recorded as one.
+
+## D-052 — A deep pass over the live devnet deployment: two real defects, one hardening (2026-08-09)
+
+Operator directive: mainnet stays parked, keep building on devnet, *"make
+sure everything we've built so far is perfect. Do a deep pass on all of it"*.
+The pass was written as a script rather than a read-through
+(`scripts/devnet-audit.ts`), because a read-through checks what I believe the
+code does and a script checks what the chain actually holds. It found two
+things a green test suite could never have found, both of which had been live
+for a while.
+
+### 1. Legacy coins could not be bought at all
+
+Five of seven devnet coins had NO `["protocol-vault", mint]` account: they
+were created before the fee model existed, and the instruction that seeds the
+vault came later. `buy` routes the 0.70% protocol fee there with a plain
+system transfer, and a transfer to a non-existent account CREATES it — which
+the runtime then rejects unless the new account lands rent-exempt. So every
+buy whose protocol fee was under 890,880 lamports failed. That is every buy
+under about **0.127 SOL**: in practice, all of them.
+
+Proven before fixing, on chain:
+
+```
+BEFORE — 0.01 SOL buy on 7kbXce29…
+  Transaction simulation failed: Transaction results in an account (5)
+  with insufficient funds for rent
+```
+
+No program change was needed and none would have helped: the vault is a
+system-owned PDA, so anyone may fund it. `scripts/devnet-legacy-vault-fix.ts`
+funds each affected vault to the floor and re-runs the same buy, which then
+succeeds (`5iwGfqCZ…`). New coins were never affected — `create_coin` seeds
+the vault, and `migrate` and `collect_protocol_fee` both retain the floor with
+`saturating_sub`, so it cannot be drained back below it. Verified by reading
+those two paths, and now guarded by a devnet-smoke assertion.
+
+### 2. The app pointed at a program that does not exist
+
+`app/lib/cluster.ts` carried its own literal copy of the launchpad program id.
+After the first real deploy the SDK's copy was updated and this one was not,
+so the two disagreed: SDK `DaV3yst…`, app `6s4F21hx…`. Invisible in
+production, because the Pages workflow always sets
+`NEXT_PUBLIC_LAUNCHPAD_PROGRAM_ID` — but any run without it (a local
+`pnpm dev`, any other consumer) pointed the entire app at a program that has
+never been deployed, and every read came back empty. The app now falls back to
+the SDK constant, and a test asserts they are the SAME constant rather than
+two equal strings.
+
+### 3. Hardening: the wSOL mint is now pinned in `collect_graduated_fees`
+
+`migrate` pins `wsol_mint` to the native mint; `collect_graduated_fees` did
+not. That account decides which of the pool's two sides counts as "SOL" (a
+byte-order comparison) and which mint the three wSOL token accounts bind to,
+so a free choice is a caller choosing where each payout lands.
+
+It was NOT exploitable, and the test says why rather than asserting it:
+substituting the mint alone dies on `ConstraintAssociated`, so the adversarial
+construction passes matching token accounts too — and on the unpinned binary
+that call reached Raydium's locker and was refused there with its own
+`ConstraintTokenMint` (**0x7de**, measured). Raydium was enforcing our
+invariant. Now we enforce it ourselves, before any CPI (**0x7dc**,
+ConstraintAddress). This file's rule is to derive and check rather than borrow
+someone else's validation.
+
+### 4. Reproducibility, established rather than assumed
+
+A forced clean recompile of the unchanged source reproduced the deployed
+binary **byte for byte** (`2f085982…`), so source → build → fixture → deployed
+devnet program were provably one artifact. After the hardening the chain was
+re-established at `5c5854a5…` and redeployed (`2W82hMgj…`).
+
+`devnet-audit.ts` now checks this automatically, with the subtlety that cost
+me a confused minute: `solana program dump` returns the ALLOCATED programdata
+length, not the ELF length, so a whole-file hash mismatches purely because
+`solana program deploy` grows the account with slack. Compare the prefix and
+assert the tail is zeros (9,904 bytes of it here).
+
+### What the pass did NOT do
+
+No fresh graduation. A full one costs ~2.83 devnet SOL permanently (the raise
+becomes pool liquidity and the LP is burned), three coins have already been
+graduated, and the only changed code path — the locker — **cannot run on
+devnet at all**. The regression risk from a redeploy is to the paths that
+already worked, so `scripts/devnet-smoke.ts` drives those instead: create →
+buy → sell → collect_creator_fee → collect_protocol_fee, checking lamports
+against the SDK's own quote math rather than checking for the absence of an
+error. All green on the newly deployed binary, including the negative one —
+a pre-graduation protocol sweep is REFUSED, because that money is earmarked
+for the coin's own graduation.

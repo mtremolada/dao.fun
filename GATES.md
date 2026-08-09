@@ -381,6 +381,22 @@ chain. The RAISE-FALLBACK path was exercised for real: the vault paid
 0.023987 and the raise covered 0.168169, summing to the 0.192156 overhead
 exactly. All 7 pre-upgrade curve accounts still decode.
 
+**Layer 2b — the live deployment, audited rather than assumed (2026-08-09,
+D-052).** `scripts/devnet-audit.ts` reads the chain and re-checks the
+invariants the suite asserts in bankrun: the deployed binary is byte-identical
+to `tests/fixtures/launchpad_curve.so.gz` (prefix compare — `solana program
+dump` returns the allocated length, so the 9,904-byte zero tail is expected);
+config is still 277 bytes at the 1% devnet tier with `lockProgram` unset; every
+curve sits at its derived PDA carrying the 1.00% split; every migrated coin
+points at a real Raydium pool whose **LP mint supply is ZERO**, which is the
+strongest form of the burn guarantee — not "the LP is held somewhere safe" but
+"no LP exists, so no withdraw is possible". It found two live defects (legacy
+coins unbuyable; the app pointing at an undeployed program id), both fixed and
+re-verified. `scripts/devnet-smoke.ts` then drove create → buy → sell →
+collect_creator_fee → collect_protocol_fee against the freshly deployed
+binary, checking lamports against the SDK's quote math: all green, including
+the negative (a pre-graduation protocol sweep is refused).
+
 **Layer 3 — mainnet canary: NOT DONE, and it is the only thing that can
 prove the lock path live.** Raydium's locker is absent from devnet and
 hard-codes the mainnet CPMM id, so no amount of devnet work substitutes.

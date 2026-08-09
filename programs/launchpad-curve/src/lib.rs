@@ -1940,6 +1940,19 @@ pub struct CollectGraduatedFees<'info> {
     /// CHECK: pinned to the address recorded in config.
     #[account(address = config.fee_recipient @ LaunchpadError::InvalidFeeRecipient)]
     pub fee_recipient: UncheckedAccount<'info>,
+    /// Pinned, exactly as `migrate` pins it. Our pools are always coin/wSOL,
+    /// and this account decides two things: which of the pool's two sides is
+    /// "SOL" (the byte-order comparison below) and which mint the three wSOL
+    /// token accounts are bound to. Left free, a caller could flip the sides
+    /// — the coin's payout aimed at the SOL account and vice versa.
+    ///
+    /// It was not exploitable: passing matching token accounts for a
+    /// substituted mint got as far as the locker, which refused with its own
+    /// `ConstraintTokenMint` (0x7de, measured). But that is Raydium enforcing
+    /// OUR invariant, and this file's rule is to derive and check rather than
+    /// borrow someone else's validation — so we now refuse it ourselves,
+    /// before any CPI (0x7dc, ConstraintAddress).
+    #[account(address = anchor_spl::token::spl_token::native_mint::id())]
     pub wsol_mint: Box<Account<'info, Mint>>,
     /// CHECK: address checked against config.lock_program.
     pub lock_program: UncheckedAccount<'info>,

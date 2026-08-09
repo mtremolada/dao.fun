@@ -474,3 +474,22 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       the wedge costs 60s instead of 300 and lands green. Suites: 63
       integration, 199 sdk + 78 backend + 65 app + 25 keeper unit, 33 e2e;
       eslint + tsc clean.
+- [x] **Deep pass over the live devnet deployment (D-052, 2026-08-09).**
+      Written as `scripts/devnet-audit.ts` rather than a read-through,
+      because a read-through checks what I believe the code does. It found
+      two defects a green suite could not: five legacy coins had no protocol
+      vault, so EVERY buy under ~0.127 SOL failed with "insufficient funds
+      for rent" (proved on chain before fixing, fixed by funding the PDAs —
+      no program change possible or needed); and `app/lib/cluster.ts` kept
+      its own stale copy of the program id, pointing any run without the env
+      var at a program that has never been deployed. Both fixed and
+      re-verified, with a regression test that the app and SDK share ONE
+      constant. Also hardened `collect_graduated_fees` to pin the wSOL mint
+      as `migrate` does (it was refused by Raydium's own ConstraintTokenMint
+      before — measured 0x7de — which was Raydium enforcing our invariant),
+      rebuilt, redeployed devnet (`2W82hMgj…`), and established the full
+      chain source → build → fixture → deployed as byte-identical, now
+      asserted by the audit. `scripts/devnet-smoke.ts` drives create → buy →
+      sell → collect_creator_fee → collect_protocol_fee against the live
+      binary, lamports checked against the SDK's quote math. Suites: 63
+      integration, 199 sdk + 78 backend + 67 app + 35 keeper unit, 33 e2e.

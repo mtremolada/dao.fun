@@ -5,6 +5,7 @@
  * so flipping to mainnet later is one env change, not a code hunt.
  */
 import { PublicKey } from "@solana/web3.js";
+import { LAUNCHPAD_PROGRAM_ID } from "@daofun/sdk/launchpad";
 
 export type Cluster = "devnet" | "mainnet" | "testnet";
 
@@ -25,12 +26,18 @@ export function chainId(): `solana:${string}` {
   return c === "mainnet" ? "solana:mainnet" : `solana:${c}`;
 }
 
-/** The launchpad program id (minted at first devnet deploy; env in production). */
+/**
+ * The launchpad program id. The fallback comes from the SDK rather than a
+ * literal here: this file used to carry its own copy, and after the first
+ * real deploy the SDK's copy was updated and this one was not — so any run
+ * WITHOUT `NEXT_PUBLIC_LAUNCHPAD_PROGRAM_ID` (a local `pnpm dev`, anything
+ * outside the Pages workflow that sets it) silently pointed the whole app at
+ * a program that does not exist, and every read came back empty. One
+ * constant, one place to update it.
+ */
 export function launchpadProgramId(): PublicKey {
-  return new PublicKey(
-    process.env.NEXT_PUBLIC_LAUNCHPAD_PROGRAM_ID ??
-      "6s4F21hxm5MurkGX6XdfcbPtMPXMxVfazATZRsiRrmvr",
-  );
+  const override = process.env.NEXT_PUBLIC_LAUNCHPAD_PROGRAM_ID;
+  return override ? new PublicKey(override) : LAUNCHPAD_PROGRAM_ID;
 }
 
 const EXPLORER_SUFFIX: Record<Cluster, string> = {

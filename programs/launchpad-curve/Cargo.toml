@@ -1,7 +1,7 @@
 [package]
 name = "launchpad-curve"
 version = "0.1.0"
-description = "Native bonding-curve launchpad: pump-classic economics, permissionless Raydium CPMM graduation, LP burned (SPEC-LAUNCHPAD.md)"
+description = "Native bonding-curve launchpad: pump-classic economics, permissionless Raydium CPMM graduation, LP locked where a locker exists and burned where it does not (SPEC-LAUNCHPAD.md)"
 edition = "2021"
 
 [lib]

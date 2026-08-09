@@ -31,6 +31,27 @@ holding ~3.6 SOL each; `solana program show --buffers --buffer-authority
 faucets rate-limit this datacenter IP entirely — funding must come from a
 browser faucet or the operator.
 
+## 🔎 RUN THESE before believing anything about devnet (D-052)
+
+- `pnpm tsx scripts/devnet-audit.ts` — read-only. Checks the DEPLOYED binary
+  against `tests/fixtures/launchpad_curve.so.gz` (prefix compare: `solana
+  program dump` returns the ALLOCATED length, so expect a zero tail), the
+  config, every curve, every pool, and that migrated pools have LP mint
+  supply ZERO. Exit code is the verdict.
+- `pnpm tsx scripts/devnet-smoke.ts [--create]` — spends a few thousandths of
+  a SOL to drive create → buy → sell → collect_creator_fee →
+  collect_protocol_fee, checking lamports against the SDK's quote math. This
+  is the regression a redeploy actually needs; a fresh graduation costs
+  ~2.83 SOL permanently and proves nothing the locker path needs.
+- `pnpm tsx scripts/devnet-legacy-vault-fix.ts [--apply]` — one-off for coins
+  created before the fee model: no protocol vault means every buy under
+  ~0.127 SOL fails on rent. Anyone can fund the PDA; no authority needed.
+
+Devnet CLI is not on PATH by default:
+`export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"`.
+Deployer is `.wallets/deployer.json` (`5xqnc7on…`), NOT the `FMA5xzV…` in the
+standing constraints — that one is the operator's frontend-testing wallet.
+
 ## ✅ SHIPPED: perpetual post-graduation fees (G0–G3, D-049/D-050)
 
 Program, SDK, keeper crank and app surface are all in. What remains is
@@ -126,8 +147,8 @@ first). GATE 2 and GATE L2 sign-off lines are filled (same delegation).
   setParam). Holder-snapshot service (D-026), browser signing via
   wallet-standard + server-built txs (D-028).
 - Stage 3 started: build pipeline proven (D-029 — cargo-build-sbf
-  4.0.0 / platform-tools v1.53 / anchor-lang 0.30.1; platform-tools must
-  be curl-fetched into ~/.cache/solana/v1.53/ because the proxy CA
+  4.1.0 / platform-tools v1.54 / anchor-lang 0.30.1; platform-tools must
+  be curl-fetched into ~/.cache/solana/v1.54/ because the proxy CA
   breaks the built-in downloader). proposal-gate v1 SHIPPED (D-030):
   on-chain validation engine (parses real ProposalTransactionV2,
   unwraps the Squads message, whitelist-enforces outer+inner programs)
