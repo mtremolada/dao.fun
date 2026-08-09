@@ -71,7 +71,9 @@ export function holdUpFloorSeconds(
     case "sovereign":
       return 0;
     case "guarded":
-      throw new Error("guarded mode ships at Stage 3 (proposal-gate program)");
+      // The gate protects CONTENT; the hold-up still buys exit time, so
+      // guarded keeps the tier floor (same as council).
+      return floor;
   }
 }
 
@@ -112,7 +114,9 @@ export function resolveGovernanceParams(p: ResolveParams): GovernanceParams {
       vetoEnabled = false;
       break;
     case "guarded":
-      throw new Error("guarded mode ships at Stage 3 (proposal-gate program)");
+      holdUpSeconds = holdUpFloorSeconds("guarded", p.tier);
+      vetoEnabled = false; // protection is the menu, not a veto seat
+      break;
   }
 
   // Checked math (INV-6): bigint ops cannot overflow; guard against a zero

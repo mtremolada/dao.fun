@@ -286,6 +286,16 @@ export function LaunchForm({ mode }: { mode: GovernanceMode }) {
         ))}
       </select>
 
+      {mode === "guarded" && (
+        <p className="muted" data-testid="guarded-note">
+          Nothing to configure. Proposals must come through the on-chain gate,
+          which only admits the safety menu: treasury grants, buybacks,
+          liquidity, distributions, and parameter changes — nothing else can
+          even be proposed. Anyone can propose from the menu; your token
+          holders vote.
+        </p>
+      )}
+
       {mode === "council" && (
         <>
           <label htmlFor="council-members">

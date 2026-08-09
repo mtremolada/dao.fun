@@ -7,14 +7,17 @@ everything in **DECISIONS.md** (D-001..D-042 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
-## ▶ NEXT UP (operator directive 2026-08-09): unified launch page + Guarded build
+## ✅ Guarded SHIPPED (2026-08-09, D-043) — unified launch page live
 
-**PLAN-UNIFIED-LAUNCH.md is the work order** — one /launch page with all
-four protections as simple cards (Guarded default), Guarded unlocked on
-the D-042 verified design. Order R0→R3: gate program
-`create_gated_proposal` (tests first, extend the spike so the gate PDA
-authors via invoke_signed) → SDK guarded ceremony + propose routing →
-single-page UI → end-to-end proof + devnet deploy. Tasks #27–#30.
+Gate v2 (four PDA-signed CPIs, client-parity, proven on the deployed
+binary incl. the production buildCreateDaoIxs("guarded") ceremony), SDK
+gate module + guarded ceremony/form/matrix with the full 6.8 menu as
+DEFAULT_GATE_WHITELIST, ONE /launch page (Guarded default, zero-config).
+Remaining from PLAN-UNIFIED-LAUNCH: app-side GATED PROPOSE routing for
+the action menu on guarded DAOs (dashboard/proposal screens still build
+direct proposals — they must route via the gate builders for guarded
+realms), a devnet gate deploy if live evidence is wanted, and REDTEAM
+guarded row. The DAO launch flow itself remains mainnet/pump-rail.
 
 ## ✅ RESOLVED (2026-08-08): Guarded mode enforcement — Option A committed (D-042)
 

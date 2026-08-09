@@ -20,6 +20,11 @@ export const VSR_PROGRAM_ID = new PublicKey(
 export const SQUADS_V4_PROGRAM_ID = new PublicKey(
   "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
 );
+
+/** proposal-gate (ours) — Stage 3 guarded front door (gate v2, D-042). */
+export const PROPOSAL_GATE_PROGRAM_ID = new PublicKey(
+  "3QgQJ4EufHygGPMSBg4tD1Jzi1tEfyrFH4yXH3w8pBvg",
+);
 // Jito merkle distributor (JTO airdrop deployment, Dec 2023). Resolved and
 // verified on mainnet (D-024): executable, upgrade authority REMOVED
 // (immutable), publishes its anchor IDL on chain (merkle_distributor 0.0.1,

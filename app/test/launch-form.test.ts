@@ -113,14 +113,14 @@ describe("validateLaunchForm — floors are floors (spec 6.7)", () => {
     ).toBe(true);
   });
 
-  it("guarded mode is not selectable before Stage 3", () => {
+  it("guarded mode is selectable with ZERO extra inputs (the protection is structural)", () => {
     const result = validateLaunchForm({
       mode: "guarded",
       tier: "micro",
       confirmations: {},
     });
-    expect(result.ok).toBe(false);
-    expect(result.errors.join()).toMatch(/Stage 3/);
+    expect(result.ok).toBe(true);
+    expect(result.params?.vetoEnabled).toBe(false);
   });
 });
 

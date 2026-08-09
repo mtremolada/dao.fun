@@ -38,48 +38,41 @@ const MODES = [
   {
     id: "guarded",
     name: "Guarded",
-    tagline: "Proposals restricted to a fixed safe action menu.",
+    tagline: "Proposals restricted to a fixed safe action menu. Recommended.",
     points: [
-      "Realm authority held by the proposal-gate program",
-      "Ships at Stage 3 — not selectable yet",
+      "The on-chain gate authors every proposal — off-menu never exists",
+      "Community voting untouched; nothing to configure",
+      "Strongest protection, simplest setup",
     ],
   },
 ] as const;
 
-export default function ModeSelectionPage() {
+export default function HomePage() {
   return (
     <>
-      <h1>Pick a governance mode</h1>
+      <h1>Launch a token with a treasury that protects itself</h1>
       <p className="muted">
-        Mode is structural, not a setting: what a mode forbids does not
-        exist on-chain. Floors only ratchet stricter after launch.
+        One launch page, four protection levels — all on it. Protection is
+        structural, not a setting: what a level forbids does not exist
+        on-chain. Floors only ratchet stricter after launch.
+      </p>
+      <p>
+        <Link className="button primary" href="/launch" data-testid="cta-launch">
+          Launch — all options on one page
+        </Link>
       </p>
       <div className="mode-grid">
-        {MODES.map((mode) => {
-          const selectable = mode.id !== "guarded";
-          return (
-            <div
-              key={mode.id}
-              className={`card${selectable ? "" : " disabled"}`}
-              data-testid={`mode-card-${mode.id}`}
-            >
-              <h3>{mode.name}</h3>
-              <p>{mode.tagline}</p>
-              <ul>
-                {mode.points.map((point) => (
-                  <li key={point}>{point}</li>
-                ))}
-              </ul>
-              {selectable ? (
-                <Link className="button" href={`/launch?mode=${mode.id}`}>
-                  Launch {mode.name}
-                </Link>
-              ) : (
-                <span className="muted">Available at Stage 3</span>
-              )}
-            </div>
-          );
-        })}
+        {MODES.map((mode) => (
+          <div key={mode.id} className="card" data-testid={`mode-card-${mode.id}`}>
+            <h3>{mode.name}</h3>
+            <p>{mode.tagline}</p>
+            <ul>
+              {mode.points.map((point) => (
+                <li key={point}>{point}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
     </>
   );

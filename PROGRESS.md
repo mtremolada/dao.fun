@@ -394,3 +394,15 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       Succeeded. GATE 2 + GATE L2 sign-off lines recorded under the same
       delegation. Remaining Guarded build (gate create_proposal CPI,
       guarded ceremony mode, SDK/frontend, clearance flow) is Stage 3 WIP.
+- [x] **Guarded SHIPPED (D-043, 2026-08-09).** Gate v2: bind_realm /
+      create_gated_proposal / insert_gated_transaction (in-flight whitelist
+      on the exact inserted bytes) / sign_off_gated_proposal — all CPIs
+      client-parity, PDA-signed, proven on the deployed GovER5 binary
+      (tests/guarded-gate-v2.integration.test.ts, incl. the PRODUCTION
+      buildCreateDaoIxs("guarded") ceremony leg). SDK: gate module (builders
+      + PDA mirrors, bankrun-proven), guarded matrix/launch-form/ceremony,
+      DEFAULT_GATE_WHITELIST = the full 6.8 menu. App: ONE /launch page,
+      four protection cards, Guarded default + zero-config, home reduced to
+      a single CTA. Suites: 194 sdk + 76 backend + 25 keeper + 45 app unit,
+      47 integration (17 files), 24 e2e; eslint + tsc clean; static export
+      builds.

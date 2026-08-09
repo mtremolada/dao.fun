@@ -13,7 +13,24 @@ import {
   deriveGovernanceChainFromMint,
   deriveVsrRegistrar,
 } from "../src/pda";
-import { SPL_GOVERNANCE_PROGRAM_ID, VSR_PROGRAM_ID } from "../src/constants";
+import {
+  PROPOSAL_GATE_PROGRAM_ID,
+  SPL_GOVERNANCE_PROGRAM_ID,
+  VSR_PROGRAM_ID,
+} from "../src/constants";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  getGoverningTokenHoldingAddress,
+  getRealmConfigAddress,
+  getTokenOwnerRecordAddress,
+} from "@solana/spl-governance";
+import {
+  DEFAULT_GATE_WHITELIST,
+  gateAuthorityPda,
+  governingTokenHoldingPda,
+  realmConfigPda,
+  tokenOwnerRecordPda,
+} from "../src/gate";
 
 const mint = Keypair.generate().publicKey;
 const payer = Keypair.generate().publicKey;
@@ -272,5 +289,106 @@ describe("no platform backdoor (spec 6.3)", () => {
     const setAuthorityIdx = govIxs[govIxs.length - 1]!.i;
     expect(vsrIdx).toBeGreaterThan(-1);
     expect(vsrIdx).toBeLessThan(setAuthorityIdx);
+  });
+});
+
+describe("guarded mode (gate v2, D-042) — the ceremony builds the front door", () => {
+  const councilMint = Keypair.generate().publicKey;
+  function guardedDao() {
+    return buildCreateDaoIxs({
+      mint,
+      payer,
+      mode: "guarded",
+      params: resolveGovernanceParams({
+        mode: "guarded",
+        tier: "micro",
+        communitySupply: supply,
+      }),
+      council: {
+        mint: councilMint,
+        members: [], // the gate authority is derived, not supplied
+        vetoThresholdPercent: 0,
+        mintRentLamports: 1_461_600n,
+      },
+    });
+  }
+
+  it("refuses user-supplied council members", async () => {
+    await expect(
+      buildCreateDaoIxs({
+        mint,
+        payer,
+        mode: "guarded",
+        params: resolveGovernanceParams({
+          mode: "guarded",
+          tier: "micro",
+          communitySupply: supply,
+        }),
+        council: {
+          mint: councilMint,
+          members: [Keypair.generate().publicKey],
+          vetoThresholdPercent: 0,
+          mintRentLamports: 1_461_600n,
+        },
+      }),
+    ).rejects.toThrow(/NO members/);
+  });
+
+  it("mints the ONE council token to the gate authority PDA and nulls the authority", async () => {
+    const dao = await guardedDao();
+    const authority = gateAuthorityPda(dao.realm);
+    const ata = getAssociatedTokenAddressSync(councilMint, authority, true);
+    const mintTos = dao.groups.council.filter(
+      (ix) => ix.programId.equals(TOKEN_PROGRAM_ID) && ix.data[0] === 7, // MintTo
+    );
+    expect(mintTos).toHaveLength(1);
+    expect(mintTos[0]!.keys[0]!.pubkey.equals(councilMint)).toBe(true);
+    expect(mintTos[0]!.keys[1]!.pubkey.equals(ata)).toBe(true);
+    // last council ix: SetAuthority to null
+    const last = dao.groups.council[dao.groups.council.length - 1]!;
+    expect(last.data[0]).toBe(6); // SetAuthority
+  });
+
+  it("disables community proposal creation at the u64::MAX sentinel", async () => {
+    const dao = await guardedDao();
+    expect(dao.config.minCommunityTokensToCreateProposal.toString()).toBe(
+      "18446744073709551615",
+    );
+    expect(dao.config.minCouncilTokensToCreateProposal.toString()).toBe("1");
+  });
+
+  it("initializes the gate (default whitelist) and binds the realm before the authority handoff", async () => {
+    const dao = await guardedDao();
+    const gov = dao.groups.governanceSetup;
+    const gateIxs = gov
+      .map((ix, i) => ({ ix, i }))
+      .filter(({ ix }) => ix.programId.equals(PROPOSAL_GATE_PROGRAM_ID));
+    expect(gateIxs).toHaveLength(2); // initialize + bind_realm
+    // both precede the final setRealmAuthority handoff
+    expect(gateIxs[1]!.i).toBeLessThan(gov.length - 1);
+    // initialize carries the 8-program default menu
+    const initData = gateIxs[0]!.ix.data;
+    const whitelistLen = initData.readUInt32LE(8 + 32 * 4 + 1);
+    expect(whitelistLen).toBe(DEFAULT_GATE_WHITELIST.length);
+  });
+
+  it("sync governance PDAs equal the async client derivations", async () => {
+    const dao = await guardedDao();
+    const authority = gateAuthorityPda(dao.realm);
+    expect(
+      (await getTokenOwnerRecordAddress(SPL_GOVERNANCE_PROGRAM_ID, dao.realm, councilMint, authority)).equals(
+        tokenOwnerRecordPda(dao.realm, councilMint, authority),
+      ),
+    ).toBe(true);
+    expect(
+      (await getGoverningTokenHoldingAddress(SPL_GOVERNANCE_PROGRAM_ID, dao.realm, councilMint)).equals(
+        governingTokenHoldingPda(dao.realm, councilMint),
+      ),
+    ).toBe(true);
+    expect(
+      (await getRealmConfigAddress(SPL_GOVERNANCE_PROGRAM_ID, dao.realm)).equals(
+        realmConfigPda(dao.realm),
+      ),
+    ).toBe(true);
   });
 });

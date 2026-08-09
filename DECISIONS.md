@@ -1191,3 +1191,61 @@ Council + Cypherpunk ship first.
 **Also recorded under the same delegation:** the GATE 2 and GATE L2
 operator sign-off lines in GATES.md (both blank-pending, all technical
 legs long determined) are filled as APPROVED, 2026-08-08.
+
+## D-043 — Guarded mode SHIPPED: gate v2 + guarded ceremony + one launch page (2026-08-09)
+
+Executes PLAN-UNIFIED-LAUNCH under the operator's directive ("unblock
+guarded — finish it and make it available with some good default
+options"). Everything below is proven on the deployed binaries in
+bankrun; nothing is inferred from public source.
+
+**Gate v2 (programs/proposal-gate).** Four new instructions, each a
+hand-built CPI to the deployed GovER5 v3.1.4 fork (client-0.3.28 wire
+parity: variants 1/6/9/12; account orders dumped and pinned), signed by
+the gate authority PDA `["gate-authority", realm]` via invoke_signed:
+`bind_realm` (deposits the realm's SINGLE council token — only the
+program can sign for its PDA), `create_gated_proposal` (ANY wallet
+proposes; the gate's council record authors; the electorate is pinned to
+the community mint now stored in the Gate account), `insert_gated_
+transaction` (the D-030 whitelist engine runs over the exact borsh
+structs that are then re-serialized into the CPI — validated bytes ARE
+inserted bytes), `sign_off_gated_proposal` (owner path; safe to leave
+permissionless because nothing off-menu can have been inserted).
+Identity is not the protection — the menu is: proposing is open to
+everyone, content is structurally constrained.
+
+**Proof** (tests/guarded-gate-v2.integration.test.ts, 4 tests, real
+binaries; the suite DRIVES the SDK's new gate module, so the run is
+simultaneously the SDK's proof): PDA-signed deposit lands (TOR amount
+1); a zero-token wallet authors through the gate; a whitelisted insert
+passes while an off-menu insert is refused BEFORE any CPI (no
+ProposalTransaction account exists afterwards); sign-off opens voting;
+the community passes the proposal; direct community creation stays
+refused at the u64::MAX sentinel. A second leg proves the PRODUCTION
+CEREMONY: buildCreateDaoIxs("guarded") + the Squads treasury harness
+stands up a guarded DAO whose gate is initialized with the default menu
+and bound by CPI, refuses the whale, and governs a treasury-grant
+proposal to Succeeded through the front door.
+
+**Good defaults.** DEFAULT_GATE_WHITELIST = the entire 6.8 action
+surface, 8 programs: system, SPL token, ATA, spl-governance (setParam),
+Squads v4 (custody chain), pump + pumpAMM (buyback/LP), the immutable
+merkle distributor (distribute). Guarded resolves with the council
+hold-up floor and NO veto seat (matrix); community proposal creation is
+the u64::MAX disabled sentinel; council create weight 1; deposit-exempt
+10. validateLaunchForm accepts guarded with ZERO extra inputs — the
+strongest mode is the simplest one.
+
+**One launch page (R2).** /launch now carries all four protections as
+radio cards on a single page — Guarded default with a "recommended"
+badge, Sovereign in danger styling — with the mode-specific inputs
+revealing inline and old /launch?mode= links honored. The home page is
+an overview with ONE Launch CTA; the per-mode launch links are gone.
+
+**Known limits (documented, not hidden):** the gate's single TOR caps
+outstanding proposals at the fork's per-record limit (~10 live at once;
+finalization frees slots); buffered Squads messages and ALTs remain
+refused (v1 rule); Guarded proposal EXECUTION paths are the same
+permissionless spl-gov paths GATE 1 proved. The app's guarded launch
+runs through the existing runLaunch ceremony (council-mint keypair
+co-signs; members list empty — the gate authority is derived).

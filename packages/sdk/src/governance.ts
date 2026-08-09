@@ -44,6 +44,7 @@ import {
 } from "@solana/spl-governance";
 import type { GovernanceMode, GovernanceParams } from "./types";
 import { SPL_GOVERNANCE_PROGRAM_ID, VSR_PROGRAM_ID } from "./constants";
+import { buildBindRealmIx, buildGateInitializeIx, gateAuthorityPda } from "./gate";
 import { deriveVsrRegistrar, realmNameForMint } from "./pda";
 import {
   VSR_SCALED_FACTOR_BASE,
@@ -59,6 +60,10 @@ export { MintMaxVoteWeightSource };
 const PROGRAM_VERSION = 3;
 /** Voting duration. Not in the spec's tier table; see DECISIONS.md D-012. */
 export const DEFAULT_BASE_VOTING_TIME_SECONDS = 3 * 86400;
+
+/** u64::MAX — the deployed fork's EXPLICIT "community creation disabled"
+ * sentinel ("Voter weight threshold disabled", binary-verified in D-042). */
+export const GUARDED_CREATE_DISABLED = new BN("18446744073709551615");
 
 export interface CouncilSetup {
   /** Fresh mint pubkey; its keypair must co-sign the ceremony tx. */
@@ -122,14 +127,17 @@ export interface CreateDaoResult {
 export async function buildCreateDaoIxs(
   p: CreateDaoParams,
 ): Promise<CreateDaoResult> {
-  if (p.mode === "guarded") {
-    throw new Error("guarded mode ships at Stage 3 (proposal-gate program)");
-  }
   if (p.mode === "council" && (!p.council || p.council.members.length === 0)) {
     throw new Error("council mode requires council.members and council.mint");
   }
-  if (p.mode !== "council" && p.council) {
-    throw new Error("council config is only valid in council mode");
+  if (p.mode === "guarded") {
+    if (!p.council || p.council.members.length !== 0) {
+      throw new Error(
+        "guarded mode requires council.mint with NO members — the gate authority is the sole member",
+      );
+    }
+  } else if (p.mode !== "council" && p.council) {
+    throw new Error("council config is only valid in council/guarded mode");
   }
 
   const realmSetup: TransactionInstruction[] = [];
@@ -194,10 +202,14 @@ export async function buildCreateDaoIxs(
     );
   }
 
-  // 3. Council mint (council mode only): 1 token per member, then no mint
-  //    authority exists — membership is fixed at launch (structural veto set).
+  // 3. Council mint (council + guarded): 1 token per member, then no mint
+  //    authority exists — membership is fixed at launch. In guarded mode the
+  //    ONE member is the gate authority PDA (D-042): the whole council
+  //    weight lives behind the program, so the gate is the only author.
   //    Executes BEFORE createRealm, which registers (and validates) the mint.
-  if (p.mode === "council" && p.council) {
+  const councilMembers =
+    p.mode === "guarded" ? [gateAuthorityPda(realm)] : p.council?.members ?? [];
+  if ((p.mode === "council" || p.mode === "guarded") && p.council) {
     council.push(
       SystemProgram.createAccount({
         fromPubkey: p.payer,
@@ -208,7 +220,7 @@ export async function buildCreateDaoIxs(
       }),
       createInitializeMint2Instruction(p.council.mint, 0, p.payer, null),
     );
-    for (const member of p.council.members) {
+    for (const member of councilMembers) {
       const ata = getAssociatedTokenAddressSync(p.council.mint, member, true);
       council.push(
         createAssociatedTokenAccountIdempotentInstruction(
@@ -237,9 +249,10 @@ export async function buildCreateDaoIxs(
       type: VoteThresholdType.YesVotePercentage,
       value: p.params.quorumPercent,
     }),
-    minCommunityTokensToCreateProposal: new BN(
-      p.params.proposalThresholdTokens.toString(),
-    ),
+    minCommunityTokensToCreateProposal:
+      p.mode === "guarded"
+        ? GUARDED_CREATE_DISABLED // u64::MAX — explicit disabled sentinel (D-042)
+        : new BN(p.params.proposalThresholdTokens.toString()),
     minInstructionHoldUpTime: p.params.holdUpSeconds,
     baseVotingTime: p.baseVotingTimeSeconds ?? DEFAULT_BASE_VOTING_TIME_SECONDS,
     communityVoteTipping: VoteTipping.Disabled, // full exit window, always
@@ -286,6 +299,26 @@ export async function buildCreateDaoIxs(
     governance,
     p.payer,
   );
+
+  // 5a. Guarded: initialize the gate for this realm and deposit its single
+  //     council token (PDA-signed CPI) — the front door exists before the
+  //     realm authority is handed over.
+  if (p.mode === "guarded" && p.council) {
+    governanceSetup.push(
+      buildGateInitializeIx({
+        payer: p.payer,
+        realm,
+        governance,
+        communityMint: p.mint,
+        councilMint: p.council.mint,
+      }),
+      buildBindRealmIx({
+        payer: p.payer,
+        realm,
+        councilMint: p.council.mint,
+      }),
+    );
+  }
 
   // 5. Hand the realm to its own governance — no platform key remains.
   withSetRealmAuthority(

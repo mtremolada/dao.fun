@@ -1,24 +1,32 @@
 /**
- * Mode selection + launch form through the real UI (serverless). Covers:
- * guarded unselectable, sovereign double-confirm, sub-floor override
- * rejection, stricter-than-floor acceptance, and resolving the on-chain plan
+ * The ONE launch page through the real UI (serverless). Covers: all four
+ * protections selectable on a single page with Guarded as the zero-config
+ * default, sovereign double-confirm, sub-floor override rejection,
+ * stricter-than-floor acceptance, and resolving the on-chain plan
  * client-side (no backend).
  */
 import { expect, test } from "@playwright/test";
 
-test("mode page compares modes side by side; guarded is unselectable", async ({
+test("one launch page: all four protections selectable, guarded is the default", async ({
   page,
 }) => {
   await page.goto("/");
-  for (const mode of ["cypherpunk", "sovereign", "council"]) {
-    const card = page.getByTestId(`mode-card-${mode}`);
-    await expect(card).toBeVisible();
-    await expect(card.getByRole("link", { name: /launch/i })).toBeVisible();
-  }
-  const guarded = page.getByTestId("mode-card-guarded");
-  await expect(guarded).toBeVisible();
-  await expect(guarded).toContainText(/stage 3/i);
-  await expect(guarded.getByRole("link")).toHaveCount(0);
+  await expect(page.getByTestId("cta-launch")).toBeVisible();
+  await page.getByTestId("cta-launch").click();
+  await expect(page).toHaveURL(/\/launch/, { timeout: 30_000 });
+
+  // Guarded selected by default, zero-config, with the menu explained.
+  await expect(page.getByTestId("protection-guarded")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("guarded-note")).toContainText(/safety menu/i);
+  await expect(page.getByTestId("council-members")).toHaveCount(0);
+
+  // Every other protection is one click away on the SAME page.
+  await page.getByTestId("protection-council").click();
+  await expect(page.getByTestId("council-members")).toBeVisible();
+  await page.getByTestId("protection-sovereign").click();
+  await expect(page.getByTestId("sovereign-holdup")).toBeVisible();
+  await page.getByTestId("protection-cypherpunk").click();
+  await expect(page.getByTestId("confirm-noVetoIrreversible")).toBeVisible();
 });
 
 test("sovereign requires BOTH confirmations before launch enables", async ({

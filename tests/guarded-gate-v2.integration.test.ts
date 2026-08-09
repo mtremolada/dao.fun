@@ -19,11 +19,14 @@
  *   - the ceremony config still refuses DIRECT community creation at the
  *     u64::MAX sentinel — the front door is the only door.
  *
+ * Instruction building DELEGATES to @daofun/sdk's gate module — this run
+ * against the real binaries is simultaneously the SDK's proof (the
+ * launchpad-harness pattern: suite and SDK cannot drift).
+ *
  * Fixture: tests/fixtures/proposal_gate.so.gz — our cargo-build-sbf
  * artifact (D-029 toolchain; rebuild command in launchpad-harness.ts).
  * Run: pnpm test:integration
  */
-import { createHash } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 import BN from "bn.js";
 import {
@@ -57,9 +60,7 @@ import {
   VoteThresholdType,
   VoteTipping,
   VoteType,
-  getGoverningTokenHoldingAddress,
   getProposalDepositAddress,
-  getRealmConfigAddress,
   getTokenOwnerRecordAddress,
   withCastVote,
   withCreateGovernance,
@@ -69,12 +70,28 @@ import {
   withFinalizeVote,
 } from "@solana/spl-governance";
 import type { ProgramTestContext } from "solana-bankrun";
-import { SPL_GOVERNANCE_PROGRAM_ID } from "../packages/sdk/src/constants";
+import {
+  PROPOSAL_GATE_PROGRAM_ID,
+  SPL_GOVERNANCE_PROGRAM_ID,
+} from "../packages/sdk/src/constants";
+import {
+  buildBindRealmIx,
+  buildCreateGatedProposalIx,
+  buildGateInitializeIx,
+  buildInsertGatedTransactionIx,
+  buildSignOffGatedProposalIx,
+  gateAuthorityPda,
+  proposalTransactionPda,
+  tokenOwnerRecordPda,
+  DEFAULT_GATE_WHITELIST,
+  gatePda,
+} from "../packages/sdk/src/gate";
 import {
   BASE_VOTING_TIME_S,
   PROGRAM_VERSION,
   SUPPLY,
   TEST_TIMEOUT,
+  createDao,
   readGov,
   send,
   sendExpectFail,
@@ -82,46 +99,8 @@ import {
   warpSeconds,
 } from "./helpers/bankrun-harness";
 
-const GATE_PROGRAM_ID = new PublicKey("3QgQJ4EufHygGPMSBg4tD1Jzi1tEfyrFH4yXH3w8pBvg");
+const GATE_PROGRAM_ID = PROPOSAL_GATE_PROGRAM_ID;
 const U64_MAX = new BN("18446744073709551615");
-
-const disc = (name: string) =>
-  createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
-const borshStr = (s: string) => {
-  const b = Buffer.from(s, "utf8");
-  const len = Buffer.alloc(4);
-  len.writeUInt32LE(b.length);
-  return Buffer.concat([len, b]);
-};
-const AM = (pubkey: PublicKey, isSigner: boolean, isWritable: boolean) => ({
-  pubkey,
-  isSigner,
-  isWritable,
-});
-
-/** Borsh InstructionData — identical to what the gate re-serializes. */
-function serializeInstructionSet(ixs: TransactionInstruction[]): Buffer {
-  const parts: Buffer[] = [];
-  const count = Buffer.alloc(4);
-  count.writeUInt32LE(ixs.length);
-  parts.push(count);
-  for (const ix of ixs) {
-    parts.push(ix.programId.toBuffer());
-    const metaCount = Buffer.alloc(4);
-    metaCount.writeUInt32LE(ix.keys.length);
-    parts.push(metaCount);
-    for (const k of ix.keys) {
-      parts.push(
-        k.pubkey.toBuffer(),
-        Buffer.from([k.isSigner ? 1 : 0, k.isWritable ? 1 : 0]),
-      );
-    }
-    const dataLen = Buffer.alloc(4);
-    dataLen.writeUInt32LE(ix.data.length);
-    parts.push(dataLen, Buffer.from(ix.data));
-  }
-  return Buffer.concat(parts);
-}
 
 describe("gate v2 — the guarded front door, program-signed on real binaries", () => {
   let ctx: ProgramTestContext;
@@ -132,10 +111,8 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
   let realm: PublicKey;
   let governance: PublicKey;
   let whaleTor: PublicKey;
-  let gatePk: PublicKey;
   let gateAuthority: PublicKey;
   let gateTor: PublicKey;
-  let realmConfig: PublicKey;
   let cuNonce = 0;
 
   const cu = () =>
@@ -173,16 +150,8 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
         tokenType: GoverningTokenType.Membership,
       }),
     );
-    gateAuthority = PublicKey.findProgramAddressSync(
-      [Buffer.from("gate-authority"), realm.toBuffer()],
-      GATE_PROGRAM_ID,
-    )[0];
-    gatePk = PublicKey.findProgramAddressSync(
-      [Buffer.from("gate"), realm.toBuffer()],
-      GATE_PROGRAM_ID,
-    )[0];
+    gateAuthority = gateAuthorityPda(realm);
     const gateAta = getAssociatedTokenAddressSync(councilMint.publicKey, gateAuthority, true);
-    realmConfig = await getRealmConfigAddress(SPL_GOVERNANCE_PROGRAM_ID, realm);
 
     // Launch-shaped mints: full community supply to the whale; the ONE
     // council token straight into the gate authority's ATA; no authorities.
@@ -276,30 +245,18 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
     );
     await send(ctx, [cu(), ...governanceSetup], []);
 
-    // Gate initialize (v2: mints pinned) with a system-program-only menu.
-    const whitelist = [SystemProgram.programId];
-    const vec = Buffer.alloc(4);
-    vec.writeUInt32LE(whitelist.length);
+    // Gate initialize (v2: mints pinned) with a system-program-only menu so
+    // the off-menu refusal leg has something to refuse.
     await send(
       ctx,
       [
-        new TransactionInstruction({
-          programId: GATE_PROGRAM_ID,
-          keys: [
-            AM(gatePk, false, true),
-            AM(payer.publicKey, true, true),
-            AM(SystemProgram.programId, false, false),
-          ],
-          data: Buffer.concat([
-            disc("initialize"),
-            realm.toBuffer(),
-            governance.toBuffer(),
-            communityMint.publicKey.toBuffer(),
-            councilMint.publicKey.toBuffer(),
-            Buffer.from([0]), // guarded
-            vec,
-            ...whitelist.map((p) => p.toBuffer()),
-          ]),
+        buildGateInitializeIx({
+          payer: payer.publicKey,
+          realm,
+          governance,
+          communityMint: communityMint.publicKey,
+          councilMint: councilMint.publicKey,
+          whitelist: [SystemProgram.programId],
         }),
       ],
       [],
@@ -309,32 +266,14 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
   it(
     "bind_realm: the gate deposits its own council token (program-signed)",
     async () => {
-      const holding = await getGoverningTokenHoldingAddress(
-        SPL_GOVERNANCE_PROGRAM_ID,
-        realm,
-        councilMint.publicKey,
-      );
-      const gateAta = getAssociatedTokenAddressSync(councilMint.publicKey, gateAuthority, true);
       await send(
         ctx,
         [
           cu(),
-          new TransactionInstruction({
-            programId: GATE_PROGRAM_ID,
-            keys: [
-              AM(gatePk, false, false),
-              AM(gateAuthority, false, false),
-              AM(realm, false, false),
-              AM(holding, false, true),
-              AM(gateAta, false, true),
-              AM(gateTor, false, true),
-              AM(realmConfig, false, true),
-              AM(ctx.payer.publicKey, true, true),
-              AM(SystemProgram.programId, false, false),
-              AM(TOKEN_PROGRAM_ID, false, false),
-              AM(SPL_GOVERNANCE_PROGRAM_ID, false, false),
-            ],
-            data: Buffer.from(disc("bind_realm")),
+          buildBindRealmIx({
+            payer: ctx.payer.publicKey,
+            realm,
+            councilMint: councilMint.publicKey,
           }),
         ],
         [],
@@ -352,51 +291,24 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
     async () => {
       // -- create (proposer holds ZERO tokens; the gate's record authors) --
       const proposalSeed = Keypair.generate().publicKey;
-      const [proposal] = PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("governance"),
-          governance.toBuffer(),
-          communityMint.publicKey.toBuffer(),
-          proposalSeed.toBuffer(),
-        ],
-        SPL_GOVERNANCE_PROGRAM_ID,
-      );
-      const proposalDeposit = await getProposalDepositAddress(
-        SPL_GOVERNANCE_PROGRAM_ID,
-        proposal,
-        proposer.publicKey,
-      );
-      const createKeys = [
-        AM(gatePk, false, false),
-        AM(gateAuthority, false, false),
-        AM(realm, false, false),
-        AM(proposal, false, true),
-        AM(governance, false, true),
-        AM(gateTor, false, true),
-        AM(communityMint.publicKey, false, false),
-        AM(realmConfig, false, false),
-        AM(proposalDeposit, false, true),
-        AM(proposer.publicKey, true, true),
-        AM(SystemProgram.programId, false, false),
-        AM(SPL_GOVERNANCE_PROGRAM_ID, false, false),
-      ];
-      await send(
-        ctx,
-        [
-          cu(),
-          new TransactionInstruction({
-            programId: GATE_PROGRAM_ID,
-            keys: createKeys,
-            data: Buffer.concat([
-              disc("create_gated_proposal"),
-              borshStr("guarded sweep"),
-              borshStr("artifact-hash"),
-              proposalSeed.toBuffer(),
-            ]),
-          }),
-        ],
-        [proposer],
-      );
+      // The client-side deposit derivation must agree with the SDK's sync one.
+      const created = buildCreateGatedProposalIx({
+        proposer: proposer.publicKey,
+        realm,
+        governance,
+        communityMint: communityMint.publicKey,
+        councilMint: councilMint.publicKey,
+        name: "guarded sweep",
+        descriptionLink: "artifact-hash",
+        proposalSeed,
+      });
+      const proposal = created.proposal;
+      expect(
+        (
+          await getProposalDepositAddress(SPL_GOVERNANCE_PROGRAM_ID, proposal, proposer.publicKey)
+        ).toBase58(),
+      ).toBe(created.ix.keys[8]!.pubkey.toBase58());
+      await send(ctx, [cu(), created.ix], [proposer]);
       expect((await readGov(ctx, proposal, Proposal)).state).toBe(ProposalState.Draft);
 
       // -- insert: whitelisted (system transfer) passes --
@@ -405,48 +317,18 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
         toPubkey: proposer.publicKey,
         lamports: 1,
       });
-      const ptPda = (index: number) =>
-        PublicKey.findProgramAddressSync(
-          [
-            Buffer.from("governance"),
-            proposal.toBuffer(),
-            Buffer.from([0]),
-            Buffer.from(new Uint8Array(new Uint16Array([index]).buffer)),
-          ],
-          SPL_GOVERNANCE_PROGRAM_ID,
-        )[0];
-      const insertKeys = (pt: PublicKey) => [
-        AM(gatePk, false, false),
-        AM(gateAuthority, false, false),
-        AM(governance, false, false),
-        AM(proposal, false, true),
-        AM(gateTor, false, false),
-        AM(pt, false, true),
-        AM(proposer.publicKey, true, true),
-        AM(SystemProgram.programId, false, false),
-        AM(new PublicKey("SysvarRent111111111111111111111111111111111"), false, false),
-        AM(SPL_GOVERNANCE_PROGRAM_ID, false, false),
-      ];
-      const insertData = (index: number, ixs: TransactionInstruction[]) =>
-        Buffer.concat([
-          disc("insert_gated_transaction"),
-          Buffer.from([0]), // option 0
-          Buffer.from(new Uint8Array(new Uint16Array([index]).buffer)),
-          Buffer.from(new Uint8Array(new Uint32Array([0]).buffer)), // hold-up
-          serializeInstructionSet(ixs),
-        ]);
-      await send(
-        ctx,
-        [
-          cu(),
-          new TransactionInstruction({
-            programId: GATE_PROGRAM_ID,
-            keys: insertKeys(ptPda(0)),
-            data: insertData(0, [inner]),
-          }),
-        ],
-        [proposer],
-      );
+      const gatedInsert = (index: number, ixs: TransactionInstruction[]) =>
+        buildInsertGatedTransactionIx({
+          proposer: proposer.publicKey,
+          realm,
+          governance,
+          councilMint: councilMint.publicKey,
+          proposal,
+          index,
+          holdUpSeconds: 0,
+          instructions: ixs,
+        });
+      await send(ctx, [cu(), gatedInsert(0, [inner]).ix], [proposer]);
 
       // -- insert: an off-menu program is refused BEFORE any CPI --
       const offMenu = new TransactionInstruction({
@@ -454,38 +336,22 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
         keys: [],
         data: Buffer.from([3]),
       });
-      const logs = await sendExpectFail(
-        ctx,
-        [
-          cu(),
-          new TransactionInstruction({
-            programId: GATE_PROGRAM_ID,
-            keys: insertKeys(ptPda(1)),
-            data: insertData(1, [offMenu]),
-          }),
-        ],
-        [proposer],
-      );
+      const logs = await sendExpectFail(ctx, [cu(), gatedInsert(1, [offMenu]).ix], [proposer]);
       expect(logs).toMatch(/OffMenuProgram|outside the gate whitelist/i);
-      expect(await ctx.banksClient.getAccount(ptPda(1))).toBeNull();
+      expect(
+        await ctx.banksClient.getAccount(proposalTransactionPda(proposal, 0, 1)),
+      ).toBeNull();
 
       // -- sign off -> Voting --
       await send(
         ctx,
         [
           cu(),
-          new TransactionInstruction({
-            programId: GATE_PROGRAM_ID,
-            keys: [
-              AM(gatePk, false, false),
-              AM(gateAuthority, false, false),
-              AM(realm, false, true),
-              AM(governance, false, true),
-              AM(proposal, false, true),
-              AM(gateTor, false, false),
-              AM(SPL_GOVERNANCE_PROGRAM_ID, false, false),
-            ],
-            data: Buffer.from(disc("sign_off_gated_proposal")),
+          buildSignOffGatedProposalIx({
+            realm,
+            governance,
+            councilMint: councilMint.publicKey,
+            proposal,
           }),
         ],
         [], // sign-off needs no payer — the gate PDA is the only signer, via CPI
@@ -555,6 +421,156 @@ describe("gate v2 — the guarded front door, program-signed on real binaries", 
       );
       const logs = await sendExpectFail(ctx, [cu(), ...ixs], [whale]);
       expect(logs).toMatch(/voter weight threshold disabled/i);
+    },
+    TEST_TIMEOUT,
+  );
+});
+
+describe("guarded CEREMONY — buildCreateDaoIxs('guarded') lands on real binaries", () => {
+  it(
+    "the production ceremony builds the front door, and the DAO governs through it",
+    async () => {
+      const ctx2 = await startCtx([
+        { name: "proposal_gate", programId: GATE_PROGRAM_ID },
+      ]);
+      const dao = await createDao(ctx2, "guarded");
+
+      // The gate exists, bound to this realm's mints, in guarded mode with
+      // the 8-program default menu.
+      const gateInfo = await ctx2.banksClient.getAccount(gatePda(dao.realm));
+      expect(gateInfo).not.toBeNull();
+      const g = Buffer.from(gateInfo!.data);
+      expect(new PublicKey(g.subarray(8, 40)).equals(dao.realm)).toBe(true);
+      expect(new PublicKey(g.subarray(40, 72)).equals(dao.governance)).toBe(true);
+      expect(new PublicKey(g.subarray(72, 104)).equals(dao.mint)).toBe(true);
+      expect(new PublicKey(g.subarray(104, 136)).equals(dao.councilMint!)).toBe(true);
+      expect(g[136]).toBe(0); // guarded
+      expect(g.readUInt32LE(138)).toBe(DEFAULT_GATE_WHITELIST.length);
+
+      // The gate's council record holds the ONE council token (bound by CPI).
+      const authority = gateAuthorityPda(dao.realm);
+      const torInfo = await ctx2.banksClient.getAccount(
+        tokenOwnerRecordPda(dao.realm, dao.councilMint!, authority),
+      );
+      expect(Buffer.from(torInfo!.data).readBigUInt64LE(97)).toBe(1n);
+
+      // The community CANNOT author directly on this production config...
+      const direct: TransactionInstruction[] = [];
+      await withCreateProposal(
+        direct,
+        SPL_GOVERNANCE_PROGRAM_ID,
+        PROGRAM_VERSION,
+        dao.realm,
+        dao.governance,
+        dao.voterTor,
+        "direct",
+        "",
+        dao.mint,
+        dao.voter.publicKey,
+        undefined,
+        VoteType.SINGLE_CHOICE,
+        ["Approve"],
+        true,
+        dao.voter.publicKey,
+      );
+      const refusal = await sendExpectFail(ctx2, direct, [dao.voter]);
+      expect(refusal).toMatch(/voter weight threshold disabled/i);
+
+      // ...but ANYONE can author THROUGH the gate, and the community votes.
+      const proposer2 = Keypair.generate();
+      await send(
+        ctx2,
+        [
+          SystemProgram.transfer({
+            fromPubkey: ctx2.payer.publicKey,
+            toPubkey: proposer2.publicKey,
+            lamports: 1_000_000_000,
+          }),
+        ],
+        [],
+      );
+      const seed = Keypair.generate().publicKey;
+      const made = buildCreateGatedProposalIx({
+        proposer: proposer2.publicKey,
+        realm: dao.realm,
+        governance: dao.governance,
+        communityMint: dao.mint,
+        councilMint: dao.councilMint!,
+        name: "treasury grant",
+        descriptionLink: "hash",
+        proposalSeed: seed,
+      });
+      await send(ctx2, [made.ix], [proposer2]);
+      const grant = SystemProgram.transfer({
+        fromPubkey: dao.nativeTreasury,
+        toPubkey: proposer2.publicKey,
+        lamports: 1_000,
+      });
+      await send(
+        ctx2,
+        [
+          buildInsertGatedTransactionIx({
+            proposer: proposer2.publicKey,
+            realm: dao.realm,
+            governance: dao.governance,
+            councilMint: dao.councilMint!,
+            proposal: made.proposal,
+            index: 0,
+            holdUpSeconds: dao.params.holdUpSeconds,
+            instructions: [grant],
+          }).ix,
+        ],
+        [proposer2],
+      );
+      await send(
+        ctx2,
+        [
+          buildSignOffGatedProposalIx({
+            realm: dao.realm,
+            governance: dao.governance,
+            councilMint: dao.councilMint!,
+            proposal: made.proposal,
+          }),
+        ],
+        [],
+      );
+      const vote: TransactionInstruction[] = [];
+      await withCastVote(
+        vote,
+        SPL_GOVERNANCE_PROGRAM_ID,
+        PROGRAM_VERSION,
+        dao.realm,
+        dao.governance,
+        made.proposal,
+        tokenOwnerRecordPda(dao.realm, dao.councilMint!, authority),
+        dao.voterTor,
+        dao.voter.publicKey,
+        dao.mint,
+        new Vote({
+          voteType: VoteKind.Approve,
+          approveChoices: [new VoteChoice({ rank: 0, weightPercentage: 100 })],
+          deny: undefined,
+          veto: undefined,
+        }),
+        ctx2.payer.publicKey,
+      );
+      await send(ctx2, vote, [dao.voter]);
+      await warpSeconds(ctx2, BASE_VOTING_TIME_S + 10);
+      const finalize: TransactionInstruction[] = [];
+      await withFinalizeVote(
+        finalize,
+        SPL_GOVERNANCE_PROGRAM_ID,
+        PROGRAM_VERSION,
+        dao.realm,
+        dao.governance,
+        made.proposal,
+        tokenOwnerRecordPda(dao.realm, dao.councilMint!, authority),
+        dao.mint,
+      );
+      await send(ctx2, finalize, []);
+      expect((await readGov(ctx2, made.proposal, Proposal)).state).toBe(
+        ProposalState.Succeeded,
+      );
     },
     TEST_TIMEOUT,
   );

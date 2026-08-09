@@ -47,10 +47,8 @@ const PLACEHOLDER_SUPPLY = 1_000_000_000n;
 export function validateLaunchForm(input: LaunchFormInput): LaunchFormResult {
   const errors: string[] = [];
 
-  if (input.mode === "guarded") {
-    errors.push("Guarded mode ships at Stage 3 and cannot be selected yet.");
-    return { ok: false, errors };
-  }
+  // Guarded needs NO extra inputs and no confirmations: the protection is
+  // structural (gate v2, D-042) — the strongest mode is the simplest one.
 
   if (input.mode === "council") {
     const members = input.councilMembers ?? [];

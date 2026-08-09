@@ -87,8 +87,10 @@ export async function runLaunch(
   const wallet = new PublicKey(sender.address);
   const mint = Keypair.generate();
   const createKey = Keypair.generate();
+  // Council AND guarded both need a fresh council mint keypair co-signing;
+  // in guarded mode its single token goes to the gate authority PDA.
   const councilMint =
-    input.mode === "council" ? Keypair.generate() : undefined;
+    input.mode === "council" || input.mode === "guarded" ? Keypair.generate() : undefined;
 
   const predicted = deriveGovernanceChainFromMint(mint.publicKey);
   const { vaultPda } = deriveTreasuryPdas(createKey.publicKey);
@@ -161,8 +163,17 @@ export async function runLaunch(
   await send("Create coin", tokenIxs, [mint]);
 
   // 4. DAO. Token-2022 mint -> no VSR addin (D-013).
-  const councilSetup =
-    councilMint && input.council
+  const councilSetup = councilMint
+    ? input.mode === "guarded"
+      ? {
+          mint: councilMint.publicKey,
+          members: [],
+          vetoThresholdPercent: 0,
+          mintRentLamports: BigInt(
+            await connection.getMinimumBalanceForRentExemption(MINT_SIZE),
+          ),
+        }
+      : input.council
       ? {
           mint: councilMint.publicKey,
           members: input.council.members.map((m) => new PublicKey(m)),
@@ -171,7 +182,8 @@ export async function runLaunch(
             await connection.getMinimumBalanceForRentExemption(MINT_SIZE),
           ),
         }
-      : undefined;
+      : undefined
+    : undefined;
   const dao = await buildCreateDaoIxs({
     mint: mint.publicKey,
     payer: wallet,

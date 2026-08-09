@@ -465,7 +465,18 @@ export async function createDao(
             mintRentLamports: BigInt(rentLamports),
           },
         }
-      : {}),
+      : mode === "guarded"
+        ? {
+            // Gate v2 (D-042): the ceremony derives the sole member — the
+            // gate authority PDA. No human council exists in guarded mode.
+            council: {
+              mint: councilMintKp.publicKey,
+              members: [],
+              vetoThresholdPercent: 0,
+              mintRentLamports: BigInt(rentLamports),
+            },
+          }
+        : {}),
     baseVotingTimeSeconds: BASE_VOTING_TIME_S,
     communityVoterWeightAddin: null, // no-addin realm (D-013 MVP fallback)
   });
@@ -561,7 +572,8 @@ export async function createDao(
     params,
     voter,
     voterTor,
-    councilMint: mode === "council" ? councilMintKp.publicKey : null,
+    councilMint:
+      mode === "council" || mode === "guarded" ? councilMintKp.publicKey : null,
     councilMember,
     councilTor,
   };

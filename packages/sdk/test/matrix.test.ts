@@ -86,10 +86,15 @@ describe("resolution rule: mode -> veto/surface, tier -> floors", () => {
     ).toThrow(/sovereignHoldUpSeconds/);
   });
 
-  it("guarded: unavailable before Stage 3", () => {
-    expect(() =>
-      resolveGovernanceParams({ mode: "guarded", tier: "micro", communitySupply: supply }),
-    ).toThrow(/Stage 3/);
+  it("guarded: resolves with the council hold-up floor and NO veto (gate v2)", () => {
+    const p = resolveGovernanceParams({ mode: "guarded", tier: "micro", communitySupply: supply });
+    const c = resolveGovernanceParams({
+      mode: "council",
+      tier: "micro",
+      communitySupply: supply,
+    });
+    expect(p.holdUpSeconds).toBe(c.holdUpSeconds);
+    expect(p.vetoEnabled).toBe(false);
   });
 
   it("proposal threshold = supply * bps / 10000 with checked math (INV-6)", () => {
