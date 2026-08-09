@@ -466,9 +466,50 @@ the live run worth doing.
 
 **What this does NOT prove, stated plainly.** It is 3.1.2, not the 3.1.4 fork
 production uses — the parity suite is what carries that across, and bankrun
-against the mainnet binary remains the primary evidence. Finalize and execute
-were not attempted: production params are a 3-day voting window and a 72-hour
-hold-up, and a live cluster's clock cannot be warped. The proposal above is
-left in `Voting` and can be finalized after the window elapses.
+against the mainnet binary remains the primary evidence.
+
+**Addendum (2026-08-09, D-057) — the lifecycle is now proven to the end.**
+
+The run above stops at a cast vote because production params are a 3-day
+window and a 72-hour hold-up, and a live cluster's clock cannot be warped. So
+finalize and execute — the legs where the gate hands control back to ordinary
+governance — were untested on a real cluster. `devnet-guarded-run.ts --fast`
+closes that by running the SAME production ceremony against a governance whose
+window and hold-up are short, and driving it to `Completed`.
+
+Only two numbers differ, and they are governance CONFIG, not gate logic: every
+account, builder, CPI and the deployed gate binary are the production ones.
+The window is ONE HOUR because `withCreateGovernance` refuses anything shorter
+("baseVotingTime should be at least 1 hour"); hand-building the instruction
+would have bought a faster run at the price of no longer exercising
+`buildCreateDaoIxs`, which is the whole reason to run this live.
+
+| Evidence | Signature / value |
+|---|---|
+| realm / governance / treasury | `5U9Mwwbgxh9Q7XB9Sdq9HebVin2FD7NMRqy38yvGbZ2U` / `7kKiqpaEBQa7dU75ncHW4m9Ecw1fmh5xzhAcEdsTUwE` / `9arrKTJLpUZwUnjTKZhsm576gdW66m3i7LtVq22MS8n8` |
+| ceremony in 3 txs | `3Sk1v1BG…`, `2duQvqfo…`, `GPYve5h9…` |
+| gate holds exactly one council token; full 8-program menu | weight `1` |
+| a holder of the ENTIRE supply is REFUSED | `GOVERNANCE-ERROR: Voter weight threshold disabled` |
+| anyone authors THROUGH the gate: propose → insert → sign off | `QoxSdozW…`, `65PgH3Py…`, `25RpgpSw…` |
+| the community votes; proposal `9P7SDER3fJZHNo7RW87fZcv7WQmQDJsJc1y9kJCzSHYz` | `EUvr45AE…` |
+| **finalize** moves Voting → Succeeded | `2AmiVERc…` |
+| **execution INSIDE the hold-up is REFUSED** | `GOVERNANCE-ERROR: Can't execute transaction within its hold up time` |
+| **execute** after the hold-up → `Completed` | `661SMowN…` |
+| **the DAO treasury actually paid out** | 20,890,880 → 20,889,880 = exactly the 1,000 lamports the proposal named |
+
+Two choices in that run are load-bearing. The hold-up is short but **non-zero**
+and the run attempts an execution inside it and REQUIRES the refusal — a
+hold-up that is configured and not enforced looks identical on a passing run,
+and trying it is the only way to tell. And the final assertion is on the
+treasury's LAMPORTS, not the proposal's state: a proposal that reaches
+`Completed` without moving the money it promised passes every state check and
+is still broken.
+
+The advance logic lives in `scripts/lib/gov-advance.ts`, shared with
+`devnet-guarded-advance.ts`, so this run and the production-params proposal
+(`vfwHWftREkcTUGiqRdaMhCVEFB1tU6LpJvKHg4F6Wy3`, finalizable ~2026-08-12) drive
+the SAME code. A fast run proving a different code path would have proved
+nothing about the slow one. That proposal is LAUNCH.md L-90 and remains open —
+it confirms the same lifecycle at production timings.
 
 Sign-off: ______________________  date: __________

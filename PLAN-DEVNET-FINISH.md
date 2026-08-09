@@ -43,7 +43,9 @@ it.
 | D1.3 | Run it live. Assert: finalize moves Voting → Succeeded; execute is REFUSED during hold-up; execute succeeds after it; treasury lamports actually moved; state → Completed. |
 | D1.4 | The production-params proposal (`vfwHWft…`) still finishes on its own clock in ~70h — D1 does not replace it, it de-risks it. |
 
-**Proof:** signatures on chain, and the balance delta on the DAO treasury.
+**DONE (2026-08-09).** Every leg passed; signatures in GATES.md. The treasury
+moved exactly the 1,000 lamports the proposal named, and the hold-up refused
+an early execution rather than merely being configured.
 
 ---
 

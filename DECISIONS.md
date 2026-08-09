@@ -2013,6 +2013,13 @@ The advance logic (finalize / hold-up / execute) moved into
 the fast run proved a different code path than the one that finishes the
 production proposal in three days, it would prove nothing about it.
 
+**It ran, and every leg passed** (GATES.md GATE L5 addendum): realm
+`5U9Mwwbg…`, proposal `9P7SDER3fJZHNo7RW87fZcv7WQmQDJsJc1y9kJCzSHYz`, finalize
+`2AmiVERc…` → Succeeded, an execution inside the hold-up refused with
+`Can't execute transaction within its hold up time`, execute `661SMowN…` →
+Completed, and the treasury 20,890,880 → 20,889,880 — exactly the 1,000
+lamports the proposal named. The whole run cost 0.165 SOL of devnet funds.
+
 ### The priority fee was a constant, which is wrong in both directions
 
 `ConstantFeeEstimator` bid a flat 10,000 µlamports: too much on a quiet chain,

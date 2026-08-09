@@ -31,6 +31,33 @@ holding ~3.6 SOL each; `solana program show --buffers --buffer-authority
 faucets rate-limit this datacenter IP entirely — funding must come from a
 browser faucet or the operator.
 
+## ✅ DEVNET IS FINISHED (D-057, 2026-08-09) — read PLAN-DEVNET-FINISH.md
+
+Everything in LAUNCH.md that needs no mainnet SOL and no operator decision is
+done: GATE L5's full lifecycle (above), L-30 dynamic priority fee, L-60
+metrics, L-63 per-client SSE cap, L-42/L-43 read-path, L-31/L-32
+coalescing + jittered reconnect + resync, L-91 indexer concurrency, L-26
+`--cluster` on the audit, L-13 trust disclosure, L-33 hidden-tab throttle,
+L-36 skeletons. Seven of LAUNCH.md's BLOCKING items closed.
+
+**Three traps found doing it, worth remembering:**
+
+- The RPC proxy allowlist omitted `getRecentPrioritizationFees`, so behind the
+  API the new dynamic fee would have 403'd and silently reverted to the
+  constant — passing every test while not existing in production. Any new
+  client-side RPC method needs an allowlist entry.
+- REDTEAM 6.6 claimed a per-IP SSE cap that **did not exist**; the only cap was
+  global, so one client with a loop could deny service to everyone. Treat
+  mitigation claims in that document as needing verification, not as facts.
+- REDTEAM 6.8 said we do not depend on Raydium's locker. False since the fee
+  model shipped — on mainnet the perpetual stream depends on it.
+
+**The boundary:** GATE L4 (mainnet canary) can NEVER be done on devnet. The
+locker is absent there and hard-codes the mainnet CPMM id, so the lock path
+has still never run live. Also blocked: authority policy (mainnet keys),
+mainnet bring-up (SOL), provisioning/domain/alert delivery (accounts),
+L-92 (threshold-gated).
+
 ## 🔎 RUN THESE before believing anything about devnet (D-052)
 
 - `pnpm tsx scripts/devnet-audit.ts` — read-only. Checks the DEPLOYED binary
@@ -46,6 +73,11 @@ browser faucet or the operator.
 - `pnpm tsx scripts/devnet-legacy-vault-fix.ts [--apply]` — one-off for coins
   created before the fee model: no protocol vault means every buy under
   ~0.127 SOL fails on rent. Anyone can fund the PDA; no authority needed.
+- `pnpm tsx scripts/devnet-guarded-run.ts --fast` — ~70 min (the governance
+  builder enforces a 1-hour minimum voting window), ~0.165 SOL. Drives the
+  guarded lifecycle to `Completed` including the hold-up refusal. `--cluster`
+  now exists on `devnet-audit.ts`; mainnet inverts the lock expectations (LP
+  supply NON-zero, graduated-fee record PRESENT).
 
 Devnet CLI is not on PATH by default:
 `export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"`.
@@ -111,6 +143,29 @@ load-bearing assertions against the DEVNET binaries (fixtures
 `spl_governance_devnet.so.gz`, `squads_v4_devnet.so.gz`). They hold on 3.1.2 —
 which is what makes GATE L5 mean anything. Run it before believing any devnet
 governance result. `startCtx(programs, accounts, "devnet")` selects the stack.
+
+## ✅ GATE L5 COMPLETE end to end (D-053 + D-057)
+
+The production-params run proves authorship (a full-supply whale refused,
+anyone authors through the gate). `devnet-guarded-run.ts --fast` proves the
+REST of the lifecycle live: finalize → an execution the hold-up REFUSES →
+execute → `Completed`, with the DAO treasury paying out exactly the 1,000
+lamports the proposal named (realm `5U9Mwwbg…`, proposal `9P7SDER3…`).
+
+Two things make that run worth trusting: the hold-up is short but NON-ZERO and
+the run requires the early execution to fail (a hold-up that is configured and
+not enforced looks identical on a passing run), and the final check is on
+LAMPORTS, not on proposal state. `--fast` changes only `baseVotingTime` and
+`minInstructionHoldUpTime` — governance CONFIG — so every builder, account,
+CPI and the deployed binary are the production ones. The window is ONE HOUR
+because `withCreateGovernance` refuses less; hand-rolling the ix would have
+stopped exercising `buildCreateDaoIxs`, which is the point of running it live.
+Shared advance logic lives in `scripts/lib/gov-advance.ts` so this and
+`devnet-guarded-advance.ts` cannot drift.
+
+Still open: **L-90** — the production-params proposal
+`vfwHWftREkcTUGiqRdaMhCVEFB1tU6LpJvKHg4F6Wy3` finalizes ~2026-08-12, then
+executes 72h later. Same code, production timings.
 
 ## ✅ GATE L5 PASSED — the gate is LIVE on devnet (D-053)
 
