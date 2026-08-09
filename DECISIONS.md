@@ -1249,3 +1249,40 @@ refused (v1 rule); Guarded proposal EXECUTION paths are the same
 permissionless spl-gov paths GATE 1 proved. The app's guarded launch
 runs through the existing runLaunch ceremony (council-mint keypair
 co-signs; members list empty — the gate authority is derived).
+
+## D-044 — One create page, one rail; the board is the front page (2026-08-09)
+
+Operator directive: "there should only be a create page with toggle for
+simple token, DAO token"; "the front page should be the board … all three
+categories showing side by side in columns".
+
+**One rail.** `/launch` (pump.fun rail, MAINNET) and `/create` (our native
+curve, devnet) were two products behind two nav tabs. They are now one
+page whose toggle changes only WHO the coin's creator is: Simple = you,
+DAO = the treasury. The DAO ceremony's coin step therefore swaps pump
+`create_v2` for our `create_coin` with `creator = the Squads vault PDA`
+(INV-CREATOR-ARG — creator is an argument, never a signer, which is the
+property the launchpad suite exists to prove). Consequences: the DAO flow
+now WORKS on the deployed devnet cluster (it previously targeted a
+mainnet-only rail from a devnet-configured site); creator fees accrue to
+the DAO's creator vault from the first trade and anyone can crank them
+home; supply/threshold/dev-buy quotes read the curve's live on-chain
+config instead of a hardcoded pump constant. `/launch` remains as a
+CLIENT-side redirect — a server `redirect()` static-exports to an error
+page (verified in app/out), so the hop is a useEffect with a link
+fallback.
+
+**The board is the front page** and shows all three columns at once
+instead of tabs. This surfaced a real defect: the indexer's "graduating"
+filter was `migrated = 0 AND complete = 0` — identical to "new", with the
+documented progress threshold accepted but ignored, so two of the three
+columns would have rendered the same coins. Fixed (tests first) to
+`complete OR progress >= threshold` (default 80% of the reserve sold),
+comparing `CAST(real_token AS INTEGER)` because a TEXT compare orders
+"8…" above "79…". The bucket rule is now ONE shared function
+(`boardBucket`, @daofun/sdk/launchpad) used by the app's chain-direct
+path and mirrored by the SQL, so hosted and backend-less boards agree
+column for column.
+
+**Nav** is Board | Create. The mode-comparison page is gone; each
+protection level carries its own detail inline on the create page.

@@ -11,6 +11,14 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { aggregateCandles, type Candle } from "@daofun/sdk/launchpad";
+import { PUMP_CLASSIC } from "@daofun/sdk/curve-math";
+
+/**
+ * Board progress denominator: the sellable reserve a coin starts with. Both
+ * the mainnet and devnet curve profiles share it (they differ only in
+ * initial virtual SOL), so one constant serves every cluster.
+ */
+const INITIAL_REAL_TOKEN = PUMP_CLASSIC.initialRealToken;
 
 export interface CoinRow {
   mint: string;
@@ -177,17 +185,32 @@ export class SqliteLaunchpadStore {
     );
   }
 
-  /** Board query. `filter`: new (default), graduating (>= threshold, not migrated), graduated. */
+  /**
+   * Board query — the three columns are DISJOINT, so a coin appears exactly
+   * once across them:
+   *   graduated  = migrated;
+   *   graduating = not migrated AND (complete, i.e. awaiting the crank, OR
+   *                progress >= threshold, default 80% of the reserve sold);
+   *   new        = everything else still on the curve.
+   * Progress is measured from real_token (tokens left to sell), cast to a
+   * 64-bit integer — the reserve maxes at 793.1e12, well inside i64, and a
+   * TEXT comparison would order "8..." above "79..." .
+   */
   listCoins(opts: {
     filter?: "new" | "graduating" | "graduated";
     limit?: number;
     progressThresholdBps?: number;
   } = {}): CoinRow[] {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-    let where = "1=1";
+    const bps = BigInt(Math.min(Math.max(opts.progressThresholdBps ?? 8000, 0), 10_000));
+    // tokens still unsold at the threshold: initial * (1 - bps/10000)
+    const remainingAtThreshold =
+      (INITIAL_REAL_TOKEN * (10_000n - bps)) / 10_000n;
+    const nearly = `(complete = 1 OR CAST(real_token AS INTEGER) <= ${remainingAtThreshold})`;
+    let where: string;
     if (opts.filter === "graduated") where = "migrated = 1";
-    else if (opts.filter === "graduating") where = "migrated = 0 AND complete = 0";
-    else where = "migrated = 0";
+    else if (opts.filter === "graduating") where = `migrated = 0 AND ${nearly}`;
+    else where = `migrated = 0 AND NOT ${nearly}`;
     const rows = this.db
       .prepare(`SELECT * FROM coins WHERE ${where} ORDER BY created_slot DESC LIMIT ?`)
       .all(limit) as Record<string, unknown>[];

@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+/**
+ * The board — the front page. All three lifecycle columns are on screen at
+ * once (New / About to graduate / Graduated) rather than behind tabs, so the
+ * whole market reads at a glance. Bucketing uses the SHARED rule
+ * (@daofun/sdk/launchpad boardBucket), the same one the indexer's SQL
+ * implements, so the hosted and chain-direct paths agree column for column.
+ */
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { boardBucket, type BoardBucket } from "@daofun/sdk/launchpad";
 import {
   apiConfigured,
   launchpadApi,
@@ -12,12 +20,14 @@ import { fetchCoinFromChain, loadLocalCoins } from "../lib/chain-coin";
 import { getConnection } from "../lib/solana";
 import { truncateAddress } from "../lib/wallet-registry";
 
-type Tab = "new" | "graduating" | "graduated";
-const TABS: { key: Tab; label: string }[] = [
-  { key: "new", label: "New" },
-  { key: "graduating", label: "About to graduate" },
-  { key: "graduated", label: "Graduated" },
+const COLUMNS: { key: BoardBucket; label: string; blurb: string }[] = [
+  { key: "new", label: "New", blurb: "Fresh on the curve" },
+  { key: "graduating", label: "About to graduate", blurb: "Past 80% — or waiting on the crank" },
+  { key: "graduated", label: "Graduated", blurb: "Live on Raydium, LP burned" },
 ];
+
+type Buckets = Record<BoardBucket, CoinView[]>;
+const emptyBuckets = (): Buckets => ({ new: [], graduating: [], graduated: [] });
 
 function CoinCard({ coin }: { coin: CoinView }) {
   const pct = Math.round(coin.progressBps / 100);
@@ -40,93 +50,102 @@ function CoinCard({ coin }: { coin: CoinView }) {
 }
 
 export function BoardScreen() {
-  const [tab, setTab] = useState<Tab>("new");
-  const [coins, setCoins] = useState<CoinView[]>([]);
+  const [buckets, setBuckets] = useState<Buckets>(emptyBuckets());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async (): Promise<Buckets> => {
+    if (apiConfigured()) {
+      // The indexer buckets server-side; ask for all three at once.
+      const [fresh, nearly, done] = await Promise.all([
+        launchpadApi.board("new"),
+        launchpadApi.board("graduating"),
+        launchpadApi.board("graduated"),
+      ]);
+      return { new: fresh, graduating: nearly, graduated: done };
+    }
+    // No indexer: the coins this browser launched or visited, read from
+    // chain and bucketed with the same rule the indexer applies.
+    const connection = getConnection();
+    const found = (
+      await Promise.all(
+        loadLocalCoins().map((m) => fetchCoinFromChain(connection, m).catch(() => null)),
+      )
+    ).filter((c): c is CoinView => c !== null);
+    const out = emptyBuckets();
+    for (const coin of found) out[boardBucket(coin)].push(coin);
+    return out;
+  }, []);
 
   useEffect(() => {
     let live = true;
     setLoading(true);
-
-    // With an indexer, the board is global. Without one, fall back to the
-    // coins this browser has launched or visited, read straight from chain —
-    // so a backend-less deploy still shows your own launches.
-    const loadLocal = async () => {
-      const mints = loadLocalCoins();
-      const connection = getConnection();
-      const found = (await Promise.all(mints.map((m) => fetchCoinFromChain(connection, m).catch(() => null))))
-        .filter((c): c is CoinView => c !== null)
-        .filter((c) =>
-          tab === "graduated" ? c.migrated : tab === "graduating" ? !c.migrated && !c.complete : !c.migrated,
-        );
-      if (live) {
-        setCoins(found);
+    load()
+      .then((b) => {
+        if (!live) return;
+        setBuckets(b);
         setError(null);
-      }
-    };
-
-    (apiConfigured()
-      ? launchpadApi.board(tab).then((c) => live && (setCoins(c), setError(null)))
-      : loadLocal()
-    )
+      })
       .catch((e) => live && setError((e as Error).message))
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
     };
-  }, [tab]);
+  }, [load]);
 
-  // Live updates: refresh the current tab when the feed reports activity.
+  // Live updates: every column refreshes when the feed reports activity.
   useEffect(() => {
     return subscribeLaunchpad(() => {
-      launchpadApi.board(tab).then(setCoins).catch(() => {});
+      load().then(setBuckets).catch(() => {});
     });
-  }, [tab]);
+  }, [load]);
 
+  const total = COLUMNS.reduce((n, c) => n + buckets[c.key].length, 0);
   return (
     <div className="board">
       <div className="board-head">
         <h1>Launchpad</h1>
-        <Link href="/create" className="button">
-          Launch a coin
+        <Link href="/create" className="button primary">
+          Create a token
         </Link>
-      </div>
-      <div className="tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            className={`tab ${tab === t.key ? "active" : ""}`}
-            onClick={() => setTab(t.key)}
-            data-testid={`tab-${t.key}`}
-          >
-            {t.label}
-          </button>
-        ))}
       </div>
 
       {!apiConfigured() && (
-        <div className="card muted">
-          The live board needs the backend API. Set <code>NEXT_PUBLIC_API_URL</code> to see coins.
-        </div>
+        <p className="muted small">
+          Showing the coins this browser has launched or visited — set{" "}
+          <code>NEXT_PUBLIC_API_URL</code> for the global live board.
+        </p>
       )}
       {error && <div className="errors">Could not load the board: {error}</div>}
-      {loading ? (
-        <div className="card muted">Loading…</div>
-      ) : coins.length === 0 ? (
-        <div className="card empty">
-          <p>No coins here yet.</p>
-          <Link href="/create" className="button">
-            Be the first to launch one
-          </Link>
-        </div>
-      ) : (
-        <div className="mode-grid">
-          {coins.map((c) => (
-            <CoinCard key={c.mint} coin={c} />
-          ))}
-        </div>
-      )}
+
+      <div className="board-columns">
+        {COLUMNS.map((col) => (
+          <section key={col.key} className="board-column" data-testid={`column-${col.key}`}>
+            <header className="board-column-head">
+              <h2>{col.label}</h2>
+              <span className="muted small">{col.blurb}</span>
+            </header>
+            <div className="board-column-body">
+              {loading ? (
+                <p className="muted small">Loading…</p>
+              ) : buckets[col.key].length === 0 ? (
+                <p className="muted small">
+                  {col.key === "new" && total === 0 ? (
+                    <>
+                      Nothing here yet.{" "}
+                      <Link href="/create">Be the first to launch one</Link>.
+                    </>
+                  ) : (
+                    "Nothing here yet."
+                  )}
+                </p>
+              ) : (
+                buckets[col.key].map((c) => <CoinCard key={c.mint} coin={c} />)
+              )}
+            </div>
+          </section>
+        ))}
+      </div>
     </div>
   );
 }

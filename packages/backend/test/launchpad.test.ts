@@ -109,6 +109,46 @@ describe("store", () => {
     expect(s.getCoin(MINT.toBase58())?.realSol).toBe("5000");
   });
 
+  it("splits the three board columns by PROGRESS, not just by flags", () => {
+    const s = memStore();
+    const coin = (mint: string, realToken: string, complete = 0, migrated = 0) =>
+      s.upsertCoin({
+        mint, name: mint, symbol: mint, uri: "u", creator: CREATOR.toBase58(),
+        virtualSol: "30000000000", virtualToken: "1073000000000000", realSol: "0",
+        realToken, complete, migrated, poolState: null,
+        createdSlot: 10, createdBlockTime: 100, lastSlot: 10,
+      });
+    // fresh: nothing sold. nearly: 90% of the 793.1e12 reserve sold.
+    // done: complete but not yet cranked. gone: migrated.
+    coin("fresh", "793100000000000");
+    coin("nearly", "79310000000000");
+    coin("done", "0", 1);
+    coin("gone", "0", 1, 1);
+
+    const names = (f: "new" | "graduating" | "graduated") =>
+      s.listCoins({ filter: f }).map((c) => c.mint).sort();
+
+    // "About to graduate" must NOT be a synonym for "new": it is the
+    // high-progress tail plus anything complete but awaiting the crank.
+    expect(names("graduating")).toEqual(["done", "nearly"]);
+    expect(names("new")).toEqual(["fresh"]);
+    expect(names("graduated")).toEqual(["gone"]);
+  });
+
+  it("respects a custom progress threshold for the graduating column", () => {
+    const s = memStore();
+    s.upsertCoin({
+      mint: "half", name: "H", symbol: "H", uri: "u", creator: CREATOR.toBase58(),
+      virtualSol: "30000000000", virtualToken: "1073000000000000", realSol: "0",
+      realToken: "396550000000000", complete: 0, migrated: 0, poolState: null,
+      createdSlot: 10, createdBlockTime: 100, lastSlot: 10,
+    });
+    // 50% sold: below the 80% default, at/above a 50% threshold.
+    expect(s.listCoins({ filter: "graduating" })).toHaveLength(0);
+    expect(s.listCoins({ filter: "graduating", progressThresholdBps: 5000 })).toHaveLength(1);
+    expect(s.listCoins({ filter: "new", progressThresholdBps: 5000 })).toHaveLength(0);
+  });
+
   it("keeps virtual reserves when a completion event only carries the raise", () => {
     const s = memStore();
     s.upsertCoin({

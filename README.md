@@ -46,8 +46,10 @@ stream flows to a holder-governed Squads/Realms treasury.
   selection. `@daofun/sdk/curve-math` is the pricing spec the program mirrors.
 - **Backend** `packages/backend/src/server.ts` — one always-on service: polling
   indexer, board/coin/trade REST + SSE, metadata upload, RPC proxy, airdrop.
-- **Frontend** `app/` — `/board`, `/coin?mint=`, `/create`, with a send pipeline
-  that keeps devnet transactions on devnet (the wallet-broadcast trap, D-038).
+- **Frontend** `app/` — the board IS the front page (New / About to graduate /
+  Graduated side by side), `/create` is the ONE create page (Simple token or
+  DAO token behind a toggle), `/coin?mint=` is the trading terminal, with a
+  send pipeline that keeps devnet transactions on devnet (D-038).
   `/coin` is a full terminal: candle chart, trades / top-traders feed,
   position + PnL, and a buy/sell panel that keeps working after graduation by
   swapping on the coin's Raydium pool (quote math bankrun-proven exact against

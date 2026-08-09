@@ -1,17 +1,20 @@
 /**
  * Client-side launch orchestrator (no server). Drives the connected wallet
  * through the on-chain ceremony using the SAME instruction builders the
- * integration suite proves against real mainnet binaries:
+ * integration suite proves against real binaries:
  *
  *   1. create treasury (Squads multisig; createKey co-signs)
  *   2. collect launch fee (optional)
- *   3. create coin (pump create_v2; mint co-signs; creator = vault PDA, INV-1)
+ *   3. create coin on OUR bonding curve (mint co-signs; creator = the DAO's
+ *      vault PDA, INV-CREATOR-ARG) + optional dev buy
  *   4. create DAO (council? -> realm + governance; realm authority -> DAO)
  *   5. prefund the native treasury (execution rent headroom)
  *
- * pump v2 mints are Token-2022, which the deployed VSR rejects (D-013), so
- * the realm is built with NO voter-weight addin: vote weight == deposited
- * tokens 1:1. Ephemeral keypairs live only for the duration of the flow.
+ * Step 3 is the same curve the plain "simple token" path uses — one rail for
+ * both, so a DAO token is just a coin whose CREATOR is the treasury: trading
+ * fees accrue to the DAO's creator vault and anyone can crank them home.
+ * The realm is built with NO voter-weight addin: vote weight == deposited
+ * tokens 1:1 (D-013). Ephemeral keypairs live only for the flow's duration.
  */
 import {
   Connection,
@@ -29,8 +32,15 @@ import {
   fetchProgramConfigTreasury,
 } from "@daofun/sdk/treasury";
 import { buildCreateDaoIxs } from "@daofun/sdk/governance";
-import { PumpFunRail } from "@daofun/sdk/rails/pumpfun";
+import {
+  buildBuyIx,
+  buildCreateCoinIx,
+  configPda,
+  decodeConfig,
+} from "@daofun/sdk/launchpad";
+import { buyQuote, initialState, tokensForSolInput } from "@daofun/sdk/curve-math";
 import { TIER_FLOORS } from "@daofun/sdk/matrix";
+import { launchpadProgramId } from "./cluster";
 import type {
   GovernanceMode,
   GovernanceParams,
@@ -38,8 +48,8 @@ import type {
 } from "@daofun/sdk/launch-form";
 import type { WalletSender } from "./wallet-sender";
 
-/** pump.fun fixed supply: 1,000,000,000 tokens × 10^6 decimals. */
-const PUMP_TOTAL_SUPPLY = 1_000_000_000_000_000n;
+/** Curve supply: 1,000,000,000 tokens × 10^6 decimals (config-confirmed). */
+const DEFAULT_TOTAL_SUPPLY = 1_000_000_000_000_000n;
 const PREFUND_LAMPORTS = 6_000_000;
 
 export interface LaunchInput {
@@ -69,9 +79,9 @@ export interface LaunchResult {
 }
 
 /** Real-supply proposal threshold (the form preview uses a placeholder supply). */
-function realParams(input: LaunchInput): GovernanceParams {
+function realParams(input: LaunchInput, totalSupply: bigint): GovernanceParams {
   const bps = BigInt(TIER_FLOORS[input.tier].proposalThresholdSupplyBps);
-  const raw = (PUMP_TOTAL_SUPPLY * bps) / 10_000n;
+  const raw = (totalSupply * bps) / 10_000n;
   return {
     ...input.params,
     proposalThresholdTokens: raw > 0n ? raw : 1n,
@@ -94,8 +104,20 @@ export async function runLaunch(
 
   const predicted = deriveGovernanceChainFromMint(mint.publicKey);
   const { vaultPda } = deriveTreasuryPdas(createKey.publicKey);
-  const params = realParams(input);
   const signatures: string[] = [];
+
+  // The curve's live config is the source of truth for supply, fee recipient
+  // and the starting reserves — read it once, use it for the governance
+  // threshold AND the dev buy quote.
+  const programId = launchpadProgramId();
+  const cfgInfo = await connection.getAccountInfo(configPda(programId));
+  if (!cfgInfo) {
+    throw new Error(
+      "The launchpad config is not initialized on this cluster — a DAO token needs the curve program deployed here.",
+    );
+  }
+  const cfg = decodeConfig(cfgInfo.data);
+  const params = realParams(input, cfg.tokenTotalSupply || DEFAULT_TOTAL_SUPPLY);
 
   async function send(
     step: string,
@@ -145,21 +167,47 @@ export async function runLaunch(
     );
   }
 
-  // 3. pump create_v2 — mint co-signs; creator is the vault PDA (INV-1).
-  const rail = new PumpFunRail(connection);
-  const tokenIxs = await rail.buildCreateTokenIxs(
-    {
-      metadata: input.metadata,
-      launcher: wallet,
-      rail: "pumpfun",
-      daoConfig: { mode: input.mode, marketCapTier: input.tier },
-      ...(input.devBuyLamports && input.devBuyLamports > 0n
-        ? { devBuyLamports: input.devBuyLamports }
-        : {}),
-    },
-    vaultPda,
-    mint,
-  );
+  // 3. create_coin on OUR curve — mint co-signs; the CREATOR is the DAO's
+  //    vault PDA (INV-CREATOR-ARG: creator is an argument, never a signer),
+  //    so every trade's creator fee accrues to the treasury from block one.
+  const tokenIxs: TransactionInstruction[] = [
+    buildCreateCoinIx({
+      payer: wallet,
+      mint: mint.publicKey,
+      creator: vaultPda,
+      name: input.metadata.name,
+      symbol: input.metadata.symbol,
+      uri: input.metadata.uri,
+      programId,
+    }),
+  ];
+  if (input.devBuyLamports && input.devBuyLamports > 0n) {
+    // Quote against the curve's OWN starting state (same math the program
+    // prices with), then cap the cost with a 2% slippage allowance.
+    const state = initialState({
+      initialVirtualSol: cfg.initialVirtualSol,
+      initialVirtualToken: cfg.initialVirtualToken,
+      initialRealToken: cfg.initialRealToken,
+      tokenTotalSupply: cfg.tokenTotalSupply,
+      protocolFeeBps: cfg.protocolFeeBps,
+      creatorFeeBps: cfg.creatorFeeBps,
+    });
+    const tokensOut = tokensForSolInput(state, input.devBuyLamports);
+    if (tokensOut > 0n) {
+      const cost = buyQuote(state, tokensOut).totalCost;
+      tokenIxs.push(
+        buildBuyIx({
+          user: wallet,
+          mint: mint.publicKey,
+          creator: vaultPda,
+          feeRecipient: cfg.feeRecipient,
+          tokenAmount: tokensOut,
+          maxSolCost: cost + cost / 50n,
+          programId,
+        }),
+      );
+    }
+  }
   await send("Create coin", tokenIxs, [mint]);
 
   // 4. DAO. Token-2022 mint -> no VSR addin (D-013).

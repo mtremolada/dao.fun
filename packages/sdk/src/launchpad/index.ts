@@ -9,5 +9,6 @@ export * from "./instructions";
 export * from "./state";
 export * from "./events";
 export * from "./errors";
+export * from "./board";
 export * from "./candles";
 export * from "./raydium";
