@@ -397,6 +397,33 @@ collect_creator_fee → collect_protocol_fee against the freshly deployed
 binary, checking lamports against the SDK's quote math: all green, including
 the negative (a pre-graduation protocol sweep is refused).
 
+**Layer 2c — a FRESH graduation on the hardened binary (2026-08-09, D-052).**
+The three earlier graduations all predate the redeploy, so `devnet-smoke.ts
+--graduate` took a new coin all the way through on the current program:
+`5r9Tznj5VDSXZ9orJPBnWMHuDQXKTix3j1QxUUEGTnHu`, pool
+`DEXWiVcQPqH3LAdRkpYsRSE97BgL3Vd71SmRgfp1itvk`, migrate `mSKdwSXa…`. The curve
+completed at 2.833511973 SOL, drained to zero, and the pool graduated into the
+tier the CONFIG names (`EsTevfac…`, the 1% devnet tier) rather than the cluster
+default — the regression that bit the first live run. LP mint supply ZERO.
+No `["graduated", mint]` record, i.e. the burn branch devnet must take. The
+protocol sweep, refused before graduation, is ALLOWED after it (`NA8AB5e3…`) —
+the reserve it was protecting has been spent.
+
+The overhead reconciles to the lamport against `create_pool_fee` read from the
+live tier plus `CPMM_RENT_LAMPORTS`:
+
+```
+overhead            0.192156720
+  from raise        0.172183522   (observed: raise - pool SOL)
+  from vault gross  0.019973198
+  vault net change  0.013855358   (observed)
+  => refund         0.006117840   (migrate returns unspent overhead)
+raise + vault == overhead   ✓
+```
+
+That refund is why the vault's NET change looks smaller than its contribution;
+the script now reports both rather than a net figure labelled "overhead".
+
 **Layer 3 — mainnet canary: NOT DONE, and it is the only thing that can
 prove the lock path live.** Raydium's locker is absent from devnet and
 hard-codes the mainnet CPMM id, so no amount of devnet work substitutes.

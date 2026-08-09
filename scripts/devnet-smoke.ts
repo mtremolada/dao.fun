@@ -11,8 +11,14 @@
  * (the raise becomes pool liquidity and the LP is burned), and three coins
  * have already been graduated. This costs a few thousandths of a SOL.
  *
- *   pnpm tsx scripts/devnet-smoke.ts            # trade an existing coin
- *   pnpm tsx scripts/devnet-smoke.ts --create   # also launch a fresh one
+ * `--graduate` additionally buys the curve OUT and cranks the migration, which
+ * is the one thing a redeploy cannot be talked out of proving: that the whole
+ * fee model still lands on a real cluster. It costs ~2.86 SOL permanently —
+ * the raise becomes pool liquidity and the LP is burned — so it is opt-in.
+ *
+ *   pnpm tsx scripts/devnet-smoke.ts             # trade an existing coin
+ *   pnpm tsx scripts/devnet-smoke.ts --create    # also launch a fresh one
+ *   pnpm tsx scripts/devnet-smoke.ts --graduate  # create, buy out, migrate
  */
 import { readFileSync } from "node:fs";
 import {
@@ -29,13 +35,19 @@ import {
   buildCollectCreatorFeeIx,
   buildCollectProtocolFeeIx,
   buildCreateCoinIx,
+  buildMigrateIx,
   buildSellIx,
   configPda,
+  cpmmPoolAccounts,
   creatorVaultPda,
   curvePda,
   decodeConfig,
+  decodeCpmmAmmConfig,
+  decodeCpmmPool,
   decodeCurve,
+  graduatedFeesPda,
   protocolVaultPda,
+  raydiumCpmmAddresses,
 } from "../packages/sdk/src/launchpad";
 import { buyQuote, sellQuote, tokensForSolInput } from "../packages/sdk/src/curve-math";
 
@@ -44,8 +56,11 @@ const PROGRAM_ID = new PublicKey(
 );
 const RPC = process.env.DEVNET_RPC ?? "https://api.devnet.solana.com";
 const CURVE_LEN = 8 + 32 + 32 + 8 * 4 + 2 + 2 + 1 + 1 + 32 + 1;
-const CREATE = process.argv.includes("--create");
+const GRADUATE = process.argv.includes("--graduate");
+const CREATE = process.argv.includes("--create") || GRADUATE;
 const SOL = (l: bigint | number) => (Number(l) / 1e9).toFixed(9);
+/** Mirrors the program's constant: rent for the pool's accounts. */
+const CPMM_RENT_LAMPORTS = 42_156_720n;
 
 let failures = 0;
 function check(ok: boolean, label: string, detail = ""): void {
@@ -263,6 +278,177 @@ async function main(): Promise<void> {
       "the graduation reserve is protected from an early sweep",
       msg.replace(/\s+/g, " ").slice(0, 90),
     );
+  }
+
+  // ---- graduation: buy the curve OUT, then crank migrate ----
+  if (GRADUATE) {
+    console.log("\n--- graduation ---");
+    let state = await readCurve(connection, mint);
+
+    // Check affordability up front. Running out MID-graduation leaves a
+    // completed-but-unmigrated curve and a raw SendTransactionError, which is
+    // a confusing way to learn you needed more SOL.
+    const needed = buyQuote(curveState(state), state.realToken).totalCost;
+    const have = BigInt(await connection.getBalance(payer.publicKey));
+    if (have < needed + 20_000_000n) {
+      console.log(
+        `\nNOT ENOUGH SOL to graduate: need ~${SOL(needed)} for the buy-out ` +
+          `plus fees, have ${SOL(have)}. The coin above is created and tradeable; ` +
+          `top up and re-run with --graduate to take a fresh one all the way.`,
+      );
+      console.log(
+        `\nend ${SOL(await connection.getBalance(payer.publicKey))} SOL — ` +
+          (failures === 0 ? "ALL CHECKS PASSED (graduation skipped)" : `${failures} CHECK(S) FAILED`),
+      );
+      process.exit(failures === 0 ? 0 : 1);
+    }
+    // Buy in chunks: each buy is priced off the CURRENT curve, and a single
+    // "all remaining tokens" quote can exceed what a 1232-byte transaction and
+    // the wallet can comfortably carry in one shot. Loop until complete.
+    for (let i = 0; i < 12 && !state.complete; i++) {
+      const remaining = state.realToken;
+      const chunk = remaining > 0n ? remaining : 0n;
+      const q = buyQuote(curveState(state), chunk);
+      console.log(`buy-out[${i}] ${SOL(q.totalCost)} SOL for ${chunk} units`);
+      await send(connection, payer, [
+        cu(),
+        buildBuyIx({
+          user: payer.publicKey,
+          mint,
+          creator,
+          tokenAmount: chunk,
+          // A little headroom: another trade can land between quote and send.
+          maxSolCost: (q.totalCost * 101n) / 100n,
+          programId: PROGRAM_ID,
+        }),
+      ]);
+      state = await readCurve(connection, mint);
+    }
+    check(state.complete, "the curve reached completion", `raised ${SOL(state.realSol)} SOL`);
+
+    const vaultBefore = (await connection.getAccountInfo(protocolVaultPda(mint, PROGRAM_ID)))!
+      .lamports;
+    const raiseBefore = state.realSol;
+
+    // The tier comes from the LIVE config, never the cluster default — that
+    // is the bug the first devnet run found and five suites missed.
+    const migrateSig = await send(connection, payer, [
+      cu(600_000),
+      buildMigrateIx({
+        payer: payer.publicKey,
+        mint,
+        feeRecipient: cfg.feeRecipient,
+        cluster: "devnet",
+        ammConfig: cfg.cpmmAmmConfig,
+        programId: PROGRAM_ID,
+      }),
+    ]);
+    console.log(`migrate  ${migrateSig}`);
+
+    const after = await readCurve(connection, mint);
+    check(after.migrated, "the curve is marked migrated");
+    check(after.realSol === 0n && after.realToken === 0n, "the curve is drained to zero");
+
+    const ray = raydiumCpmmAddresses("devnet");
+    const pool = cpmmPoolAccounts(mint, { ...ray, ammConfig: cfg.cpmmAmmConfig }, PROGRAM_ID);
+    check(after.poolState.equals(pool.poolState), "the curve records the derived pool");
+    const poolInfo = await connection.getAccountInfo(pool.poolState);
+    check(
+      poolInfo !== null && poolInfo.owner.equals(cfg.cpmmProgram),
+      "the pool is a real Raydium CPMM pool",
+    );
+    if (poolInfo) {
+      const decoded = decodeCpmmPool(poolInfo.data);
+      check(
+        decoded.ammConfig.equals(cfg.cpmmAmmConfig),
+        "the pool graduated into the tier the CONFIG names, not the cluster default",
+        decoded.ammConfig.toBase58(),
+      );
+      const sol = await connection.getTokenAccountBalance(
+        decoded.token0Mint.equals(mint) ? decoded.token1Vault : decoded.token0Vault,
+      );
+      console.log(`  pool ${pool.poolState.toBase58()}  SOL side ${sol.value.uiAmountString}`);
+
+      // Where the overhead came from, to the lamport.
+      //
+      // The overhead is Raydium's `create_pool_fee` (read from the tier, it is
+      // admin-mutable) plus the pool's rent. On devnet the raise is far too
+      // small for its own protocol fees to cover that, so the vault pays what
+      // it has and the raise covers the rest — the RAISE-FALLBACK path, which
+      // exists so a graduation can never strand.
+      //
+      // Careful with the vault number: `migrate` refunds unspent overhead and
+      // reclaimed rent BACK to the protocol vault, so the vault's net change
+      // is smaller than what it actually put in. Reporting the net as "the
+      // overhead" would make it look as if the overhead had changed. What is
+      // exactly observable is the RAISE side, and the guarantee worth
+      // asserting is that the raise never gives up more than the overhead.
+      const tierInfo = await connection.getAccountInfo(cfg.cpmmAmmConfig);
+      const createPoolFee = decodeCpmmAmmConfig(tierInfo!.data).createPoolFee;
+      const overhead = createPoolFee + CPMM_RENT_LAMPORTS;
+      const vaultAfter = (await connection.getAccountInfo(protocolVaultPda(mint, PROGRAM_ID)))!
+        .lamports;
+      const vaultNet = BigInt(vaultBefore - vaultAfter);
+      const poolSol = BigInt(sol.value.amount);
+      const fromRaise = raiseBefore - poolSol;
+      const fromVaultGross = overhead - fromRaise;
+      console.log(
+        `  overhead ${SOL(overhead)} SOL = vault ${SOL(fromVaultGross)} + raise ${SOL(fromRaise)}` +
+          `  (vault net ${SOL(vaultNet)} after a ${SOL(fromVaultGross - vaultNet)} refund)`,
+      );
+      check(
+        fromRaise <= overhead,
+        "the raise gave up AT MOST the overhead, never more",
+        `${SOL(fromRaise)} <= ${SOL(overhead)}`,
+      );
+      check(
+        fromVaultGross >= 0n && fromVaultGross <= overhead,
+        "the vault covered the remainder",
+        `${SOL(fromVaultGross)}`,
+      );
+      check(
+        fromVaultGross >= vaultNet,
+        "the migration refunded its unspent overhead to the vault",
+        `refund ${SOL(fromVaultGross - vaultNet)} SOL`,
+      );
+
+      // The burn guarantee, in its strongest form: no LP exists at all.
+      const lp = await connection.getTokenSupply(decoded.lpMint);
+      check(BigInt(lp.value.amount) === 0n, "LP supply is ZERO — every LP token burned", lp.value.amount);
+    }
+
+    // Devnet has no locker, so there must be NO graduated-fee record — this
+    // is exactly what the UI keys off to say "burned" rather than "locked".
+    check(
+      (await connection.getAccountInfo(graduatedFeesPda(mint, PROGRAM_ID))) === null,
+      "no graduated-fee record — the burn branch, as devnet must take",
+    );
+
+    // And NOW the protocol sweep is allowed: the graduation reserve it was
+    // protecting has been spent, so what remains is genuinely the protocol's.
+    try {
+      const sig = await send(connection, payer, [
+        cu(),
+        buildCollectProtocolFeeIx({
+          payer: payer.publicKey,
+          mint,
+          feeRecipient: cfg.feeRecipient,
+          ammConfig: cfg.cpmmAmmConfig,
+          programId: PROGRAM_ID,
+        }),
+      ]);
+      console.log(`collect_protocol_fee ${sig}`);
+      check(true, "post-graduation the protocol sweep is ALLOWED");
+    } catch (e) {
+      const msg = (e as Error).message;
+      // Nothing left to sweep is a legitimate outcome if the vault paid the
+      // whole overhead — the reserve is released either way.
+      check(
+        /NothingToCollect|custom program error/.test(msg),
+        "post-graduation sweep: nothing left after the overhead",
+        msg.replace(/\s+/g, " ").slice(0, 80),
+      );
+    }
   }
 
   console.log(

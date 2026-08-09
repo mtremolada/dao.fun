@@ -30,6 +30,7 @@ import {
 import {
   Governance,
   GovernanceAccountParser,
+  type InstructionData,
   Proposal,
   ProposalState,
   ProposalTransaction,
@@ -48,14 +49,21 @@ const signer = () =>
     Uint8Array.from(JSON.parse(readFileSync(".wallets/deployer.json", "utf8"))),
   );
 
+/**
+ * spl-governance's parser is typed around its own class union, which does not
+ * survive a generic parameter; the cast is at the boundary and the return type
+ * is what callers actually get.
+ */
 async function readAccount<T>(
   connection: Connection,
   address: PublicKey,
-  cls: new (args: never) => T,
+  cls: unknown,
 ): Promise<T> {
   const info = await connection.getAccountInfo(address);
   if (!info) throw new Error(`no account at ${address.toBase58()}`);
-  return GovernanceAccountParser(cls)(address, info).account as T;
+  return GovernanceAccountParser(
+    cls as Parameters<typeof GovernanceAccountParser>[0],
+  )(address, info).account as T;
 }
 
 async function main(): Promise<void> {
@@ -65,9 +73,9 @@ async function main(): Promise<void> {
   const connection = new Connection(RPC, "confirmed");
   const payer = signer();
 
-  const proposal = await readAccount(connection, proposalAddr, Proposal);
+  const proposal = await readAccount<Proposal>(connection, proposalAddr, Proposal);
   const governanceAddr = proposal.governance;
-  const governance = await readAccount(connection, governanceAddr, Governance);
+  const governance = await readAccount<Governance>(connection, governanceAddr, Governance);
   const now = Math.floor(Date.now() / 1000);
 
   console.log(`proposal   ${proposalAddr.toBase58()}`);
@@ -112,7 +120,7 @@ async function main(): Promise<void> {
       proposal.governingTokenMint,
     );
     console.log(`\nfinalize   ${await send(ixs)}`);
-    const after = await readAccount(connection, proposalAddr, Proposal);
+    const after = await readAccount<Proposal>(connection, proposalAddr, Proposal);
     console.log(`state      ${ProposalState[after.state]}`);
     return;
   }
@@ -142,7 +150,7 @@ async function main(): Promise<void> {
       const info = await connection.getAccountInfo(ptAddr);
       if (!info) break;
       const pt = GovernanceAccountParser(ProposalTransaction)(ptAddr, info).account;
-      const inner = pt.getAllInstructions().map((d) =>
+      const inner = pt.getAllInstructions().map((d: InstructionData) =>
         createInstructionData(
           new TransactionInstruction({
             programId: d.programId,
@@ -167,7 +175,7 @@ async function main(): Promise<void> {
       );
       console.log(`execute[${i}] ${await send(ixs)}`);
     }
-    const after = await readAccount(connection, proposalAddr, Proposal);
+    const after = await readAccount<Proposal>(connection, proposalAddr, Proposal);
     console.log(`state      ${ProposalState[after.state]}`);
     return;
   }
