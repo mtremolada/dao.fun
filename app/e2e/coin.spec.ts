@@ -7,14 +7,17 @@
  */
 import { expect, test } from "@playwright/test";
 import { PublicKey } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
   FAKE_SIG,
+  WALLET_ADDRESS,
   coinAccounts,
   connectWallet,
   installFakeWallet,
   installRpcStub,
   midCurve,
   seedBrowser,
+  tokenAccountData,
 } from "./launchpad-harness";
 
 const MINT = new PublicKey("8PnhcD5R8inK9YbcS2GYTg63n6LD3FY3xxD47RaB1s5K");
@@ -113,4 +116,53 @@ test("an unknown mint fails soft with a clear error", async ({ page }) => {
   await installRpcStub(page, new Map());
   await page.goto(URL);
   await expect(page.getByText(/no curve found for this mint/i)).toBeVisible();
+});
+
+test("selling 100% asks for EXACTLY the balance, never a base unit more", async ({ page }) => {
+  // Regression, reproduced from a live devnet wallet: holding
+  // 533830845.549266 tokens, the old preset rendered toFixed(4) =
+  // "533830845.5493" — 34 base units MORE than held — and the sell died in
+  // the token program with an opaque InsufficientFunds.
+  // Same 6-dp tail as the live wallet (…549266 -> toFixed(4) rounds UP to
+  // …5493), sized so the curve's reserve can cover the sale.
+  const HELD = 1_234_567_549_266n;
+  await seedBrowser(page);
+  await installFakeWallet(page);
+  const accounts = coinAccounts(MINT, midCurve(MINT), { name: "Gate Coin", symbol: "GATE" });
+  const ata = getAssociatedTokenAddressSync(MINT, new PublicKey(WALLET_ADDRESS), true);
+  accounts.set(ata.toBase58(), {
+    data: tokenAccountData(MINT, new PublicKey(WALLET_ADDRESS), HELD),
+    owner: TOKEN_PROGRAM_ID,
+  });
+  await installRpcStub(page, accounts, { tokenBalances: new Map([[ata.toBase58(), HELD]]) });
+  await page.goto(URL);
+  await connectWallet(page);
+
+  await page.getByTestId("side-sell").click();
+  await page.getByTestId("preset-100pct").click();
+  // Full precision, not a rounded-up 4dp string.
+  await expect(page.getByTestId("trade-amount")).toHaveValue("1234567.549266");
+  // And it is accepted: no over-balance warning, button live.
+  await expect(page.getByTestId("over-balance")).toHaveCount(0);
+  await expect(page.getByTestId("trade-submit")).toBeEnabled();
+});
+
+test("asking to sell more than you hold is refused before signing", async ({ page }) => {
+  const HELD = 1_000_000n; // 1 token
+  await seedBrowser(page);
+  await installFakeWallet(page);
+  const accounts = coinAccounts(MINT, midCurve(MINT), { name: "Gate Coin", symbol: "GATE" });
+  const ata = getAssociatedTokenAddressSync(MINT, new PublicKey(WALLET_ADDRESS), true);
+  accounts.set(ata.toBase58(), {
+    data: tokenAccountData(MINT, new PublicKey(WALLET_ADDRESS), HELD),
+    owner: TOKEN_PROGRAM_ID,
+  });
+  await installRpcStub(page, accounts, { tokenBalances: new Map([[ata.toBase58(), HELD]]) });
+  await page.goto(URL);
+  await connectWallet(page);
+
+  await page.getByTestId("side-sell").click();
+  await page.getByTestId("trade-amount").fill("5");
+  await expect(page.getByTestId("over-balance")).toContainText("You hold 1");
+  await expect(page.getByTestId("trade-submit")).toBeDisabled();
 });

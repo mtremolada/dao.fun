@@ -299,6 +299,8 @@ export interface RpcStubOptions {
   trades?: { mint: PublicKey; list: StubTrade[] };
   /** Lamport balances by address; anything unlisted falls back to 5 SOL. */
   balances?: Map<string, number>;
+  /** SPL token-account balances by ATA address, in base units. */
+  tokenBalances?: Map<string, bigint>;
 }
 
 /**
@@ -345,6 +347,25 @@ export async function installRpcStub(
       }
       case "getMinimumBalanceForRentExemption":
         return 890_880;
+      case "getTokenAccountBalance": {
+        // A real RPC ERRORS on a missing token account, and the app relies on
+        // that to tell "no holdings known" (null) from "holds zero". Return a
+        // JSON-RPC error rather than throwing — a throw kills the route
+        // handler and fails the whole request.
+        const amount = opts.tokenBalances?.get(req.params?.[0] as string);
+        if (amount === undefined) {
+          return { __rpcError: { code: -32602, message: "could not find account" } };
+        }
+        return {
+          context: { slot: 1 },
+          value: {
+            amount: amount.toString(),
+            decimals: 6,
+            uiAmount: Number(amount) / 1e6,
+            uiAmountString: (Number(amount) / 1e6).toString(),
+          },
+        };
+      }
       case "getProgramAccounts": {
         // Answer from the same fabricated account map, applying the caller's
         // dataSize + memcmp filters exactly as a validator would — so a spec
@@ -435,9 +456,15 @@ export async function installRpcStub(
     const parsed = JSON.parse(route.request().postData() ?? "{}") as
       | { id: number; method: string; params?: unknown[] }
       | { id: number; method: string; params?: unknown[] }[];
-    const body = Array.isArray(parsed)
-      ? parsed.map((r) => ({ jsonrpc: "2.0", id: r.id, result: handle(r) }))
-      : { jsonrpc: "2.0", id: parsed.id, result: handle(parsed) };
+    /** A handler result carrying __rpcError becomes a JSON-RPC error frame. */
+    const frame = (r: { id: number; method: string; params?: unknown[] }) => {
+      const out = handle(r) as { __rpcError?: unknown } | unknown;
+      if (out && typeof out === "object" && "__rpcError" in (out as object)) {
+        return { jsonrpc: "2.0", id: r.id, error: (out as { __rpcError: unknown }).__rpcError };
+      }
+      return { jsonrpc: "2.0", id: r.id, result: out };
+    };
+    const body = Array.isArray(parsed) ? parsed.map(frame) : frame(parsed);
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
   });
 }

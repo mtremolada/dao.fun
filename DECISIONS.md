@@ -1381,3 +1381,33 @@ a fake INJECTED provider (window.phantom.solana) and
 app/e2e/injected-wallet.spec.ts creates a coin and trades through it —
 both fail against the previous code. Coverage of the shape a test
 fabricates is not coverage of the shape production uses.
+
+## D-048 — FIX: "sell 100%" asked for more tokens than the wallet held (2026-08-09)
+
+**Symptom (operator, live):** selling 100% failed with
+`{"InstructionError":[2,{"Custom":1}]}` — the SPL Token program's
+InsufficientFunds surfacing out of our sell instruction.
+
+**Cause, measured against the live wallet.** The balance was
+533830845.**549266** tokens. The 100% preset rendered it with
+`toFixed(4)` → `"533830845.5493"`, which ROUNDS UP, and the quote parsed
+that back with `Math.floor(Number(amount) * 1e6)` → 533830845549300 —
+**34 base units more than the wallet owned**. The transfer could not
+succeed. Every amount in the panel round-tripped through a double and a
+4-decimal string, so any 6-decimal balance whose tail rounded up was
+unsellable in full.
+
+**Fix.** `app/lib/amount.ts`: `parseTokenAmount` / `formatTokenAmount` do
+the conversion as STRING arithmetic — full precision out, truncation
+(never rounding) in — so a value formatted from base units parses back to
+exactly those base units. Presets, quotes and the MAX-buy button all use
+them (9 decimals for SOL, 6 for tokens). A pre-signing balance check now
+also refuses an over-balance amount with a plain sentence naming what you
+hold, instead of letting the chain answer with a custom error code.
+
+**Harness note.** The e2e stub gained `getTokenAccountBalance`. First cut
+returned zero for an unlisted account, which quietly turned "unknown
+holdings" into "holds zero" and hid the position card in another spec;
+a real RPC ERRORS on a missing account and the app depends on that
+distinction. The stub now returns a JSON-RPC error frame — the fabricated
+RPC must copy the real one's failure modes, not just its successes.

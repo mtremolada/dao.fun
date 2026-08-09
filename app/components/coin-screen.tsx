@@ -32,6 +32,7 @@ import {
   type AmmContext,
 } from "../lib/amm-actions";
 import { computePosition, topTraders } from "../lib/position";
+import { formatTokenAmount, parseTokenAmount } from "../lib/amount";
 import { useWallet } from "./wallet-provider";
 import { getConnection } from "../lib/solana";
 import { buy, quoteBuy, quoteSell, sell } from "../lib/coin-actions";
@@ -228,7 +229,7 @@ function TradePanel({
     try {
       if (!amount || Number(amount) <= 0) return null;
       if (side === "buy") {
-        const budget = BigInt(Math.floor(Number(amount) * 1e9));
+        const budget = parseTokenAmount(amount, 9);
         if (onAmm) {
           const tokensOut = quoteAmmBuy(amm, budget);
           if (tokensOut <= 0n) return null;
@@ -237,7 +238,7 @@ function TradePanel({
         const q = quoteBuy(coin, budget);
         return { out: `${TOKENS(q.tokensOut)} ${coin.symbol}`, tokensOut: q.tokensOut, cost: q.cost };
       }
-      const tokens = BigInt(Math.floor(Number(amount) * 1e6));
+      const tokens = parseTokenAmount(amount, 6);
       const net = onAmm ? quoteAmmSell(amm, tokens) : quoteSell(coin, tokens);
       return { out: `${SOL(net)} SOL`, tokenAmount: tokens, net };
     } catch {
@@ -293,9 +294,25 @@ function TradePanel({
   const disabled = (coin.complete || coin.migrated) && !onAmm;
 
   const buyPresets = [0.1, 0.5, 1];
-  const maxBuy = solBalance !== null ? Math.max(0, (solBalance - 20_000_000) / 1e9) : null;
+  // Leave 0.02 SOL for fees + rent; formatted at full precision so the
+  // value the user sees parses back to exactly these lamports.
+  const maxBuyLamports =
+    solBalance !== null ? BigInt(Math.max(0, solBalance - 20_000_000)) : null;
   const sellPct = [25, 50, 100];
   const heldTokens = tokenBalance ?? 0n;
+
+  /** What the trade would move, checked against the wallet BEFORE signing. */
+  const overBalance = (() => {
+    if (!quote) return null;
+    if (side === "sell" && quote.tokenAmount !== undefined && quote.tokenAmount > heldTokens) {
+      return `You hold ${TOKENS(heldTokens)} ${coin.symbol}.`;
+    }
+    if (side === "buy" && quote.cost !== undefined && solBalance !== null && quote.cost > BigInt(solBalance)) {
+      return `That costs more than your ${SOL(solBalance)} SOL balance.`;
+    }
+    return null;
+  })();
+
 
   return (
     <div className="card trade-panel">
@@ -336,8 +353,8 @@ function TradePanel({
                     {v} SOL
                   </button>
                 ))}
-                {maxBuy !== null && maxBuy > 0 && (
-                  <button className="preset" onClick={() => setAmount(maxBuy.toFixed(4))} data-testid="preset-max">
+                {maxBuyLamports !== null && maxBuyLamports > 0n && (
+                  <button className="preset" onClick={() => setAmount(formatTokenAmount(maxBuyLamports, 9))} data-testid="preset-max">
                     MAX
                   </button>
                 )}
@@ -348,7 +365,7 @@ function TradePanel({
                   key={p}
                   className="preset"
                   disabled={heldTokens === 0n}
-                  onClick={() => setAmount((Number((heldTokens * BigInt(p)) / 100n) / 1e6).toFixed(4))}
+                  onClick={() => setAmount(formatTokenAmount((heldTokens * BigInt(p)) / 100n, 6))}
                   data-testid={`preset-${p}pct`}
                 >
                   {p}%
@@ -362,6 +379,9 @@ function TradePanel({
             </p>
           )}
           {quote && <p className="quote muted">You receive ≈ <strong>{quote.out}</strong></p>}
+          {overBalance && (
+            <p className="errors" data-testid="over-balance">{overBalance}</p>
+          )}
           <label className="field">
             <span>Slippage: {slippageBps / 100}%</span>
             <input type="range" min={0} max={10000} step={50} value={slippageBps} onChange={(e) => setSlippage(Number(e.target.value))} />
@@ -369,7 +389,7 @@ function TradePanel({
           {!wallet ? (
             <p className="muted">Connect a wallet to trade.</p>
           ) : (
-            <button className="button primary" onClick={submit} disabled={busy || !quote} data-testid="trade-submit">
+            <button className="button primary" onClick={submit} disabled={busy || !quote || overBalance !== null} data-testid="trade-submit">
               {busy ? "Working…" : side === "buy" ? "Buy" : "Sell"}
             </button>
           )}
