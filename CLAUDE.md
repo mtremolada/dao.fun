@@ -7,6 +7,15 @@ everything in **DECISIONS.md** (D-001..D-042 so far); gate evidence in
 **GATES.md**; running checklist in **PROGRESS.md**; pins in
 **VERSIONS.md**; capture analysis in **REDTEAM.md**.
 
+## ▶ NEXT UP (operator directive 2026-08-09): unified launch page + Guarded build
+
+**PLAN-UNIFIED-LAUNCH.md is the work order** — one /launch page with all
+four protections as simple cards (Guarded default), Guarded unlocked on
+the D-042 verified design. Order R0→R3: gate program
+`create_gated_proposal` (tests first, extend the spike so the gate PDA
+authors via invoke_signed) → SDK guarded ceremony + propose routing →
+single-page UI → end-to-end proof + devnet deploy. Tasks #27–#30.
+
 ## ✅ RESOLVED (2026-08-08): Guarded mode enforcement — Option A committed (D-042)
 
 The D-032 pending decision is CLOSED. The operator delegated it
