@@ -450,3 +450,40 @@ tr.sell td:first-child { color: var(--red); }
 .creator-fees { font-size: 1.1rem; margin: 0.4rem 0 0.8rem; }
 .launch-list { display: flex; flex-direction: column; gap: 0.75rem; }
 .launch-row .launch-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.6rem; }
+
+/* ---- live feed ------------------------------------------------------- */
+
+/* A quiet pulse, not a klaxon: it should read as "connected" at a glance and
+   disappear into the page the rest of the time. */
+.live-dot {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-right: 0.35em;
+  border-radius: 50%;
+  background: currentColor;
+  animation: live-pulse 2s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* A value that just moved. Direction is carried by colour and the flash is
+   short, because on a busy coin these fire constantly and anything longer
+   turns the page into a strobe. */
+.tick[data-dir="up"] { animation: tick-up 0.6s ease-out; }
+.tick[data-dir="down"] { animation: tick-down 0.6s ease-out; }
+@keyframes tick-up {
+  from { background-color: color-mix(in srgb, #22c55e 35%, transparent); }
+  to { background-color: transparent; }
+}
+@keyframes tick-down {
+  from { background-color: color-mix(in srgb, #ef4444 35%, transparent); }
+  to { background-color: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+  .tick[data-dir="up"], .tick[data-dir="down"] { animation: none; }
+}

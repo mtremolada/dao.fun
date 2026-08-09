@@ -1914,3 +1914,63 @@ flagging early: the indexer fetches transactions ONE AT A TIME inside its tick
 loop, which is fine at devnet volume and will fall behind a busy mainnet — the
 fix is concurrency within a batch, and the cursor semantics already tolerate
 it because it applies in slot order and advances only over what applied.
+
+## D-056 — Live updates: push, not poll (2026-08-09)
+
+Operator: *"how can I make this run like a professional trading website where
+it updates as things happen"*.
+
+**What it was doing.** The board did not update at all — one read per page
+load. The coin page polled for trades every 5 seconds, so the average
+staleness was 2.5s and the worst case 5s, and the price only moved when that
+poll happened to land.
+
+**What changed.** Solana's RPC has WebSocket subscriptions and a browser can
+use them directly, so this needed no backend and no infrastructure decision.
+Measured on devnet against a real buy, twice:
+
+```
+push arrived 1,025 ms after send   (BEFORE sendAndConfirmTransaction returned)
+board updated  511 ms after send   0.223585 -> 0.228536 SOL
+```
+
+Every viewer now sees a trade at about the moment the trader does.
+
+- **Board**: one `programSubscribe` covers the whole launchpad. A known coin
+  is patched IN PLACE — no refetch, no flicker, and it keeps the name it
+  already has — and re-bucketed, because a trade can be the one that pushes a
+  coin past the graduating threshold and the column it sits in is part of the
+  information. An unknown mint is a coin launched since the last load, which
+  needs metadata; that is a debounced reload rather than a read per push, so a
+  burst of launches cannot become a burst of RPC.
+- **Coin page**: `accountSubscribe` on the curve. The curve is the AUTHORITY
+  on price, so it is applied directly rather than triggering a refetch.
+- **The tape**: a trade's author and signature exist only in the TRANSACTION,
+  so it cannot be served by an account subscription. But the curve changing
+  IS the signal that a trade landed, so the push pokes the fetch instead of
+  waiting for its next tick — coalesced, so a burst is one fetch.
+- **The price flashes**, green or red, keyed on the value so the animation
+  re-runs. Short, and honoured by `prefers-reduced-motion`: on a busy coin
+  these fire constantly.
+
+**Two things this had to get right, and one I got wrong first.**
+
+`onProgramAccountChange` does NOT throw when the socket is unreachable — it
+registers and fails later, asynchronously. My first version reported "live"
+because that call returned, which is precisely the dishonest badge the module
+claims to prevent: a screen that looks live and is frozen. The status now
+follows the SOCKET (`open`/`close`/`error`), so it stays at "connecting" until
+the connection is real.
+
+And push alone is not enough. A WebSocket can stop delivering without telling
+anyone, so a slow reconciliation read (30s) runs regardless of socket health.
+That is what makes a wrong badge cosmetic rather than a data-loss bug, and it
+is why the fallback path is honest: an RPC that refuses `programSubscribe`
+(providers do restrict it — it is expensive to serve) drops to polling and
+SAYS "delayed" rather than pretending.
+
+**The scale note stays true.** `programSubscribe` streams every account the
+program touches to every connected client: the right trade at this size, the
+wrong one at a hundred times it, which is exactly where the backend's SSE
+fan-out takes over (SCALING.md). Live-by-default now, one env var away from
+server-fanned later.

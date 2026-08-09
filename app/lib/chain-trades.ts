@@ -173,27 +173,62 @@ export async function fetchTradeHistory(connection: Connection, mint: string): P
   return merged;
 }
 
+export interface TradeWatch {
+  stop(): void;
+  /**
+   * Fetch now instead of waiting for the next tick.
+   *
+   * A trade's author and signature only exist in the TRANSACTION, so the tape
+   * cannot be served by an account subscription the way price can. But the
+   * curve account changing IS the signal that a trade just landed, so the
+   * caller can nudge this the moment that push arrives and the tape lands
+   * about a second behind the trade instead of up to a full interval. Coalesced,
+   * so a burst of pushes is one fetch.
+   */
+  poke(): void;
+}
+
 /**
- * Poll for new trades while the page is open. Calls `onTrades` with the full
- * newest-first list after every successful refresh. Returns an unsubscribe.
+ * Keep the trade tape fresh while the page is open. Calls `onTrades` with the
+ * full newest-first list after every successful refresh.
+ *
+ * The interval is the floor, not the mechanism: it exists so the tape still
+ * fills on an RPC that cannot push, and so a missed push cannot strand it.
  */
 export function watchTrades(
   connection: Connection,
   mint: string,
   onTrades: (trades: TradeView[]) => void,
   intervalMs = 5000,
-): () => void {
+): TradeWatch {
   let live = true;
+  let inFlight = false;
+  let again = false;
   const tick = () => {
     if (!live || document.visibilityState === "hidden") return;
+    if (inFlight) {
+      again = true; // a push landed mid-fetch; do exactly one more
+      return;
+    }
+    inFlight = true;
     fetchTradeHistory(connection, mint)
       .then((t) => live && onTrades(t))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        inFlight = false;
+        if (live && again) {
+          again = false;
+          tick();
+        }
+      });
   };
   tick();
   const id = setInterval(tick, intervalMs);
-  return () => {
-    live = false;
-    clearInterval(id);
+  return {
+    stop() {
+      live = false;
+      clearInterval(id);
+    },
+    poke: tick,
   };
 }

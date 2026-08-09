@@ -1,13 +1,46 @@
 "use client";
 
 /**
+ * A number that shows it moved.
+ *
+ * On a trading screen the update is only half the job — a value that changes
+ * silently reads as a static page. This re-keys the element whenever the value
+ * changes so the CSS flash re-runs, and carries the direction so the colour
+ * means something. Kept short and honoured by `prefers-reduced-motion`,
+ * because on a busy coin these fire constantly.
+ */
+function Tick({
+  value,
+  children,
+  ...rest
+}: {
+  value: number;
+  children: React.ReactNode;
+} & React.HTMLAttributes<HTMLElement>) {
+  const prev = useRef(value);
+  const [dir, setDir] = useState<"up" | "down" | null>(null);
+  const [key, setKey] = useState(0);
+  useEffect(() => {
+    if (value === prev.current) return;
+    setDir(value > prev.current ? "up" : "down");
+    setKey((k) => k + 1);
+    prev.current = value;
+  }, [value]);
+  return (
+    <strong key={key} className="tick" data-dir={dir ?? undefined} {...rest}>
+      {children}
+    </strong>
+  );
+}
+
+/**
  * The coin page IS the trading terminal: live chart (candles + volume),
  * stats strip, activity tabs (trades / top traders / info), position card,
  * and the buy/sell panel — all working with ONLY an RPC. The chain-direct
  * trade indexer (chain-trades.ts) feeds history when no backend is
  * configured; the hosted indexer + SSE take over when it is.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
@@ -20,8 +53,16 @@ import {
   type CoinView,
   type TradeView,
 } from "../lib/launchpad-api";
-import { fetchCoinFromChain, rememberCoin } from "../lib/chain-coin";
-import { candlesFromTrades, watchTrades } from "../lib/chain-trades";
+import {
+  coinViewFromCurve,
+  fetchCoinFromChain,
+  rememberCoin,
+} from "../lib/chain-coin";
+import {
+  candlesFromTrades,
+  watchTrades,
+  type TradeWatch,
+} from "../lib/chain-trades";
 import {
   ammBuy,
   ammSell,
@@ -36,6 +77,7 @@ import { formatTokenAmount, parseTokenAmount } from "../lib/amount";
 import { useWallet } from "./wallet-provider";
 import { getConnection } from "../lib/solana";
 import { fetchGraduatedFees, type GraduatedFees } from "../lib/graduated";
+import { watchCurve, type LiveStatus } from "../lib/live";
 import {
   buy,
   collectGraduatedFees,
@@ -84,7 +126,7 @@ function StatsStrip({
     <div className="stats-strip card" data-testid="stats-strip">
       <div className="stat">
         <span className="muted small">Price</span>
-        <strong data-testid="stat-price">{PRICE(spot)} SOL</strong>
+        <Tick value={spot} data-testid="stat-price">{PRICE(spot)} SOL</Tick>
       </div>
       <div className="stat">
         <span className="muted small">Market cap</span>
@@ -559,6 +601,8 @@ export function CoinScreen() {
   const [walletTokens, setWalletTokens] = useState<bigint | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
+  const tradeWatch = useRef<TradeWatch | null>(null);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   // Coin state: chain first (works with only an RPC), indexer as enhancement.
@@ -607,12 +651,48 @@ export function CoinScreen() {
         unsub();
       };
     }
-    const unwatch = watchTrades(getConnection(), mint, (t) => live && setTrades(t));
+    const watch = watchTrades(getConnection(), mint, (t) => live && setTrades(t));
+    tradeWatch.current = watch;
     return () => {
       live = false;
-      unwatch();
+      tradeWatch.current = null;
+      watch.stop();
     };
   }, [mint, refresh]);
+
+  // Live price and progress: the curve account itself, pushed. This is what
+  // makes the header a ticker rather than a snapshot — a trade by anyone
+  // moves the number here about a second after it lands, without a reload and
+  // without waiting for the trade poller's next tick.
+  //
+  // The curve is the AUTHORITY on price, so it is applied directly rather than
+  // triggering a refetch; the tape is nudged separately because a trade's
+  // author and signature only exist in the transaction.
+  useEffect(() => {
+    if (!mint || apiConfigured()) return;
+    const handle = watchCurve(
+      getConnection(),
+      mint,
+      (curve) => {
+        setCoin((prev) =>
+          prev
+            ? coinViewFromCurve(mint, curve, {
+                name: prev.name,
+                symbol: prev.symbol,
+                uri: prev.uri,
+              })
+            : prev,
+        );
+        // The curve changing IS a trade landing. The tape needs the
+        // transaction for the author and signature, so it cannot be pushed —
+        // but it can be fetched NOW rather than on its next tick, which is
+        // the difference between a price that moves and a screen that moves.
+        tradeWatch.current?.poke();
+      },
+      { onStatus: setLiveStatus },
+    );
+    return () => handle.stop();
+  }, [mint]);
 
   // Wallet balances for presets/position — refreshed after every confirm.
   useEffect(() => {
@@ -673,6 +753,28 @@ export function CoinScreen() {
             <span className="badge" data-state="verified">mint revoked</span>
             <span className="badge" data-state="verified">freeze: none</span>
             {coin.migrated && <LiquidityBadge mint={coin.mint} />}
+            {liveStatus && (
+              <span
+                className="badge"
+                data-state={liveStatus === "live" ? "verified" : "amber"}
+                data-testid="live-badge"
+                title={
+                  liveStatus === "live"
+                    ? "Price updates are pushed by the RPC as trades land"
+                    : "This RPC does not push updates; refreshing on a timer"
+                }
+              >
+                {liveStatus === "live" ? (
+                  <>
+                    <span className="live-dot" aria-hidden /> live
+                  </>
+                ) : liveStatus === "polling" ? (
+                  "delayed"
+                ) : (
+                  "connecting"
+                )}
+              </span>
+            )}
           </div>
           <div className="progress big" aria-label="graduation progress">
             <span style={{ width: `${Math.min(100, pct)}%` }} />

@@ -534,3 +534,15 @@ Branch: `claude/solana-launchpad-bonding-curve-lqx3dd`.
       throughput, then SQLite, then ranking semantics), and the cheapest fix
       at each step. The path itself needs no new architecture — the backend
       indexer exists and the app switches to it on NEXT_PUBLIC_API_URL.
+- [x] **Live updates — push, not poll (D-056, 2026-08-09).** The board never
+      updated and the coin page polled every 5s. Now one `programSubscribe`
+      drives the whole board and `accountSubscribe` drives the coin page,
+      measured at 511–1,025 ms from send — before the trader's own
+      confirmation returns. Cards patch in place and re-bucket; the tape is
+      poked by the push rather than waiting for its tick; the price flashes
+      green/red with `prefers-reduced-motion` honoured. The status follows the
+      SOCKET rather than the fact that subscribe() returned (my first version
+      got that wrong, which is the "looks live, is frozen" failure), and a 30s
+      reconciliation read runs regardless so a silently dead socket cannot
+      freeze the screen. An RPC that refuses the subscription degrades to
+      polling and says "delayed". Suites: 82 app unit (13 files), 34 e2e.

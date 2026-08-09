@@ -9,16 +9,28 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { type BoardBucket } from "@daofun/sdk/launchpad";
+import { boardBucket, type BoardBucket } from "@daofun/sdk/launchpad";
 import {
   apiConfigured,
   launchpadApi,
   subscribeLaunchpad,
   type CoinView,
 } from "../lib/launchpad-api";
-import { fetchBoardFromChain, loadLocalCoins } from "../lib/chain-coin";
+import {
+  coinViewFromCurve,
+  fetchBoardFromChain,
+  loadLocalCoins,
+} from "../lib/chain-coin";
+import { watchAllCurves, type LiveStatus } from "../lib/live";
 import { getConnection } from "../lib/solana";
 import { truncateAddress } from "../lib/wallet-registry";
+
+/**
+ * A launch the scan has not seen yet needs its metadata, which is a read. One
+ * per push would let a burst of launches become a burst of RPC, so unknown
+ * mints coalesce into a single reload.
+ */
+const RELOAD_DEBOUNCE_MS = 4_000;
 
 const COLUMNS: { key: BoardBucket; label: string; blurb: string }[] = [
   { key: "new", label: "New", blurb: "Fresh on the curve" },
@@ -53,6 +65,7 @@ export function BoardScreen() {
   const [buckets, setBuckets] = useState<Buckets>(emptyBuckets());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
 
   const load = useCallback(async (): Promise<Buckets> => {
     if (apiConfigured()) {
@@ -98,6 +111,68 @@ export function BoardScreen() {
     });
   }, [load]);
 
+  // Live board. One program subscription covers the whole launchpad: every
+  // buy, sell, completion and migration arrives as a push (measured at ~1s
+  // from send, before the trader's own confirmation returns), so a card's
+  // raise and progress move while you are looking at them.
+  //
+  // A known coin is patched IN PLACE — no refetch, no flicker, and the name
+  // it already has is kept. An unknown mint is a coin created since the last
+  // load, which needs its metadata; that is a debounced reload rather than a
+  // read per push, so a burst of launches cannot turn into a burst of RPC.
+  useEffect(() => {
+    if (apiConfigured()) return;
+    const connection = getConnection();
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleReload = () => {
+      if (reloadTimer) return;
+      reloadTimer = setTimeout(() => {
+        reloadTimer = null;
+        load().then(setBuckets).catch(() => {});
+      }, RELOAD_DEBOUNCE_MS);
+    };
+
+    const handle = watchAllCurves(
+      connection,
+      (curve) => {
+        const mint = curve.mint.toBase58();
+        setBuckets((prev) => {
+          const known = (Object.keys(prev) as BoardBucket[])
+            .flatMap((k) => prev[k])
+            .find((c) => c.mint === mint);
+          if (!known) {
+            scheduleReload();
+            return prev;
+          }
+          const updated = coinViewFromCurve(mint, curve, {
+            name: known.name,
+            symbol: known.symbol,
+            uri: known.uri,
+          });
+          // Re-bucket as well as re-render: a trade can be the one that
+          // pushes a coin past the graduating threshold, and the column it
+          // sits in is part of the information.
+          const next = { new: [], graduating: [], graduated: [] } as Buckets;
+          for (const key of Object.keys(prev) as BoardBucket[]) {
+            for (const coin of prev[key]) {
+              const view = coin.mint === mint ? updated : coin;
+              next[boardBucket(view)].push(view);
+            }
+          }
+          for (const key of Object.keys(next) as BoardBucket[]) {
+            next[key].sort((a, b) => Number(BigInt(b.realSol) - BigInt(a.realSol)));
+          }
+          return next;
+        });
+      },
+      { onStatus: setLiveStatus },
+    );
+    return () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      handle.stop();
+    };
+  }, [load]);
+
   const total = COLUMNS.reduce((n, c) => n + buckets[c.key].length, 0);
   return (
     <div className="board">
@@ -108,10 +183,18 @@ export function BoardScreen() {
         </Link>
       </div>
 
-      {!apiConfigured() && (
-        <p className="muted small">
-          Showing the coins this browser has launched or visited — set{" "}
-          <code>NEXT_PUBLIC_API_URL</code> for the global live board.
+      {!apiConfigured() && liveStatus && (
+        <p className="muted small" data-testid="live-status" data-state={liveStatus}>
+          {liveStatus === "live" ? (
+            <>
+              <span className="live-dot" aria-hidden /> Live — updates as trades
+              land on chain.
+            </>
+          ) : liveStatus === "polling" ? (
+            <>This RPC does not push updates; refreshing every few seconds.</>
+          ) : (
+            <>Connecting…</>
+          )}
         </p>
       )}
       {error && <div className="errors">Could not load the board: {error}</div>}
